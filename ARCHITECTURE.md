@@ -149,20 +149,332 @@ X Chain 的共识机制基于以下核心原则：
       |                                  |
 ```
 
-### 3.3 区块生产
+### 3.3 区块生产机制
 
-区块生产采用轮询机制，所有通过 SGX 验证的节点都有权出块：
+X Chain 采用**按需出块**的 PoA-SGX 模式，解决以太坊的三大问题：高成本、慢共识、大存储。
+
+#### 3.3.1 设计目标
+
+| 以太坊问题 | X Chain 解决方案 |
+|------------|------------------|
+| 高 Gas 费用 | 无挖矿竞争，交易费极低或为零 |
+| 共识慢（~12秒出块） | SGX 确定性执行，近乎即时确认 |
+| 存储大（持续出块） | 按需出块，无空块，减少存储 |
+
+#### 3.3.2 按需出块原则
+
+**核心规则**：有新交易时才出块，可批量打包多个交易。
+
+```
+传统 PoS/PoW:
+时间 ─────────────────────────────────────────────────>
+      [块1] [块2] [块3] [块4] [块5] [块6] [块7] ...
+      固定间隔出块，可能有大量空块
+
+X Chain PoA-SGX:
+时间 ─────────────────────────────────────────────────>
+      [块1]           [块2]     [块3]
+      ↑               ↑         ↑
+      有交易          有交易    有多个交易(批量打包)
+      无交易时不出块，节省存储
+```
+
+#### 3.3.3 出块触发条件
 
 ```go
-// 区块头扩展字段
-type SGXBlockHeader struct {
-    // 标准以太坊区块头字段
-    *types.Header
+// consensus/sgx/block_producer.go
+package sgx
+
+type BlockProducer struct {
+    txPool      *TxPool
+    chain       *BlockChain
+    sgxAttestor *SGXAttestor
     
-    // SGX 扩展字段 (存储在 Extra 中)
-    SGXQuote      []byte  // 出块节点的 SGX Quote
-    ProducerID    []byte  // 出块节点标识
-    AttestationTS uint64  // 证明时间戳
+    // 配置参数
+    maxTxPerBlock   int           // 每块最大交易数
+    maxWaitTime     time.Duration // 最大等待时间（可选）
+    minTxForBlock   int           // 触发出块的最小交易数
+}
+
+// ShouldProduceBlock 判断是否应该出块
+func (p *BlockProducer) ShouldProduceBlock() bool {
+    pendingTxs := p.txPool.Pending()
+    
+    // 条件1：有待处理交易
+    if len(pendingTxs) == 0 {
+        return false
+    }
+    
+    // 条件2：达到最小交易数阈值（可配置，默认为1）
+    if len(pendingTxs) >= p.minTxForBlock {
+        return true
+    }
+    
+    // 条件3：超过最大等待时间（可选，防止交易长时间不被处理）
+    if p.maxWaitTime > 0 {
+        oldestTx := p.txPool.OldestPendingTime()
+        if time.Since(oldestTx) > p.maxWaitTime {
+            return true
+        }
+    }
+    
+    return false
+}
+
+// ProduceBlock 生产新区块
+func (p *BlockProducer) ProduceBlock() (*types.Block, error) {
+    // 1. 获取待处理交易（按 Gas 价格排序，最多 maxTxPerBlock 个）
+    txs := p.txPool.GetPendingTxs(p.maxTxPerBlock)
+    if len(txs) == 0 {
+        return nil, ErrNoTransactions
+    }
+    
+    // 2. 创建区块头
+    parent := p.chain.CurrentBlock()
+    header := &types.Header{
+        ParentHash: parent.Hash(),
+        Number:     new(big.Int).Add(parent.Number(), big.NewInt(1)),
+        GasLimit:   p.calculateGasLimit(parent),
+        Time:       uint64(time.Now().Unix()),
+        Coinbase:   p.coinbase,
+    }
+    
+    // 3. 执行交易，生成状态根
+    stateRoot, receipts, err := p.executeTransactions(txs, header)
+    if err != nil {
+        return nil, err
+    }
+    header.Root = stateRoot
+    
+    // 4. 添加 SGX 证明数据到 Extra 字段
+    sgxExtra, err := p.createSGXExtra()
+    if err != nil {
+        return nil, err
+    }
+    header.Extra = sgxExtra
+    
+    // 5. 组装区块
+    block := types.NewBlock(header, &types.Body{Transactions: txs}, receipts, nil)
+    
+    // 6. 签名区块
+    signedBlock, err := p.signBlock(block)
+    if err != nil {
+        return nil, err
+    }
+    
+    return signedBlock, nil
+}
+```
+
+#### 3.3.4 区块头扩展字段
+
+```go
+// SGX 扩展数据结构（存储在 Header.Extra 中）
+type SGXExtra struct {
+    // 出块节点的 SGX Quote（证明代码完整性）
+    SGXQuote      []byte  `json:"sgxQuote"`
+    
+    // 出块节点标识（从 SGX Quote 中提取的公钥哈希）
+    ProducerID    []byte  `json:"producerId"`
+    
+    // SGX 证明时间戳
+    AttestationTS uint64  `json:"attestationTs"`
+    
+    // 区块签名（使用节点私钥签名）
+    Signature     []byte  `json:"signature"`
+}
+
+// 序列化 SGX Extra 数据
+func (e *SGXExtra) Encode() ([]byte, error) {
+    return rlp.EncodeToBytes(e)
+}
+
+// 反序列化 SGX Extra 数据
+func DecodeSGXExtra(data []byte) (*SGXExtra, error) {
+    var extra SGXExtra
+    if err := rlp.DecodeBytes(data, &extra); err != nil {
+        return nil, err
+    }
+    return &extra, nil
+}
+```
+
+#### 3.3.5 出块节点选择
+
+由于 X Chain 不依赖 51% 共识，出块节点选择采用**先到先得**原则：
+
+```go
+// 出块节点选择策略
+type ProducerSelection int
+
+const (
+    // 先到先得：第一个广播有效区块的节点获得出块权
+    FirstComeFirstServed ProducerSelection = iota
+    
+    // 交易提交者优先：交易提交到的节点优先处理
+    TransactionSubmitterFirst
+)
+
+// 处理新交易
+func (p *BlockProducer) OnNewTransaction(tx *types.Transaction, fromLocal bool) {
+    // 添加到交易池
+    p.txPool.Add(tx)
+    
+    // 如果是本地提交的交易，立即尝试出块
+    if fromLocal && p.ShouldProduceBlock() {
+        go p.TryProduceBlock()
+    }
+}
+
+// 尝试出块（非阻塞）
+func (p *BlockProducer) TryProduceBlock() {
+    p.mu.Lock()
+    defer p.mu.Unlock()
+    
+    // 检查是否已有其他节点出块
+    if p.hasNewerBlock() {
+        return
+    }
+    
+    block, err := p.ProduceBlock()
+    if err != nil {
+        log.Warn("Failed to produce block", "err", err)
+        return
+    }
+    
+    // 广播区块
+    p.broadcastBlock(block)
+    
+    // 本地确认
+    p.chain.InsertBlock(block)
+}
+```
+
+#### 3.3.6 交易确认时间
+
+```
+传统以太坊 PoS:
+提交交易 ──> 等待下一个区块槽(~12秒) ──> 区块确认 ──> 等待最终性(~15分钟)
+总时间: 12秒 ~ 15分钟
+
+X Chain PoA-SGX:
+提交交易 ──> 立即出块 ──> 即时确认
+总时间: < 1秒（网络延迟）
+```
+
+**即时确认的原因**：
+1. 无需等待区块槽 - 有交易就出块
+2. 无需等待共识投票 - SGX 保证代码执行正确性
+3. 无需等待最终性 - 所有节点执行相同代码得到相同结果
+
+#### 3.3.7 冲突处理
+
+当多个节点同时出块时：
+
+```go
+// 区块冲突解决策略
+func (p *BlockProducer) ResolveConflict(blocks []*types.Block) *types.Block {
+    // 规则1：选择包含更多交易的区块
+    sort.Slice(blocks, func(i, j int) bool {
+        return len(blocks[i].Transactions()) > len(blocks[j].Transactions())
+    })
+    
+    // 规则2：交易数相同时，选择时间戳更早的
+    if len(blocks) > 1 && len(blocks[0].Transactions()) == len(blocks[1].Transactions()) {
+        sort.Slice(blocks, func(i, j int) bool {
+            return blocks[i].Time() < blocks[j].Time()
+        })
+    }
+    
+    // 规则3：时间戳也相同时，选择区块哈希更小的（确定性）
+    if len(blocks) > 1 && blocks[0].Time() == blocks[1].Time() {
+        sort.Slice(blocks, func(i, j int) bool {
+            return bytes.Compare(blocks[i].Hash().Bytes(), blocks[j].Hash().Bytes()) < 0
+        })
+    }
+    
+    return blocks[0]
+}
+```
+
+#### 3.3.8 节点激励模型
+
+X Chain 采用**低成本效用模型**：
+
+| 激励来源 | 说明 |
+|----------|------|
+| 交易手续费 | 出块节点收取极低的交易费（可配置，甚至为零） |
+| 效用价值 | 节点运营者可使用链上密钥管理等功能 |
+| 服务收益 | 为用户提供交易处理服务的间接收益 |
+
+**无区块奖励**：
+- 不产生新代币，无通胀
+- 降低运营成本，无需高算力或大量质押
+
+```go
+// 交易费配置
+type FeeConfig struct {
+    // 基础费用（可以为0）
+    BaseFee *big.Int
+    
+    // 每 Gas 单位费用
+    GasPrice *big.Int
+    
+    // 费用分配：100% 给出块节点
+    ProducerShare uint8 // 100
+}
+
+// 默认配置：极低费用
+var DefaultFeeConfig = FeeConfig{
+    BaseFee:       big.NewInt(0),           // 无基础费
+    GasPrice:      big.NewInt(1),           // 1 wei per gas
+    ProducerShare: 100,
+}
+```
+
+#### 3.3.9 存储优化
+
+按需出块显著减少存储需求：
+
+```
+假设场景：每天 10,000 笔交易
+
+以太坊 PoS (12秒出块):
+- 每天区块数: 86400 / 12 = 7,200 块
+- 大量空块或低交易量块
+
+X Chain PoA-SGX (按需出块):
+- 假设每块平均 100 笔交易
+- 每天区块数: 10,000 / 100 = 100 块
+- 存储减少: 7,200 / 100 = 72 倍
+```
+
+#### 3.3.10 配置参数
+
+```go
+// consensus/sgx/config.go
+type SGXConsensusConfig struct {
+    // 出块配置
+    MaxTxPerBlock   int           `json:"maxTxPerBlock"`   // 每块最大交易数，默认 1000
+    MinTxForBlock   int           `json:"minTxForBlock"`   // 触发出块最小交易数，默认 1
+    MaxWaitTime     time.Duration `json:"maxWaitTime"`     // 最大等待时间，默认 0（无限制）
+    
+    // 费用配置
+    BaseFee         *big.Int      `json:"baseFee"`         // 基础费用，默认 0
+    MinGasPrice     *big.Int      `json:"minGasPrice"`     // 最低 Gas 价格，默认 1 wei
+    
+    // SGX 配置
+    MREnclaveWhitelist []string   `json:"mrEnclaveWhitelist"` // 允许的 MRENCLAVE 列表
+    MRSignerWhitelist  []string   `json:"mrSignerWhitelist"`  // 允许的 MRSIGNER 列表
+}
+
+// 默认配置
+var DefaultSGXConsensusConfig = SGXConsensusConfig{
+    MaxTxPerBlock:   1000,
+    MinTxForBlock:   1,
+    MaxWaitTime:     0,
+    BaseFee:         big.NewInt(0),
+    MinGasPrice:     big.NewInt(1),
 }
 ```
 
