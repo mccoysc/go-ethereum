@@ -1929,16 +1929,133 @@ allowed_tcb_status = ["UpToDate", "SWHardeningNeeded"]
 # Keystone 特定配置 (未来)
 ```
 
-## 13. 附录
+## 13. 区块浏览器与数据可见性
 
-### 13.1 参考资料
+### 13.1 设计原则
+
+X Chain 的架构设计确保敏感数据永远不会出现在公开的区块链数据中。区块浏览器**无需特殊处理**即可安全运行，因为所有链上数据本身就是设计为公开的。
+
+### 13.2 数据可见性分类
+
+| 数据类型 | 存储位置 | 区块浏览器可见 | 说明 |
+|----------|----------|----------------|------|
+| 交易哈希 | 区块链 | 是 | 标准以太坊数据 |
+| 发送者/接收者地址 | 区块链 | 是 | 标准以太坊数据 |
+| Gas、Value | 区块链 | 是 | 标准以太坊数据 |
+| 合约调用输入数据 | 区块链 | 是 | 包括预编译合约参数 |
+| 公钥 | 区块链状态 | 是 | 通过 SGX_KEY_GET_PUBLIC 返回 |
+| 密钥 ID | 区块链状态 | 是 | 只是标识符，不含敏感信息 |
+| 签名数据 | 交易返回值 | 是 | 签名本身是公开的 |
+| 派生秘密 ID | 区块链状态 | 是 | 只是标识符，不含实际秘密 |
+| **私钥** | Gramine 加密分区 | **否** | 永不离开 SGX enclave |
+| **ECDH 派生秘密** | Gramine 加密分区 | **否** | 实际值存储在加密分区 |
+| **对称加密密钥** | Gramine 加密分区 | **否** | 派生的加密密钥 |
+
+### 13.3 预编译合约调用的数据流
+
+```
++------------------+                    +------------------+
+|   智能合约       |                    |   区块浏览器     |
++------------------+                    +------------------+
+        |                                       |
+        | 调用 SGX_KEY_CREATE(curveType=1)      |
+        |-------------------------------------->| 可见: curveType=1
+        |                                       |
+        | 返回: keyId                           |
+        |<--------------------------------------| 可见: keyId
+        |                                       |
+        | 调用 SGX_SIGN(keyId, msgHash)         |
+        |-------------------------------------->| 可见: keyId, msgHash
+        |                                       |
+        | 返回: signature                       |
+        |<--------------------------------------| 可见: signature
+        |                                       |
+        | 调用 SGX_ECDH(myKeyId, peerPubKey)    |
+        |-------------------------------------->| 可见: myKeyId, peerPubKey
+        |                                       |
+        | 返回: derivedSecretId                 |
+        |<--------------------------------------| 可见: derivedSecretId
+        |                                       |   (不可见: 实际的派生秘密值)
+```
+
+### 13.4 安全保证
+
+1. **私钥隔离**：私钥在 SGX enclave 内生成，存储在 Gramine 加密分区，永不出现在交易数据或区块链状态中。
+
+2. **派生秘密保护**：ECDH 等操作产生的派生秘密只返回一个 ID 给合约，实际秘密值存储在加密分区中，只能通过后续的加密/解密操作使用。
+
+3. **操作可审计**：虽然私钥和秘密值不可见，但所有操作（谁创建了密钥、谁进行了签名、谁执行了 ECDH）都记录在链上，可供审计。
+
+4. **元数据可见性**：密钥的元数据（所有者地址、曲线类型、创建时间）是公开的，这是设计如此，便于合约逻辑和用户查询。
+
+### 13.5 区块浏览器实现建议
+
+区块浏览器可以像标准以太坊浏览器一样实现，额外支持以下功能：
+
+```go
+// 解析 SGX 预编译合约调用
+func ParseSGXPrecompileCall(tx *types.Transaction) *SGXCallInfo {
+    to := tx.To()
+    if to == nil {
+        return nil
+    }
+    
+    // 检查是否是 SGX 预编译合约地址 (0x0200 - 0x02FF)
+    addr := to.Big().Uint64()
+    if addr < 0x0200 || addr > 0x02FF {
+        return nil
+    }
+    
+    input := tx.Data()
+    
+    switch addr {
+    case 0x0200: // SGX_KEY_CREATE
+        return &SGXCallInfo{
+            Type:      "KEY_CREATE",
+            CurveType: getCurveName(input[0]),
+        }
+    case 0x0202: // SGX_SIGN
+        return &SGXCallInfo{
+            Type:    "SIGN",
+            KeyID:   common.BytesToHash(input[0:32]).Hex(),
+            MsgHash: common.BytesToHash(input[32:64]).Hex(),
+        }
+    case 0x0204: // SGX_ECDH
+        return &SGXCallInfo{
+            Type:       "ECDH",
+            LocalKeyID: common.BytesToHash(input[0:32]).Hex(),
+            // 对方公钥是公开的
+        }
+    // ... 其他预编译合约
+    }
+    
+    return nil
+}
+```
+
+### 13.6 隐私考虑
+
+虽然私钥和秘密值是安全的，但以下信息是公开可见的，用户应当了解：
+
+| 可见信息 | 隐私影响 | 缓解措施 |
+|----------|----------|----------|
+| 密钥创建时间 | 可推断用户活动模式 | 使用批量创建或延迟创建 |
+| 签名操作频率 | 可推断交易活动 | 使用代理合约聚合操作 |
+| ECDH 参与方 | 可推断通信关系 | 使用中间密钥或混淆 |
+| 密钥所有者地址 | 关联用户身份 | 使用多个地址分散密钥 |
+
+这些是区块链透明性的固有特性，与传统以太坊相同。X Chain 的安全保证是：**即使所有链上数据都被分析，私钥和派生秘密的实际值仍然是安全的**。
+
+## 14. 附录
+
+### 14.1 参考资料
 
 - [Intel SGX Developer Reference](https://download.01.org/intel-sgx/sgx-linux/2.19/docs/)
 - [Gramine Documentation](https://gramine.readthedocs.io/)
 - [go-ethereum Documentation](https://geth.ethereum.org/docs)
 - [RA-TLS Specification](https://gramine.readthedocs.io/en/stable/attestation.html)
 
-### 12.2 术语表
+### 14.2 术语表
 
 | 术语 | 定义 |
 |------|------|
