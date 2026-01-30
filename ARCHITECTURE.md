@@ -5867,291 +5867,125 @@ gramine-sgx-sign --manifest geth.manifest --output geth.manifest.sgx
 ./start-x-chain.sh
 ```
 
-## 12. 硬件抽象层 (HAL)
+## 12. 硬件支持说明
 
-### 12.1 设计目标
+### 12.1 运行时依赖
 
-X Chain 默认使用 Intel SGX，但架构设计支持未来扩展到其他满足**恶意模型 (Malicious Model)** 的可信执行环境硬件。
+X Chain 基于 **Gramine** 运行时运行，硬件支持完全跟随 Gramine 的支持情况。X Chain 本身不实现硬件抽象层（HAL），而是直接使用 Gramine 提供的 TEE 抽象。
 
-### 12.2 安全模型要求
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         X Chain 硬件依赖关系                             │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                        X Chain 应用层                            │   │
+│  │  (密钥托管、交易签名、远程证明等业务逻辑)                         │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                  │                                      │
+│                                  ▼                                      │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                      Gramine 运行时                              │   │
+│  │  - 提供 TEE 抽象 (远程证明、数据密封、加密文件系统)               │   │
+│  │  - 提供 /dev/attestation 接口                                    │   │
+│  │  - 管理 enclave 生命周期                                         │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                  │                                      │
+│                                  ▼                                      │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                      TEE 硬件                                    │   │
+│  │  当前: Intel SGX                                                 │   │
+│  │  未来: 取决于 Gramine 的支持                                     │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-#### 12.2.1 恶意模型 (Malicious Model)
+### 12.2 当前支持状态
 
-X Chain 要求底层硬件必须满足恶意模型，即：
+**Gramine 当前仅支持 Intel SGX**，因此 X Chain 目前也仅支持 Intel SGX。
 
-- **不信任任何人**：包括云服务商、系统管理员、特权软件
+如果 Gramine 未来支持其他 TEE 硬件，X Chain 可以直接受益，无需修改代码。但需要注意的是，新硬件必须满足 X Chain 的安全模型要求（见 12.3 节）。
+
+### 12.3 安全模型要求
+
+X Chain 要求底层硬件必须满足**恶意模型 (Malicious Model)**，即：
+
+- **不信任任何人**：包括云服务商、系统管理员、节点控制人
 - **只信任硬件本身**：安全性完全依赖硬件的密码学保证
 - **抵抗特权攻击**：即使攻击者拥有 root 权限或物理访问权限，也无法窃取 enclave 内的秘密
 
-#### 12.2.2 硬件分类
+### 12.4 硬件分类与支持情况
 
-| 硬件 | 安全模型 | 是否支持 | 原因 |
-|------|----------|----------|------|
-| Intel SGX | 恶意模型 | 支持（默认） | 不信任 OS/Hypervisor，硬件级隔离 |
-| Intel TDX | 恶意模型 | 未来支持 | VM 级 TEE，不信任 Hypervisor |
-| RISC-V Keystone | 恶意模型 | 未来支持 | 开源 TEE，硬件级隔离 |
-| ARM TrustZone | 半诚实模型 | 不支持 | 信任 Secure World 特权软件 |
-| AMD SEV/SEV-SNP | 半诚实模型 | 不支持 | 信任 AMD 固件，内存加密但无完整性保护 |
-| AWS Nitro Enclaves | 半诚实模型 | 不支持 | 信任 AWS Hypervisor |
+| 硬件 | 安全模型 | Gramine 支持 | X Chain 支持 | 原因 |
+|------|----------|--------------|--------------|------|
+| Intel SGX | 恶意模型 | 支持 | 支持（当前唯一） | 不信任 OS/Hypervisor/节点控制人，私钥对任何人不可见 |
+| Intel TDX | 半诚实模型 | 开发中 | 不支持 | 信任 VM 管理员，节点控制人可登录 VM 访问私钥 |
+| RISC-V Keystone | 恶意模型 | 不支持 | 不支持 | Gramine 未支持 |
+| ARM TrustZone | 半诚实模型 | 不支持 | 不支持 | 信任 Secure World 特权软件 |
+| AMD SEV/SEV-SNP | 半诚实模型 | 不支持 | 不支持 | 信任 AMD 固件 |
 
-### 12.3 硬件抽象层接口
+**重要说明**：即使 Gramine 未来支持 TDX，X Chain 也**不会支持 TDX**，因为 TDX 不满足恶意模型要求。
 
-```go
-// internal/tee/hal.go
-package tee
+### 12.5 SGX vs TDX 信任模型对比
 
-// TEEType 定义支持的 TEE 类型
-type TEEType uint8
-
-const (
-    TEE_SGX      TEEType = 0x01  // Intel SGX (默认)
-    TEE_TDX      TEEType = 0x02  // Intel TDX (未来)
-    TEE_KEYSTONE TEEType = 0x03  // RISC-V Keystone (未来)
-)
-
-// TEEProvider 是硬件抽象层的核心接口
-// 任何新的 TEE 硬件都必须实现此接口
-type TEEProvider interface {
-    // 基本信息
-    Type() TEEType
-    Name() string
-    
-    // 远程证明
-    GenerateQuote(reportData []byte) ([]byte, error)
-    VerifyQuote(quote []byte) (*QuoteVerificationResult, error)
-    
-    // 证书生成 (用于 RA-TLS)
-    GenerateCertificate(privateKey crypto.PrivateKey) (*x509.Certificate, error)
-    VerifyCertificate(cert *x509.Certificate) error
-    
-    // 代码度量
-    GetCodeMeasurement() ([]byte, error)      // 类似 MRENCLAVE
-    GetSignerMeasurement() ([]byte, error)    // 类似 MRSIGNER
-    
-    // 数据密封
-    Seal(data []byte, policy SealPolicy) ([]byte, error)
-    Unseal(sealedData []byte) ([]byte, error)
-    
-    // 硬件随机数
-    GetRandomBytes(length int) ([]byte, error)
-    
-    // 安全模型验证
-    SecurityModel() SecurityModel
-    ValidateMaliciousModel() error  // 验证是否满足恶意模型
-}
-
-// SecurityModel 定义安全模型类型
-type SecurityModel uint8
-
-const (
-    MODEL_MALICIOUS    SecurityModel = 0x01  // 恶意模型 (必需)
-    MODEL_SEMI_HONEST  SecurityModel = 0x02  // 半诚实模型 (不支持)
-)
-
-// SealPolicy 定义数据密封策略
-type SealPolicy uint8
-
-const (
-    SEAL_TO_ENCLAVE SealPolicy = 0x01  // 密封到特定 enclave (MRENCLAVE)
-    SEAL_TO_SIGNER  SealPolicy = 0x02  // 密封到签名者 (MRSIGNER)
-)
-
-// QuoteVerificationResult 包含 Quote 验证结果
-type QuoteVerificationResult struct {
-    Valid           bool
-    CodeMeasurement []byte
-    SignerMeasurement []byte
-    TCBStatus       TCBStatus
-    Timestamp       time.Time
-    AdditionalData  map[string]interface{}
-}
-
-// TCBStatus 定义 TCB 状态
-type TCBStatus uint8
-
-const (
-    TCB_UP_TO_DATE      TCBStatus = 0x00
-    TCB_OUT_OF_DATE     TCBStatus = 0x01
-    TCB_REVOKED         TCBStatus = 0x02
-    TCB_CONFIGURATION_NEEDED TCBStatus = 0x03
-)
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    SGX vs TDX 信任边界对比                               │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Intel SGX (支持)                    Intel TDX (不支持)                 │
+│  ================                    ==================                 │
+│                                                                         │
+│  信任边界: Enclave 内部              信任边界: 整个 VM 内部              │
+│                                                                         │
+│  ┌─────────────────────┐            ┌─────────────────────┐            │
+│  │      主机 OS        │            │     Hypervisor      │            │
+│  │   (不可信/无法访问)  │            │   (不可信/无法访问)  │            │
+│  │  ┌───────────────┐  │            │  ┌───────────────┐  │            │
+│  │  │   应用程序    │  │            │  │   Guest VM    │  │            │
+│  │  │ (不可信/无法访问)│  │            │  │  ┌─────────┐  │  │            │
+│  │  │ ┌───────────┐ │  │            │  │  │ Guest OS │  │  │            │
+│  │  │ │  Enclave  │ │  │            │  │  │ (可信)   │  │  │            │
+│  │  │ │  (可信)   │ │  │            │  │  │ ┌───────┐│  │  │            │
+│  │  │ │ ┌───────┐ │ │  │            │  │  │ │ 应用  ││  │  │            │
+│  │  │ │ │ 私钥  │ │ │  │            │  │  │ │ 私钥  ││  │  │            │
+│  │  │ │ └───────┘ │ │  │            │  │  │ └───────┘│  │  │            │
+│  │  │ └───────────┘ │  │            │  │  └─────────┘  │  │            │
+│  │  └───────────────┘  │            │  └───────────────┘  │            │
+│  └─────────────────────┘            └─────────────────────┘            │
+│                                                                         │
+│  节点控制人: 无法访问私钥            节点控制人: 可登录 VM，访问私钥    │
+│  云服务商: 无法访问私钥              云服务商: 无法访问私钥              │
+│  root 用户: 无法访问私钥             root 用户: 可访问私钥              │
+│                                                                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│  结论:                                                                  │
+│  - SGX 适合密钥托管场景，私钥对所有人（包括节点运营者）不可见           │
+│  - TDX 适合保护 VM 工作负载不被云厂商窥探，但 VM 管理员可访问所有数据   │
+│  - X Chain 需要保护私钥不被节点控制人访问，因此只能使用 SGX             │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 12.4 SGX 实现
+### 12.6 Gramine 提供的 TEE 能力
 
-```go
-// internal/tee/sgx/provider.go
-package sgx
+X Chain 通过 Gramine 使用以下 TEE 能力：
 
-type SGXProvider struct {
-    dcapClient *DCAPClient
-    config     *SGXConfig
-}
+| 能力 | Gramine 接口 | X Chain 用途 |
+|------|--------------|--------------|
+| 远程证明 | `/dev/attestation/quote` | 节点身份验证、RA-TLS |
+| 数据密封 | Gramine encrypted files | 私钥持久化存储 |
+| 代码度量 | MRENCLAVE/MRSIGNER | 白名单治理、硬分叉控制 |
+| 硬件随机数 | RDRAND 指令 | 密钥生成 |
 
-func NewSGXProvider(config *SGXConfig) (*SGXProvider, error) {
-    // 验证 SGX 可用性
-    if !isSGXAvailable() {
-        return nil, ErrSGXNotAvailable
-    }
-    
-    return &SGXProvider{
-        dcapClient: NewDCAPClient(),
-        config:     config,
-    }, nil
-}
+### 12.7 未来硬件支持
 
-func (p *SGXProvider) Type() TEEType {
-    return TEE_SGX
-}
+如果 Gramine 未来支持新的 TEE 硬件，X Chain 将评估该硬件是否满足恶意模型要求：
 
-func (p *SGXProvider) Name() string {
-    return "Intel SGX"
-}
+1. **满足恶意模型**：可以支持（如 RISC-V Keystone）
+2. **不满足恶意模型**：不支持（如 TDX、ARM TrustZone）
 
-func (p *SGXProvider) SecurityModel() SecurityModel {
-    return MODEL_MALICIOUS
-}
-
-func (p *SGXProvider) ValidateMaliciousModel() error {
-    // SGX 满足恶意模型，直接返回 nil
-    return nil
-}
-
-func (p *SGXProvider) GenerateQuote(reportData []byte) ([]byte, error) {
-    // 通过 Gramine 的 /dev/attestation 接口生成 Quote
-    // 1. 写入 report_data
-    if err := os.WriteFile("/dev/attestation/user_report_data", reportData, 0600); err != nil {
-        return nil, err
-    }
-    
-    // 2. 读取 Quote
-    quote, err := os.ReadFile("/dev/attestation/quote")
-    if err != nil {
-        return nil, err
-    }
-    
-    return quote, nil
-}
-
-func (p *SGXProvider) VerifyQuote(quote []byte) (*QuoteVerificationResult, error) {
-    // 使用 DCAP 验证 Quote
-    return p.dcapClient.VerifyQuote(quote)
-}
-
-func (p *SGXProvider) GetRandomBytes(length int) ([]byte, error) {
-    // 使用 RDRAND 指令获取硬件随机数
-    buf := make([]byte, length)
-    if _, err := rand.Read(buf); err != nil {
-        return nil, err
-    }
-    return buf, nil
-}
-```
-
-### 12.5 未来硬件扩展指南
-
-当需要支持新的 TEE 硬件时，必须：
-
-1. **验证安全模型**：确认硬件满足恶意模型要求
-2. **实现 TEEProvider 接口**：实现所有必需的方法
-3. **添加 TEEType 常量**：在 `TEEType` 中添加新的硬件类型
-4. **实现远程证明**：提供 Quote 生成和验证功能
-5. **实现数据密封**：提供与 SGX sealing 等效的功能
-6. **测试验证**：通过所有安全测试
-
-```go
-// 示例：未来 Intel TDX 实现
-// internal/tee/tdx/provider.go
-package tdx
-
-type TDXProvider struct {
-    // TDX 特定配置
-}
-
-func (p *TDXProvider) Type() TEEType {
-    return TEE_TDX
-}
-
-func (p *TDXProvider) SecurityModel() SecurityModel {
-    return MODEL_MALICIOUS  // TDX 满足恶意模型
-}
-
-func (p *TDXProvider) ValidateMaliciousModel() error {
-    // TDX 满足恶意模型
-    return nil
-}
-
-// ... 实现其他接口方法
-```
-
-### 12.6 运行时硬件检测
-
-```go
-// internal/tee/detect.go
-package tee
-
-// DetectTEE 自动检测可用的 TEE 硬件
-func DetectTEE() (TEEProvider, error) {
-    // 优先检测 SGX
-    if isSGXAvailable() {
-        provider, err := sgx.NewSGXProvider(nil)
-        if err == nil {
-            return provider, nil
-        }
-    }
-    
-    // 未来：检测 TDX
-    // if isTDXAvailable() {
-    //     return tdx.NewTDXProvider(nil)
-    // }
-    
-    // 未来：检测 Keystone
-    // if isKeystoneAvailable() {
-    //     return keystone.NewKeystoneProvider(nil)
-    // }
-    
-    return nil, ErrNoTEEAvailable
-}
-
-// ValidateTEEProvider 验证 TEE 提供者是否满足要求
-func ValidateTEEProvider(provider TEEProvider) error {
-    // 1. 验证安全模型
-    if provider.SecurityModel() != MODEL_MALICIOUS {
-        return ErrNotMaliciousModel
-    }
-    
-    // 2. 验证恶意模型实现
-    if err := provider.ValidateMaliciousModel(); err != nil {
-        return err
-    }
-    
-    return nil
-}
-```
-
-### 12.7 配置文件
-
-```toml
-# config.toml
-
-[tee]
-# 默认使用 SGX，未来可配置为其他满足恶意模型的硬件
-type = "sgx"  # 可选值: "sgx", "tdx", "keystone"
-
-# 是否强制验证恶意模型
-require_malicious_model = true
-
-[tee.sgx]
-# SGX 特定配置
-dcap_url = "https://api.trustedservices.intel.com/sgx/certification/v4"
-allowed_tcb_status = ["UpToDate", "SWHardeningNeeded"]
-
-# [tee.tdx]
-# TDX 特定配置 (未来)
-
-# [tee.keystone]
-# Keystone 特定配置 (未来)
-```
+X Chain 不会为了支持更多硬件而降低安全要求。
 
 ## 13. 区块浏览器与数据可见性
 
