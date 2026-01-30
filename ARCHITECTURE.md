@@ -85,19 +85,19 @@ func (s *SGXConsensus) Finalize(chain ChainHeaderReader, header *types.Header, s
 
 #### 2.2.2 预编译合约系统
 
-新增预编译合约地址范围：`0x0200` - `0x02FF`
+新增预编译合约地址范围：`0x8000` - `0x80FF`（从 32768 开始，避免与以太坊未来预编译地址冲突）
 
 | 地址 | 功能 | 描述 |
 |------|------|------|
-| 0x0200 | SGX_KEY_CREATE | 创建密钥对 |
-| 0x0201 | SGX_KEY_GET_PUBLIC | 获取公钥 |
-| 0x0202 | SGX_SIGN | 签名 |
-| 0x0203 | SGX_VERIFY | 验签 |
-| 0x0204 | SGX_ECDH | ECDH 密钥交换 |
-| 0x0205 | SGX_RANDOM | 硬件真随机数 |
-| 0x0206 | SGX_ENCRYPT | 对称加密 |
-| 0x0207 | SGX_DECRYPT | 对称解密 |
-| 0x0208 | SGX_KEY_DERIVE | 密钥派生 |
+| 0x8000 | SGX_KEY_CREATE | 创建密钥对 |
+| 0x8001 | SGX_KEY_GET_PUBLIC | 获取公钥 |
+| 0x8002 | SGX_SIGN | 签名 |
+| 0x8003 | SGX_VERIFY | 验签 |
+| 0x8004 | SGX_ECDH | ECDH 密钥交换 |
+| 0x8005 | SGX_RANDOM | 硬件真随机数 |
+| 0x8006 | SGX_ENCRYPT | 对称加密 |
+| 0x8007 | SGX_DECRYPT | 对称解密 |
+| 0x8008 | SGX_KEY_DERIVE | 密钥派生 |
 
 #### 2.2.3 Gramine 运行时集成
 
@@ -1809,7 +1809,7 @@ func (s *SGXConsensus) VerifyHeader(chain ChainHeaderReader, header *types.Heade
 
 ### 4.3 预编译合约接口定义
 
-#### 4.3.1 SGX_KEY_CREATE (0x0200)
+#### 4.3.1 SGX_KEY_CREATE (0x8000)
 
 创建新的密钥对，私钥存储在加密分区。
 
@@ -1871,7 +1871,7 @@ func (c *sgxKeyCreate) Run(input []byte, caller common.Address, evm *EVM) ([]byt
 }
 ```
 
-#### 4.3.2 SGX_KEY_GET_PUBLIC (0x0201)
+#### 4.3.2 SGX_KEY_GET_PUBLIC (0x8001)
 
 获取指定密钥的公钥。
 
@@ -1896,7 +1896,7 @@ func (c *sgxKeyCreate) Run(input []byte, caller common.Address, evm *EVM) ([]byt
 
 **Gas 消耗：** 3000
 
-#### 4.3.3 SGX_SIGN (0x0202)
+#### 4.3.3 SGX_SIGN (0x8002)
 
 使用私钥签名消息。
 
@@ -1949,7 +1949,7 @@ func (c *sgxSign) Run(input []byte, caller common.Address, evm *EVM) ([]byte, er
 }
 ```
 
-#### 4.3.4 SGX_VERIFY (0x0203)
+#### 4.3.4 SGX_VERIFY (0x8003)
 
 验证签名。
 
@@ -1976,7 +1976,7 @@ func (c *sgxSign) Run(input []byte, caller common.Address, evm *EVM) ([]byte, er
 
 **Gas 消耗：** 5000
 
-#### 4.3.5 SGX_ECDH (0x0204)
+#### 4.3.5 SGX_ECDH (0x8004)
 
 执行 ECDH 密钥交换，派生的共享秘密存储在加密分区。
 
@@ -2044,7 +2044,7 @@ func (c *sgxECDH) Run(input []byte, caller common.Address, evm *EVM) ([]byte, er
 }
 ```
 
-#### 4.3.6 SGX_RANDOM (0x0205)
+#### 4.3.6 SGX_RANDOM (0x8005)
 
 获取硬件真随机数。
 
@@ -2086,7 +2086,7 @@ func (c *sgxRandom) Run(input []byte) ([]byte, error) {
 }
 ```
 
-#### 4.3.7 SGX_ENCRYPT (0x0206)
+#### 4.3.7 SGX_ENCRYPT (0x8006)
 
 使用对称密钥加密数据。
 
@@ -2112,7 +2112,7 @@ func (c *sgxRandom) Run(input []byte) ([]byte, error) {
 
 **Gas 消耗：** 5000 + 10 * 数据长度
 
-#### 4.3.8 SGX_DECRYPT (0x0207)
+#### 4.3.8 SGX_DECRYPT (0x8007)
 
 使用对称密钥解密数据。
 
@@ -2138,7 +2138,7 @@ func (c *sgxRandom) Run(input []byte) ([]byte, error) {
 
 **Gas 消耗：** 5000 + 10 * 数据长度
 
-#### 4.3.9 SGX_KEY_DERIVE (0x0208)
+#### 4.3.9 SGX_KEY_DERIVE (0x8008)
 
 从现有密钥派生新密钥。
 
@@ -4220,27 +4220,27 @@ func ParseSGXPrecompileCall(tx *types.Transaction) *SGXCallInfo {
         return nil
     }
     
-    // 检查是否是 SGX 预编译合约地址 (0x0200 - 0x02FF)
+    // 检查是否是 SGX 预编译合约地址 (0x8000 - 0x80FF)
     addr := to.Big().Uint64()
-    if addr < 0x0200 || addr > 0x02FF {
+    if addr < 0x8000 || addr > 0x80FF {
         return nil
     }
     
     input := tx.Data()
     
     switch addr {
-    case 0x0200: // SGX_KEY_CREATE
+    case 0x8000: // SGX_KEY_CREATE
         return &SGXCallInfo{
             Type:      "KEY_CREATE",
             CurveType: getCurveName(input[0]),
         }
-    case 0x0202: // SGX_SIGN
+    case 0x8002: // SGX_SIGN
         return &SGXCallInfo{
             Type:    "SIGN",
             KeyID:   common.BytesToHash(input[0:32]).Hex(),
             MsgHash: common.BytesToHash(input[32:64]).Hex(),
         }
-    case 0x0204: // SGX_ECDH
+    case 0x8004: // SGX_ECDH
         return &SGXCallInfo{
             Type:       "ECDH",
             LocalKeyID: common.BytesToHash(input[0:32]).Hex(),
