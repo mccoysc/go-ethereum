@@ -640,6 +640,116 @@ func (c *sgxECDH) Run(input []byte, caller common.Address, evm *EVM) ([]byte, er
 }
 ```
 
+#### 4.4.4 身份验证机制
+
+访问秘密数据**必须通过签名验证身份**。这是通过以太坊标准的交易签名机制实现的：
+
+```
++------------------+                    +------------------+
+|   用户钱包       |                    |   X Chain 节点   |
++------------------+                    +------------------+
+        |                                       |
+        | 1. 构造交易 (调用 SGX_SIGN)           |
+        |                                       |
+        | 2. 用以太坊私钥签名交易               |
+        |   signature = sign(tx, privateKey)    |
+        |                                       |
+        | 3. 提交签名交易                       |
+        |-------------------------------------->|
+        |                                       |
+        |                    4. EVM 验证交易签名 |
+        |                    sender = ecrecover(tx, sig)
+        |                                       |
+        |                    5. 提取 msg.sender |
+        |                                       |
+        |                    6. 预编译合约检查权限
+        |                    if msg.sender != keyOwner:
+        |                        revert("Not key owner")
+        |                                       |
+        |                    7. 权限验证通过    |
+        |                    执行签名操作       |
+        |                                       |
+        | 8. 返回签名结果                       |
+        |<--------------------------------------|
+```
+
+**身份验证的安全保证：**
+
+| 攻击场景 | 防护机制 |
+|----------|----------|
+| 未签名交易 | EVM 拒绝执行，交易无效 |
+| 签名错误 | ecrecover 恢复出错误地址，权限检查失败 |
+| 重放攻击 | 交易 nonce 机制防止重放 |
+| 伪造 msg.sender | 不可能，msg.sender 由签名密码学保证 |
+| 知道 keyId 但无签名 | 无法提交有效交易，无法访问秘密 |
+
+**实现代码：**
+
+```go
+// core/vm/contracts_sgx.go
+
+// 通用权限检查函数
+func checkKeyOwnership(evm *EVM, keyId common.Hash, caller common.Address) error {
+    // caller 是通过交易签名验证后提取的 msg.sender
+    // 这个值由 EVM 保证其真实性，无法伪造
+    
+    owner := evm.StateDB.GetKeyOwner(keyId)
+    if owner == (common.Address{}) {
+        return ErrKeyNotFound
+    }
+    if owner != caller {
+        return ErrNotKeyOwner
+    }
+    return nil
+}
+
+// 签名操作示例
+func (c *sgxSign) Run(input []byte, caller common.Address, evm *EVM) ([]byte, error) {
+    keyId := common.BytesToHash(input[0:32])
+    
+    // 权限检查：caller 必须是密钥所有者
+    // caller 的身份已通过交易签名验证
+    if err := checkKeyOwnership(evm, keyId, caller); err != nil {
+        return nil, err
+    }
+    
+    // 身份验证通过，执行签名操作
+    // ...
+}
+```
+
+**合约调用场景：**
+
+当智能合约调用预编译合约时，`msg.sender` 是调用合约的地址，而非原始交易发起者（EOA）：
+
+```
+EOA (0x1234...) --调用--> 合约 A (0xAAAA...) --调用--> SGX_SIGN
+                                                        |
+                                              msg.sender = 0xAAAA...
+                                              (不是 0x1234...)
+```
+
+这意味着：
+- 如果合约 A 是密钥所有者，合约 A 可以使用该密钥
+- 如果 EOA 是密钥所有者，合约 A 无法代替 EOA 使用该密钥
+- 这提供了细粒度的权限控制，防止未授权的合约访问用户密钥
+
+**无签名 = 无访问：**
+
+```
+攻击者知道 keyId = 0xABCD...
+攻击者想调用 SGX_SIGN(keyId, msgHash)
+
+但是：
+1. 攻击者没有密钥所有者的以太坊私钥
+2. 攻击者无法签名有效交易
+3. 即使构造交易，EVM 也会拒绝（签名无效）
+4. 即使通过某种方式提交，msg.sender 也不会是所有者
+5. 权限检查失败，操作被拒绝
+
+结论：没有所有者的签名，绝对无法访问秘密数据
+```
+
 ## 5. 数据存储与同步
 
 ### 5.1 存储架构
