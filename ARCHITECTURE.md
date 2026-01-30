@@ -429,7 +429,477 @@ X Chain 采用**低成本效用模型**结合**稳定性激励机制**，确保�
                                     +------------------------------------+
 ```
 
-##### 3.3.8.3 信誉系统设计
+##### 3.3.8.3 稳定在线的准确衡量机制
+
+**核心挑战**：在去中心化网络中，如何准确、可验证、防伪造地衡量节点的在线状态？
+
+```
+衡量要求:
+┌─────────────────────────────────────────────────────────────┐
+│  1. 去中心化 - 无单点故障，无中心化监控                      │
+│  2. 可验证性 - 在线状态可被密码学证明                        │
+│  3. 防伪造   - 节点无法伪造在线记录                          │
+│  4. 抗串谋   - 多个节点无法串谋伪造彼此的在线状态            │
+│  5. 低开销   - 衡量机制不应显著增加网络负担                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+###### 3.3.8.3.1 SGX 签名心跳机制
+
+利用 SGX enclave 的签名能力，节点定期发送可验证的心跳消息：
+
+```go
+// consensus/sgx/heartbeat.go
+package sgx
+
+// Heartbeat SGX 签名心跳消息
+type Heartbeat struct {
+    NodeID      common.Hash   // 节点标识
+    Timestamp   uint64        // 心跳时间戳（Unix 秒）
+    BlockHeight uint64        // 当前区块高度
+    Challenge   [32]byte      // 随机挑战值（防重放）
+    SGXQuote    []byte        // SGX 远程证明 Quote
+    Signature   []byte        // enclave 内私钥签名
+}
+
+// HeartbeatManager 心跳管理器
+type HeartbeatManager struct {
+    sgxAttestor   *SGXAttestor
+    peers         map[common.Hash]*PeerHeartbeatState
+    config        *HeartbeatConfig
+    
+    // 心跳记录（用于计算在线率）
+    heartbeatLog  map[common.Hash][]HeartbeatRecord
+}
+
+// HeartbeatConfig 心跳配置
+type HeartbeatConfig struct {
+    Interval          time.Duration // 心跳间隔，默认 30 秒
+    Timeout           time.Duration // 心跳超时，默认 90 秒（3 个间隔）
+    WindowSize        int           // 统计窗口大小，默认 1000 个心跳
+    MinObservers      int           // 最少观测者数量，默认 3
+    QuoteRefreshRate  int           // SGX Quote 刷新频率，默认每 100 个心跳
+}
+
+// GenerateHeartbeat 生成 SGX 签名心跳
+func (m *HeartbeatManager) GenerateHeartbeat() (*Heartbeat, error) {
+    // 1. 获取当前状态
+    now := uint64(time.Now().Unix())
+    blockHeight := m.chain.CurrentBlock().Number().Uint64()
+    
+    // 2. 生成随机挑战值（防重放攻击）
+    var challenge [32]byte
+    if _, err := rand.Read(challenge[:]); err != nil {
+        return nil, err
+    }
+    
+    // 3. 构造心跳数据
+    hb := &Heartbeat{
+        NodeID:      m.nodeID,
+        Timestamp:   now,
+        BlockHeight: blockHeight,
+        Challenge:   challenge,
+    }
+    
+    // 4. 在 SGX enclave 内签名
+    dataToSign := m.serializeHeartbeatData(hb)
+    signature, err := m.sgxAttestor.SignInEnclave(dataToSign)
+    if err != nil {
+        return nil, err
+    }
+    hb.Signature = signature
+    
+    // 5. 定期附加 SGX Quote（证明 enclave 身份）
+    if m.shouldRefreshQuote() {
+        quote, err := m.sgxAttestor.GenerateQuote(dataToSign)
+        if err != nil {
+            return nil, err
+        }
+        hb.SGXQuote = quote
+    }
+    
+    return hb, nil
+}
+
+// VerifyHeartbeat 验证心跳消息
+func (m *HeartbeatManager) VerifyHeartbeat(hb *Heartbeat) error {
+    // 1. 验证时间戳（不能太旧或太新）
+    now := uint64(time.Now().Unix())
+    if hb.Timestamp < now-60 || hb.Timestamp > now+10 {
+        return ErrInvalidTimestamp
+    }
+    
+    // 2. 验证签名
+    dataToVerify := m.serializeHeartbeatData(hb)
+    if !m.verifySignature(hb.NodeID, dataToVerify, hb.Signature) {
+        return ErrInvalidSignature
+    }
+    
+    // 3. 如果包含 SGX Quote，验证 Quote
+    if len(hb.SGXQuote) > 0 {
+        if err := m.sgxAttestor.VerifyQuote(hb.SGXQuote, dataToVerify); err != nil {
+            return fmt.Errorf("invalid SGX quote: %w", err)
+        }
+    }
+    
+    // 4. 检查重放攻击（挑战值不能重复）
+    if m.isReplayedChallenge(hb.NodeID, hb.Challenge) {
+        return ErrReplayAttack
+    }
+    
+    return nil
+}
+```
+
+**SGX 签名心跳的安全性**：
+
+| 攻击类型 | 防护机制 |
+|----------|----------|
+| 伪造心跳 | SGX enclave 内签名，无法在 enclave 外伪造 |
+| 重放攻击 | 随机挑战值 + 时间戳验证 |
+| 时间欺骗 | 多节点观测 + 时间戳范围检查 |
+| 身份冒充 | SGX Quote 验证 MRENCLAVE |
+
+###### 3.3.8.3.2 多节点共识观测
+
+单个节点的观测可能不准确（网络分区、恶意报告），因此采用多节点共识：
+
+```go
+// consensus/sgx/uptime_observer.go
+package sgx
+
+// UptimeObservation 单次在线观测记录
+type UptimeObservation struct {
+    ObserverID  common.Hash // 观测者节点 ID
+    TargetID    common.Hash // 被观测节点 ID
+    Timestamp   uint64      // 观测时间
+    IsOnline    bool        // 是否在线
+    ResponseMs  uint32      // 响应时间（毫秒）
+    Signature   []byte      // 观测者签名
+}
+
+// UptimeConsensus 在线率共识计算
+type UptimeConsensus struct {
+    observations map[common.Hash][]UptimeObservation // 按目标节点分组
+    config       *ConsensusConfig
+}
+
+// ConsensusConfig 共识配置
+type ConsensusConfig struct {
+    MinObservers        int     // 最少观测者数量，默认 3
+    ConsensusThreshold  float64 // 共识阈值，默认 0.67 (2/3)
+    ObservationWindow   time.Duration // 观测窗口，默认 1 小时
+}
+
+// CalculateUptimeScore 计算节点在线率得分
+func (c *UptimeConsensus) CalculateUptimeScore(nodeID common.Hash) (uint64, error) {
+    observations := c.getRecentObservations(nodeID)
+    
+    // 1. 检查观测者数量
+    observers := c.getUniqueObservers(observations)
+    if len(observers) < c.config.MinObservers {
+        return 0, ErrInsufficientObservers
+    }
+    
+    // 2. 按时间槽分组观测结果
+    timeSlots := c.groupByTimeSlot(observations)
+    
+    // 3. 对每个时间槽计算共识结果
+    var onlineSlots, totalSlots int
+    for _, slotObs := range timeSlots {
+        totalSlots++
+        
+        // 计算该时间槽的在线观测比例
+        onlineCount := 0
+        for _, obs := range slotObs {
+            if obs.IsOnline {
+                onlineCount++
+            }
+        }
+        
+        // 如果超过 2/3 观测者认为在线，则该时间槽计为在线
+        if float64(onlineCount)/float64(len(slotObs)) >= c.config.ConsensusThreshold {
+            onlineSlots++
+        }
+    }
+    
+    // 4. 计算在线率得分 (0-10000)
+    if totalSlots == 0 {
+        return 0, nil
+    }
+    score := uint64(onlineSlots * 10000 / totalSlots)
+    
+    return score, nil
+}
+
+// RecordObservation 记录观测结果
+func (c *UptimeConsensus) RecordObservation(obs *UptimeObservation) error {
+    // 1. 验证观测者签名
+    if err := c.verifyObservation(obs); err != nil {
+        return err
+    }
+    
+    // 2. 检查观测者是否有资格（必须是活跃节点）
+    if !c.isQualifiedObserver(obs.ObserverID) {
+        return ErrUnqualifiedObserver
+    }
+    
+    // 3. 防止自我观测
+    if obs.ObserverID == obs.TargetID {
+        return ErrSelfObservation
+    }
+    
+    // 4. 记录观测
+    c.observations[obs.TargetID] = append(c.observations[obs.TargetID], *obs)
+    
+    return nil
+}
+```
+
+**多节点共识的优势**：
+
+```
+单节点观测问题:
+节点 A 观测节点 B → A 可能因网络问题误判 B 离线
+                 → A 可能恶意报告 B 离线
+
+多节点共识解决:
+节点 A ─┐
+节点 C ─┼─→ 共识: 2/3 以上认为在线 → 判定为在线
+节点 D ─┘
+
+防串谋机制:
+- 观测者必须是活跃节点（有出块记录）
+- 观测结果需要签名（可追溯责任）
+- 异常观测模式会被检测（如某节点总是报告他人离线）
+```
+
+###### 3.3.8.3.3 区块生产追踪
+
+对于参与出块的节点，区块生产记录是最直接的在线证明：
+
+```go
+// consensus/sgx/block_tracker.go
+package sgx
+
+// BlockProductionTracker 区块生产追踪器
+type BlockProductionTracker struct {
+    productionLog map[common.Hash][]BlockProductionRecord
+    config        *TrackerConfig
+}
+
+// BlockProductionRecord 区块生产记录
+type BlockProductionRecord struct {
+    NodeID      common.Hash
+    BlockNumber uint64
+    BlockHash   common.Hash
+    Timestamp   uint64
+    TxCount     int
+}
+
+// TrackerConfig 追踪器配置
+type TrackerConfig struct {
+    WindowBlocks    uint64  // 统计窗口（区块数），默认 1000
+    MinBlocksForScore uint64 // 计算得分的最小区块数，默认 10
+}
+
+// CalculateProductionScore 计算区块生产得分
+func (t *BlockProductionTracker) CalculateProductionScore(nodeID common.Hash) uint64 {
+    records := t.getRecentRecords(nodeID)
+    
+    if len(records) < int(t.config.MinBlocksForScore) {
+        return 0 // 出块太少，无法评估
+    }
+    
+    // 计算出块频率和质量
+    var totalScore uint64
+    
+    // 1. 出块数量得分（占 50%）
+    blockCount := uint64(len(records))
+    expectedBlocks := t.getExpectedBlocks(nodeID) // 基于节点活跃时长
+    if expectedBlocks > 0 {
+        blockScore := min(blockCount*10000/expectedBlocks, 10000)
+        totalScore += blockScore * 50 / 100
+    }
+    
+    // 2. 出块间隔稳定性得分（占 30%）
+    intervalScore := t.calculateIntervalStability(records)
+    totalScore += intervalScore * 30 / 100
+    
+    // 3. 区块质量得分（交易数量）（占 20%）
+    qualityScore := t.calculateBlockQuality(records)
+    totalScore += qualityScore * 20 / 100
+    
+    return totalScore
+}
+
+// calculateIntervalStability 计算出块间隔稳定性
+func (t *BlockProductionTracker) calculateIntervalStability(records []BlockProductionRecord) uint64 {
+    if len(records) < 2 {
+        return 0
+    }
+    
+    // 计算间隔的标准差
+    var intervals []uint64
+    for i := 1; i < len(records); i++ {
+        interval := records[i].Timestamp - records[i-1].Timestamp
+        intervals = append(intervals, interval)
+    }
+    
+    // 标准差越小，得分越高
+    stdDev := t.calculateStdDev(intervals)
+    avgInterval := t.calculateAvg(intervals)
+    
+    if avgInterval == 0 {
+        return 0
+    }
+    
+    // 变异系数 (CV) = stdDev / avg
+    // CV 越小越稳定，得分越高
+    cv := float64(stdDev) / float64(avgInterval)
+    if cv > 1.0 {
+        return 0
+    }
+    return uint64((1.0 - cv) * 10000)
+}
+```
+
+###### 3.3.8.3.4 交易响应时间追踪
+
+测量节点处理交易的响应速度：
+
+```go
+// consensus/sgx/response_tracker.go
+package sgx
+
+// ResponseTimeTracker 响应时间追踪器
+type ResponseTimeTracker struct {
+    responseLogs map[common.Hash][]ResponseRecord
+    config       *ResponseConfig
+}
+
+// ResponseRecord 响应记录
+type ResponseRecord struct {
+    NodeID       common.Hash
+    TxHash       common.Hash
+    SubmitTime   uint64 // 交易提交时间
+    ResponseTime uint64 // 收到响应时间
+    Success      bool   // 是否成功处理
+}
+
+// ResponseConfig 响应配置
+type ResponseConfig struct {
+    WindowSize      int           // 统计窗口大小，默认 100
+    ExcellentMs     uint32        // 优秀响应时间，默认 100ms
+    GoodMs          uint32        // 良好响应时间，默认 500ms
+    AcceptableMs    uint32        // 可接受响应时间，默认 2000ms
+}
+
+// CalculateResponseScore 计算响应得分
+func (t *ResponseTimeTracker) CalculateResponseScore(nodeID common.Hash) uint64 {
+    records := t.getRecentRecords(nodeID)
+    
+    if len(records) == 0 {
+        return 5000 // 无记录时给中等分数
+    }
+    
+    var totalScore uint64
+    var validCount int
+    
+    for _, record := range records {
+        if !record.Success {
+            continue // 失败的不计入响应时间
+        }
+        
+        validCount++
+        responseMs := uint32((record.ResponseTime - record.SubmitTime) * 1000)
+        
+        // 根据响应时间计算得分
+        var score uint64
+        switch {
+        case responseMs <= t.config.ExcellentMs:
+            score = 10000 // 优秀
+        case responseMs <= t.config.GoodMs:
+            score = 8000 // 良好
+        case responseMs <= t.config.AcceptableMs:
+            score = 6000 // 可接受
+        default:
+            score = 3000 // 较慢
+        }
+        
+        totalScore += score
+    }
+    
+    if validCount == 0 {
+        return 5000
+    }
+    
+    return totalScore / uint64(validCount)
+}
+```
+
+###### 3.3.8.3.5 综合在线率计算
+
+将以上四种衡量机制综合计算：
+
+```go
+// consensus/sgx/uptime_calculator.go
+package sgx
+
+// UptimeCalculator 综合在线率计算器
+type UptimeCalculator struct {
+    heartbeatMgr    *HeartbeatManager
+    consensusMgr    *UptimeConsensus
+    blockTracker    *BlockProductionTracker
+    responseTracker *ResponseTimeTracker
+    config          *UptimeConfig
+}
+
+// UptimeConfig 在线率计算配置
+type UptimeConfig struct {
+    // 权重配置（总和 = 100）
+    HeartbeatWeight   uint8 // SGX 心跳权重，默认 40
+    ConsensusWeight   uint8 // 多节点共识权重，默认 30
+    BlockWeight       uint8 // 区块生产权重，默认 20
+    ResponseWeight    uint8 // 响应时间权重，默认 10
+}
+
+// CalculateComprehensiveUptime 计算综合在线率
+func (c *UptimeCalculator) CalculateComprehensiveUptime(nodeID common.Hash) uint64 {
+    cfg := c.config
+    
+    // 1. SGX 心跳得分
+    heartbeatScore := c.heartbeatMgr.GetHeartbeatScore(nodeID)
+    
+    // 2. 多节点共识得分
+    consensusScore, _ := c.consensusMgr.CalculateUptimeScore(nodeID)
+    
+    // 3. 区块生产得分
+    blockScore := c.blockTracker.CalculateProductionScore(nodeID)
+    
+    // 4. 响应时间得分
+    responseScore := c.responseTracker.CalculateResponseScore(nodeID)
+    
+    // 5. 加权计算
+    totalScore := (heartbeatScore * uint64(cfg.HeartbeatWeight) +
+                   consensusScore * uint64(cfg.ConsensusWeight) +
+                   blockScore * uint64(cfg.BlockWeight) +
+                   responseScore * uint64(cfg.ResponseWeight)) / 100
+    
+    return totalScore
+}
+```
+
+**衡量机制总结**：
+
+| 机制 | 权重 | 衡量内容 | 防伪造方式 |
+|------|------|----------|------------|
+| SGX 签名心跳 | 40% | 节点是否定期发送心跳 | SGX enclave 签名 + Quote |
+| 多节点共识 | 30% | 多个节点观测的共识结果 | 2/3 共识 + 签名追溯 |
+| 区块生产 | 20% | 实际出块数量和质量 | 区块链不可篡改记录 |
+| 响应时间 | 10% | 交易处理响应速度 | 交易哈希 + 时间戳 |
+
+##### 3.3.8.4 信誉系统设计
 
 ```go
 // consensus/sgx/reputation.go
