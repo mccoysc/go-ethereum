@@ -555,6 +555,7 @@ type CandidateReward struct {
 }
 
 // CalculateRewards 计算所有候选区块的收益
+// 重要改进：只有包含新交易的候选区块才能获得收益
 func (c *MultiProducerRewardCalculator) CalculateRewards(
     candidates []*BlockCandidate,
     totalFees *big.Int,
@@ -568,13 +569,32 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
         return candidates[i].ReceivedAt.Before(candidates[j].ReceivedAt)
     })
     
-    // 2. 计算每个候选的质量评分
+    // 2. 计算每个候选的质量评分，并检查是否有新交易
+    firstCandidateTxSet := make(map[common.Hash]bool)
+    for _, tx := range candidates[0].Block.Transactions() {
+        firstCandidateTxSet[tx.Hash()] = true
+    }
+    
     for i, candidate := range candidates {
         candidate.Rank = i + 1
         candidate.Quality = c.qualityScorer.CalculateQuality(candidate.Block)
+        
+        // 计算该候选区块包含的新交易数（第一名之外的交易）
+        if i > 0 {
+            newTxCount := 0
+            for _, tx := range candidate.Block.Transactions() {
+                if !firstCandidateTxSet[tx.Hash()] {
+                    newTxCount++
+                }
+            }
+            candidate.Quality.NewTxCount = uint64(newTxCount)
+        } else {
+            // 第一名的所有交易都是"新"交易
+            candidate.Quality.NewTxCount = candidate.Quality.TxCount
+        }
     }
     
-    // 3. 计算收益
+    // 3. 计算收益（只有包含新交易的候选才能获得收益）
     rewards := make([]*CandidateReward, 0, len(candidates))
     totalMultiplier := 0.0
     
@@ -583,8 +603,21 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
             break
         }
         
+        // 关键改进：如果后续候选没有新交易，不分配收益
+        if i > 0 && candidate.Quality.NewTxCount == 0 {
+            // 该候选的所有交易都已被第一名包含，不分配收益
+            continue
+        }
+        
         speedRatio := c.config.SpeedRewardRatios[i]
         qualityMulti := candidate.Quality.RewardMultiplier
+        
+        // 对于后续候选，收益按新交易比例调整
+        if i > 0 {
+            newTxRatio := float64(candidate.Quality.NewTxCount) / float64(candidate.Quality.TxCount)
+            qualityMulti *= newTxRatio  // 只有新交易部分才计入收益
+        }
+        
         finalMulti := speedRatio * qualityMulti
         
         rewards = append(rewards, &CandidateReward{
@@ -638,34 +671,41 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
 │  最终倍数: 60% × 1.42 = 0.85                                 │
 └─────────────────────────────────────────────────────────────┘
 
-矿工 C (第3名，中等质量):
+矿工 C (第3名，无新交易):
 ┌─────────────────────────────────────────────────────────────┐
 │  排名: 第 3 名（稍慢 400ms）                                 │
 │  交易数量: 15 笔                                             │
-│  区块质量得分: 5500                                          │
-│  质量倍数: 1.08x                                             │
+│  新交易数量: 0 笔（所有交易都已被矿工 A 包含）               │
 │                                                             │
-│  速度基础奖励: 30%                                           │
-│  最终倍数: 30% × 1.08 = 0.32                                 │
+│  收益: 0 ETH（无新交易，不分配收益）                         │
 └─────────────────────────────────────────────────────────────┘
 
 收益分配 (假设总交易费 = 1 ETH):
 ┌─────────────────────────────────────────────────────────────┐
-│  总倍数: 0.58 + 0.85 + 0.32 = 1.75                          │
+│  矿工 A: 2 笔交易（全部是新交易）                            │
+│  矿工 B: 30 笔交易，其中 28 笔是新交易（A 没有的）           │
+│  矿工 C: 15 笔交易，其中 0 笔是新交易（全部被 A 包含）       │
 │                                                             │
-│  矿工 A 收益: 1 ETH × (0.58/1.75) = 0.331 ETH (33.1%)       │
-│  矿工 B 收益: 1 ETH × (0.85/1.75) = 0.486 ETH (48.6%)       │
-│  矿工 C 收益: 1 ETH × (0.32/1.75) = 0.183 ETH (18.3%)       │
+│  矿工 A 最终倍数: 100% × 0.58 = 0.58                        │
+│  矿工 B 最终倍数: 60% × 1.42 × (28/30) = 0.80               │
+│  矿工 C 最终倍数: 0（无新交易，不参与分配）                  │
 │                                                             │
-│  结论: 第2名矿工 B 因为区块质量高，收益反而最高！            │
+│  总倍数: 0.58 + 0.80 = 1.38                                 │
+│                                                             │
+│  矿工 A 收益: 1 ETH × (0.58/1.38) = 0.420 ETH (42.0%)       │
+│  矿工 B 收益: 1 ETH × (0.80/1.38) = 0.580 ETH (58.0%)       │
+│  矿工 C 收益: 0 ETH (0%)                                     │
+│                                                             │
+│  结论: 矿工 B 因为包含大量新交易，收益最高！                 │
+│        矿工 C 没有新交易，不获得收益。                       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 **激励效果**：
 - 速度仍然重要（第1名基础奖励最高）
-- 质量同样重要（高质量可以弥补速度劣势）
-- 避免"赢家通吃"（第2、3名也有收益，不会浪费已打包的区块）
-- 鼓励矿工找到速度和质量的最优平衡点
+- 新交易贡献是关键（只有包含新交易才能获得收益）
+- 防止"搭便车"（后续矿工如果没有新交易，不分配收益）
+- 鼓励矿工尽可能收集更多不同的交易
 
 ###### 3.3.8.2.1 区块质量评分
 
@@ -724,6 +764,7 @@ func DefaultQualityConfig() *QualityConfig {
 // BlockQuality 区块质量评分结果
 type BlockQuality struct {
     TxCount          uint64  // 交易数量
+    NewTxCount       uint64  // 新交易数量（相对于第一名候选区块）
     BlockSize        uint64  // 区块大小（字节）
     GasUsed          uint64  // 使用的 Gas
     GasLimit         uint64  // Gas 上限
@@ -1005,13 +1046,32 @@ func (c *BlockRewardCalculator) CalculateReward(block *types.Block, receipts []*
 ```go
 // 防止恶意行为的额外规则
 
-// 1. 最小交易数惩罚
-// 如果区块只有 1-2 笔交易，收益倍数最高只有 0.3x
-func (s *BlockQualityScorer) applyMinTxPenalty(quality *BlockQuality) {
-    if quality.TxCount <= 2 {
-        if quality.RewardMultiplier > 0.3 {
-            quality.RewardMultiplier = 0.3
-        }
+// 1. 交易数量评分（考虑网络状态）
+// 重要：交易量少是网络状态问题，不是矿工的问题，不应惩罚矿工
+// 只有在矿工明显"抢跑"（网络中有更多交易但矿工只打包少量）时才降低收益
+func (s *BlockQualityScorer) evaluateTxCount(
+    quality *BlockQuality,
+    pendingTxCount uint64,  // 当前交易池中的待处理交易数
+    maxWaitTime time.Duration,  // 最大等待时间
+    actualWaitTime time.Duration,  // 实际等待时间
+) {
+    // 如果交易池中交易很少，矿工打包所有可用交易，不惩罚
+    if quality.TxCount >= pendingTxCount {
+        // 矿工已打包所有可用交易，给予满分
+        return
+    }
+    
+    // 如果已经等待到最大等待时间，不惩罚（矿工已尽力等待）
+    if actualWaitTime >= maxWaitTime {
+        return
+    }
+    
+    // 只有在交易池中有更多交易，但矿工提前出块时才降低收益
+    // 这是为了防止矿工"抢跑"（故意只打包少量交易以快速获得收益）
+    packingRatio := float64(quality.TxCount) / float64(pendingTxCount)
+    if packingRatio < 0.5 {
+        // 打包比例低于 50%，降低收益
+        quality.RewardMultiplier *= packingRatio + 0.5  // 最低 50% 收益
     }
 }
 
@@ -1751,6 +1811,205 @@ func (p *PenaltyManager) excludeNode(nodeID common.Hash) {
     // 需要连续在线一段时间后才能恢复
 }
 ```
+
+##### 3.3.8.5.1 在线奖励机制（解决按需出块的激励不足问题）
+
+**核心问题**：X Chain 采用按需出块机制，如果网络交易量不足，矿工激励不足，会导致矿工数量自动缩减，形成恶性循环。
+
+```
+问题分析:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  按需出块的激励困境:                                                     │
+│                                                                         │
+│  交易量少 → 出块少 → 矿工收入低 → 矿工退出 → 节点减少                   │
+│       ↑                                                    |            │
+│       +----------------------------------------------------+            │
+│                                                                         │
+│  目标: 即使交易量少，也要维持足够的矿工数量保证网络安全                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**解决方案**：将挖矿定义为"长期稳定在线"，基于在线时间和在线质量定时发放"在线奖励"，但确保交易收益远高于在线奖励。
+
+```go
+// consensus/sgx/online_reward.go
+package sgx
+
+// OnlineRewardConfig 在线奖励配置
+type OnlineRewardConfig struct {
+    // 在线奖励发放间隔（默认 1 小时）
+    RewardInterval      time.Duration
+    
+    // 基础在线奖励（每小时）
+    BaseOnlineReward    *big.Int
+    
+    // 在线质量加成（高质量在线可获得更高奖励）
+    QualityMultiplier   func(uptimeScore uint64) float64
+    
+    // 交易收益保护系数（确保交易收益远高于在线奖励）
+    // 任何交易的收益必须 >= 前 N 个空块最高在线奖励 × 此系数
+    TxRewardProtectionFactor  float64  // 默认 10.0
+    TxRewardProtectionBlocks  int      // 默认 10
+}
+
+// DefaultOnlineRewardConfig 默认配置
+func DefaultOnlineRewardConfig() *OnlineRewardConfig {
+    return &OnlineRewardConfig{
+        RewardInterval:           1 * time.Hour,
+        BaseOnlineReward:         big.NewInt(1e15),  // 0.001 ETH/小时
+        TxRewardProtectionFactor: 10.0,              // 交易收益 >= 10 × 最高在线奖励
+        TxRewardProtectionBlocks: 10,                // 参考前 10 个空块
+        QualityMultiplier: func(uptimeScore uint64) float64 {
+            // 在线质量得分 >= 9500: 1.5x 奖励
+            // 在线质量得分 >= 9000: 1.2x 奖励
+            // 在线质量得分 >= 8000: 1.0x 奖励
+            // 在线质量得分 < 8000: 0.5x 奖励
+            switch {
+            case uptimeScore >= 9500:
+                return 1.5
+            case uptimeScore >= 9000:
+                return 1.2
+            case uptimeScore >= 8000:
+                return 1.0
+            default:
+                return 0.5
+            }
+        },
+    }
+}
+
+// OnlineRewardManager 在线奖励管理器
+type OnlineRewardManager struct {
+    config          *OnlineRewardConfig
+    uptimeCalc      *UptimeCalculator
+    reputationMgr   *ReputationManager
+    
+    // 记录最近的在线奖励（用于交易收益保护计算）
+    recentOnlineRewards []*OnlineRewardRecord
+}
+
+// OnlineRewardRecord 在线奖励记录
+type OnlineRewardRecord struct {
+    NodeID      common.Hash
+    Timestamp   uint64
+    Reward      *big.Int
+    UptimeScore uint64
+}
+
+// CalculateOnlineReward 计算节点的在线奖励
+func (m *OnlineRewardManager) CalculateOnlineReward(nodeID common.Hash) *big.Int {
+    // 1. 获取节点的在线质量得分
+    uptimeScore := m.uptimeCalc.CalculateComprehensiveUptime(nodeID)
+    
+    // 2. 检查是否满足最低在线要求
+    if uptimeScore < 8000 {  // 低于 80% 在线率不发放奖励
+        return big.NewInt(0)
+    }
+    
+    // 3. 计算质量加成
+    multiplier := m.config.QualityMultiplier(uptimeScore)
+    
+    // 4. 计算最终奖励
+    reward := new(big.Int).Set(m.config.BaseOnlineReward)
+    reward.Mul(reward, big.NewInt(int64(multiplier * 100)))
+    reward.Div(reward, big.NewInt(100))
+    
+    return reward
+}
+
+// GetMinTxReward 获取最小交易收益（确保交易收益远高于在线奖励）
+// 核心原则: 一旦有交易，交易获取的收益必须远高于前 N 个空块的最高收益
+func (m *OnlineRewardManager) GetMinTxReward() *big.Int {
+    // 1. 获取最近 N 个在线奖励中的最高值
+    maxOnlineReward := big.NewInt(0)
+    recentCount := min(len(m.recentOnlineRewards), m.config.TxRewardProtectionBlocks)
+    
+    for i := 0; i < recentCount; i++ {
+        record := m.recentOnlineRewards[len(m.recentOnlineRewards)-1-i]
+        if record.Reward.Cmp(maxOnlineReward) > 0 {
+            maxOnlineReward = new(big.Int).Set(record.Reward)
+        }
+    }
+    
+    // 2. 计算最小交易收益 = 最高在线奖励 × 保护系数
+    minTxReward := new(big.Int).Mul(
+        maxOnlineReward,
+        big.NewInt(int64(m.config.TxRewardProtectionFactor)),
+    )
+    
+    return minTxReward
+}
+
+// DistributeOnlineRewards 定时发放在线奖励
+func (m *OnlineRewardManager) DistributeOnlineRewards(activeNodes []common.Hash) map[common.Hash]*big.Int {
+    rewards := make(map[common.Hash]*big.Int)
+    
+    for _, nodeID := range activeNodes {
+        reward := m.CalculateOnlineReward(nodeID)
+        if reward.Sign() > 0 {
+            rewards[nodeID] = reward
+            
+            // 记录奖励（用于交易收益保护计算）
+            m.recentOnlineRewards = append(m.recentOnlineRewards, &OnlineRewardRecord{
+                NodeID:      nodeID,
+                Timestamp:   uint64(time.Now().Unix()),
+                Reward:      reward,
+                UptimeScore: m.uptimeCalc.CalculateComprehensiveUptime(nodeID),
+            })
+        }
+    }
+    
+    // 保留最近的记录
+    if len(m.recentOnlineRewards) > 1000 {
+        m.recentOnlineRewards = m.recentOnlineRewards[len(m.recentOnlineRewards)-1000:]
+    }
+    
+    return rewards
+}
+```
+
+**在线奖励机制的核心原则**：
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  核心原则: 交易最重要                                                    │
+│                                                                         │
+│  1. 在线奖励是"保底收入"                                                │
+│     - 即使没有交易，长期高质量在线的节点也能获得收益                     │
+│     - 防止矿工因收入不稳定而退出                                        │
+│                                                                         │
+│  2. 交易收益必须远高于在线奖励                                          │
+│     - 任何交易的收益 >= 前 10 个空块最高在线奖励 × 10                   │
+│     - 确保矿工有强烈动机处理交易                                        │
+│                                                                         │
+│  3. 在线质量影响奖励                                                    │
+│     - 高质量在线（响应快、稳定）获得更高奖励                            │
+│     - 激励矿工提供优质服务                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+收益对比示例:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  假设: 基础在线奖励 = 0.001 ETH/小时                                    │
+│                                                                         │
+│  高质量在线节点 (95%+ 在线率):                                          │
+│  - 在线奖励: 0.001 × 1.5 = 0.0015 ETH/小时                             │
+│  - 24 小时收入: 0.036 ETH                                               │
+│                                                                         │
+│  一笔交易的最低收益:                                                    │
+│  - 最小交易收益 = 0.0015 × 10 = 0.015 ETH                              │
+│  - 一笔交易 >= 10 小时的在线奖励                                        │
+│                                                                         │
+│  结论: 矿工有强烈动机处理交易，同时在没有交易时也有保底收入              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**激励效果**：
+
+| 场景 | 矿工行为 | 收益来源 |
+|------|----------|----------|
+| 交易量充足 | 积极处理交易 | 主要来自交易费（远高于在线奖励） |
+| 交易量不足 | 保持高质量在线 | 在线奖励（保底收入） |
+| 长期稳定运营 | 持续提供服务 | 在线奖励 + 交易费 + 历史贡献加成 |
 
 ##### 3.3.8.6 节点优先级排序
 
