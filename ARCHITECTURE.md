@@ -4598,6 +4598,473 @@ Day 30+: 完全权限
 2. 社区有 7-30 天时间发现异常并发起否决/回滚
 3. 用户有时间注意到异常并拒绝授权迁移
 
+#### 6.1.0.0.5 验证者质押收益与动态管理机制
+
+社区验证者通过质押代币参与白名单治理，需要有合理的收益激励机制来保证验证者的积极参与，同时需要动态管理机制来剔除不活跃或恶意的验证者。
+
+**收益来源：**
+
+```
+验证者收益池资金来源
+====================
+
+1. 交易手续费分成 (主要来源)
+   └── 每笔交易手续费的 5% 进入验证者收益池
+
+2. 区块奖励分成
+   └── 每个区块奖励的 2% 进入验证者收益池
+
+3. 惩罚金没收
+   └── 被剔除验证者的部分质押金进入收益池
+
+4. 协议储备金
+   └── 初始阶段由协议储备金补贴，确保早期验证者有足够激励
+```
+
+**收益计算模型：**
+
+验证者收益由三个维度动态计算：质押量权重、投票贡献度、质押时长加成。
+
+```go
+// governance/staking_reward.go
+package governance
+
+import (
+    "math/big"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// RewardConfig 收益配置
+type RewardConfig struct {
+    // 各维度权重 (总和为 100)
+    StakeAmountWeight      uint64  // 质押量权重 (默认 40)
+    VotingContributionWeight uint64  // 投票贡献权重 (默认 40)
+    StakeDurationWeight    uint64  // 质押时长权重 (默认 20)
+    
+    // 时长加成配置
+    DurationBonusThresholds []DurationBonus
+    
+    // 收益池分配周期
+    DistributionPeriod time.Duration  // 默认每天分配一次
+}
+
+// DurationBonus 质押时长加成
+type DurationBonus struct {
+    MinDuration time.Duration  // 最小质押时长
+    BonusRate   uint64         // 加成比例 (百分比)
+}
+
+// DefaultRewardConfig 默认收益配置
+func DefaultRewardConfig() *RewardConfig {
+    return &RewardConfig{
+        StakeAmountWeight:        40,
+        VotingContributionWeight: 40,
+        StakeDurationWeight:      20,
+        DurationBonusThresholds: []DurationBonus{
+            {MinDuration: 30 * 24 * time.Hour, BonusRate: 0},    // 30天: 无加成
+            {MinDuration: 90 * 24 * time.Hour, BonusRate: 10},   // 90天: +10%
+            {MinDuration: 180 * 24 * time.Hour, BonusRate: 25},  // 180天: +25%
+            {MinDuration: 365 * 24 * time.Hour, BonusRate: 50},  // 365天: +50%
+        },
+        DistributionPeriod: 24 * time.Hour,
+    }
+}
+
+// ValidatorRewardState 验证者收益状态
+type ValidatorRewardState struct {
+    Address           common.Address
+    StakedAmount      *big.Int      // 质押数量
+    StakeStartTime    time.Time     // 质押开始时间
+    TotalVotes        uint64        // 总投票次数
+    ValidVotes        uint64        // 有效投票次数 (投票结果与最终结果一致)
+    LastVoteTime      time.Time     // 最后投票时间
+    AccumulatedReward *big.Int      // 累计收益
+    ClaimedReward     *big.Int      // 已领取收益
+}
+
+// RewardCalculator 收益计算器
+type RewardCalculator struct {
+    config *RewardConfig
+}
+
+// CalculateRewardShare 计算验证者的收益份额
+func (r *RewardCalculator) CalculateRewardShare(
+    validator *ValidatorRewardState,
+    totalStaked *big.Int,
+    totalValidVotes uint64,
+    rewardPool *big.Int,
+) *big.Int {
+    // 1. 计算质押量得分 (0-100)
+    stakeScore := r.calculateStakeScore(validator.StakedAmount, totalStaked)
+    
+    // 2. 计算投票贡献得分 (0-100)
+    votingScore := r.calculateVotingScore(validator, totalValidVotes)
+    
+    // 3. 计算时长加成
+    durationBonus := r.calculateDurationBonus(validator.StakeStartTime)
+    
+    // 4. 综合得分
+    // 综合得分 = (质押得分 * 质押权重 + 投票得分 * 投票权重) * (1 + 时长加成)
+    weightedScore := new(big.Int)
+    
+    stakeComponent := new(big.Int).Mul(
+        big.NewInt(int64(stakeScore)),
+        big.NewInt(int64(r.config.StakeAmountWeight)),
+    )
+    
+    votingComponent := new(big.Int).Mul(
+        big.NewInt(int64(votingScore)),
+        big.NewInt(int64(r.config.VotingContributionWeight)),
+    )
+    
+    weightedScore.Add(stakeComponent, votingComponent)
+    
+    // 应用时长加成
+    bonusMultiplier := big.NewInt(100 + int64(durationBonus))
+    weightedScore.Mul(weightedScore, bonusMultiplier)
+    weightedScore.Div(weightedScore, big.NewInt(100))
+    
+    // 5. 计算实际收益
+    // 收益 = 收益池 * (验证者得分 / 总得分)
+    // 简化：这里假设已经有总得分，实际实现需要遍历所有验证者
+    reward := new(big.Int).Mul(rewardPool, weightedScore)
+    reward.Div(reward, big.NewInt(10000))  // 归一化
+    
+    return reward
+}
+
+// calculateStakeScore 计算质押量得分
+func (r *RewardCalculator) calculateStakeScore(staked, totalStaked *big.Int) uint64 {
+    if totalStaked.Sign() == 0 {
+        return 0
+    }
+    
+    // 得分 = (个人质押 / 总质押) * 100
+    score := new(big.Int).Mul(staked, big.NewInt(100))
+    score.Div(score, totalStaked)
+    
+    return score.Uint64()
+}
+
+// calculateVotingScore 计算投票贡献得分
+func (r *RewardCalculator) calculateVotingScore(validator *ValidatorRewardState, totalValidVotes uint64) uint64 {
+    if totalValidVotes == 0 {
+        return 0
+    }
+    
+    // 投票参与率
+    participationRate := float64(validator.TotalVotes) / float64(totalValidVotes) * 100
+    
+    // 投票准确率 (投票结果与最终结果一致的比例)
+    accuracyRate := float64(0)
+    if validator.TotalVotes > 0 {
+        accuracyRate = float64(validator.ValidVotes) / float64(validator.TotalVotes) * 100
+    }
+    
+    // 综合得分 = 参与率 * 0.6 + 准确率 * 0.4
+    score := participationRate*0.6 + accuracyRate*0.4
+    
+    if score > 100 {
+        score = 100
+    }
+    
+    return uint64(score)
+}
+
+// calculateDurationBonus 计算质押时长加成
+func (r *RewardCalculator) calculateDurationBonus(stakeStartTime time.Time) uint64 {
+    duration := time.Since(stakeStartTime)
+    
+    var bonus uint64 = 0
+    for _, threshold := range r.config.DurationBonusThresholds {
+        if duration >= threshold.MinDuration {
+            bonus = threshold.BonusRate
+        }
+    }
+    
+    return bonus
+}
+```
+
+**收益分配流程：**
+
+```
+每日收益分配流程
+================
+
+1. 收益池结算 (每天 UTC 00:00)
+   ├── 统计过去 24 小时的交易手续费分成
+   ├── 统计过去 24 小时的区块奖励分成
+   ├── 加入惩罚金没收 (如有)
+   └── 计算总收益池金额
+
+2. 验证者得分计算
+   ├── 遍历所有活跃验证者
+   ├── 计算每个验证者的综合得分
+   │   ├── 质押量得分 (权重 40%)
+   │   ├── 投票贡献得分 (权重 40%)
+   │   └── 时长加成 (权重 20%)
+   └── 汇总总得分
+
+3. 收益分配
+   ├── 按得分比例分配收益池
+   ├── 更新每个验证者的累计收益
+   └── 记录分配日志
+
+4. 收益领取
+   ├── 验证者可随时领取累计收益
+   ├── 领取时扣除已领取金额
+   └── 转账到验证者地址
+```
+
+**动态剔除机制：**
+
+为保证验证者群体的活跃度和可靠性，系统会根据多个维度动态剔除不合格的验证者。
+
+```go
+// governance/validator_removal.go
+package governance
+
+import (
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// RemovalReason 剔除原因
+type RemovalReason uint8
+
+const (
+    RemovalInactive       RemovalReason = 0x01  // 长期不活跃
+    RemovalLowStake       RemovalReason = 0x02  // 质押量不足
+    RemovalMalicious      RemovalReason = 0x03  // 恶意行为
+    RemovalVoluntary      RemovalReason = 0x04  // 主动退出
+    RemovalSGXInvalid     RemovalReason = 0x05  // SGX 验证失效
+)
+
+// RemovalConfig 剔除配置
+type RemovalConfig struct {
+    // 不活跃剔除
+    MaxInactiveDays        int           // 最大不活跃天数 (默认 30 天)
+    MinVotingParticipation float64       // 最低投票参与率 (默认 50%)
+    
+    // 质押量要求
+    MinStakeAmount         *big.Int      // 最低质押量 (默认 10,000 X)
+    StakeGracePeriod       time.Duration // 质押不足宽限期 (默认 7 天)
+    
+    // 恶意行为惩罚
+    MaliciousSlashRate     uint64        // 恶意行为罚没比例 (默认 50%)
+    
+    // SGX 验证
+    SGXRevalidationPeriod  time.Duration // SGX 重新验证周期 (默认 30 天)
+}
+
+// DefaultRemovalConfig 默认剔除配置
+func DefaultRemovalConfig() *RemovalConfig {
+    return &RemovalConfig{
+        MaxInactiveDays:        30,
+        MinVotingParticipation: 0.5,
+        MinStakeAmount:         big.NewInt(10000 * 1e18),  // 10,000 X
+        StakeGracePeriod:       7 * 24 * time.Hour,
+        MaliciousSlashRate:     50,
+        SGXRevalidationPeriod:  30 * 24 * time.Hour,
+    }
+}
+
+// ValidatorHealthCheck 验证者健康检查
+type ValidatorHealthCheck struct {
+    config *RemovalConfig
+}
+
+// CheckResult 检查结果
+type CheckResult struct {
+    ShouldRemove bool
+    Reason       RemovalReason
+    SlashAmount  *big.Int      // 罚没金额 (如有)
+    GracePeriod  time.Duration // 宽限期 (如有)
+    Details      string
+}
+
+// CheckValidator 检查验证者状态
+func (h *ValidatorHealthCheck) CheckValidator(validator *ValidatorRewardState, recentProposals int) *CheckResult {
+    // 1. 检查活跃度
+    if result := h.checkActivity(validator, recentProposals); result.ShouldRemove {
+        return result
+    }
+    
+    // 2. 检查质押量
+    if result := h.checkStakeAmount(validator); result.ShouldRemove {
+        return result
+    }
+    
+    // 3. 检查恶意行为 (由外部报告触发)
+    // 这里只是占位，实际恶意行为检测需要更复杂的逻辑
+    
+    return &CheckResult{ShouldRemove: false}
+}
+
+// checkActivity 检查活跃度
+func (h *ValidatorHealthCheck) checkActivity(validator *ValidatorRewardState, recentProposals int) *CheckResult {
+    // 检查最后投票时间
+    daysSinceLastVote := int(time.Since(validator.LastVoteTime).Hours() / 24)
+    
+    if daysSinceLastVote > h.config.MaxInactiveDays {
+        return &CheckResult{
+            ShouldRemove: true,
+            Reason:       RemovalInactive,
+            SlashAmount:  big.NewInt(0),  // 不活跃不罚没，只剔除
+            Details:      fmt.Sprintf("超过 %d 天未参与投票", daysSinceLastVote),
+        }
+    }
+    
+    // 检查投票参与率
+    if recentProposals > 0 {
+        participationRate := float64(validator.TotalVotes) / float64(recentProposals)
+        if participationRate < h.config.MinVotingParticipation {
+            return &CheckResult{
+                ShouldRemove: true,
+                Reason:       RemovalInactive,
+                SlashAmount:  big.NewInt(0),
+                Details:      fmt.Sprintf("投票参与率 %.1f%% 低于最低要求 %.1f%%", 
+                    participationRate*100, h.config.MinVotingParticipation*100),
+            }
+        }
+    }
+    
+    return &CheckResult{ShouldRemove: false}
+}
+
+// checkStakeAmount 检查质押量
+func (h *ValidatorHealthCheck) checkStakeAmount(validator *ValidatorRewardState) *CheckResult {
+    if validator.StakedAmount.Cmp(h.config.MinStakeAmount) < 0 {
+        return &CheckResult{
+            ShouldRemove: true,
+            Reason:       RemovalLowStake,
+            SlashAmount:  big.NewInt(0),
+            GracePeriod:  h.config.StakeGracePeriod,
+            Details:      fmt.Sprintf("质押量 %s 低于最低要求 %s", 
+                validator.StakedAmount.String(), h.config.MinStakeAmount.String()),
+        }
+    }
+    
+    return &CheckResult{ShouldRemove: false}
+}
+
+// ReportMaliciousBehavior 报告恶意行为
+type MaliciousBehaviorReport struct {
+    Validator   common.Address
+    Reporter    common.Address
+    BehaviorType string
+    Evidence    []byte
+    Timestamp   time.Time
+}
+
+// ProcessMaliciousReport 处理恶意行为报告
+func (h *ValidatorHealthCheck) ProcessMaliciousReport(
+    report *MaliciousBehaviorReport,
+    validator *ValidatorRewardState,
+) *CheckResult {
+    // 恶意行为类型及对应惩罚
+    // - 双重投票: 罚没 50% 质押
+    // - 投票贿赂: 罚没 100% 质押
+    // - 虚假报告: 罚没 30% 质押
+    
+    slashRate := h.config.MaliciousSlashRate
+    slashAmount := new(big.Int).Mul(validator.StakedAmount, big.NewInt(int64(slashRate)))
+    slashAmount.Div(slashAmount, big.NewInt(100))
+    
+    return &CheckResult{
+        ShouldRemove: true,
+        Reason:       RemovalMalicious,
+        SlashAmount:  slashAmount,
+        Details:      fmt.Sprintf("恶意行为: %s, 罚没 %d%% 质押", report.BehaviorType, slashRate),
+    }
+}
+```
+
+**动态剔除流程：**
+
+```
+验证者动态剔除流程
+==================
+
+定期检查 (每天执行)
+├── 遍历所有社区验证者
+├── 执行健康检查
+│   ├── 活跃度检查
+│   │   ├── 最后投票时间 > 30 天 → 标记为待剔除
+│   │   └── 投票参与率 < 50% → 标记为待剔除
+│   ├── 质押量检查
+│   │   └── 质押量 < 10,000 X → 给予 7 天宽限期
+│   └── SGX 验证检查
+│       └── SGX 证明过期 → 要求重新验证
+└── 执行剔除/警告
+
+恶意行为处理 (事件触发)
+├── 接收恶意行为报告
+├── 核心验证者审核
+│   ├── 2/3 核心验证者确认 → 执行惩罚
+│   └── 未达到 2/3 → 驳回报告
+└── 执行惩罚
+    ├── 罚没部分/全部质押
+    ├── 从验证者列表剔除
+    └── 记录恶意行为历史
+
+主动退出
+├── 验证者提交退出申请
+├── 进入 14 天冷却期
+│   ├── 冷却期内仍需参与投票
+│   └── 冷却期内可取消退出
+└── 冷却期结束
+    ├── 返还全部质押
+    └── 从验证者列表移除
+```
+
+**收益与惩罚汇总表：**
+
+| 行为 | 收益/惩罚 | 说明 |
+|------|-----------|------|
+| 正常质押 | 基础收益 | 按质押量比例分配 |
+| 积极投票 | +40% 权重 | 投票参与率和准确率越高收益越高 |
+| 长期质押 (90天+) | +10% 加成 | 鼓励长期参与 |
+| 长期质押 (180天+) | +25% 加成 | 鼓励长期参与 |
+| 长期质押 (365天+) | +50% 加成 | 鼓励长期参与 |
+| 不活跃 (30天+) | 剔除 | 不罚没，返还质押 |
+| 质押不足 | 7天宽限后剔除 | 不罚没，返还质押 |
+| 恶意行为 | 罚没 50-100% | 根据严重程度 |
+
+**激励机制设计原则：**
+
+```
++------------------------------------------------------------------+
+|                     验证者激励机制设计原则                         |
++------------------------------------------------------------------+
+|                                                                  |
+|  1. 正向激励为主                                                  |
+|     ├── 收益与贡献正相关                                          |
+|     ├── 长期参与有额外奖励                                        |
+|     └── 避免过度惩罚导致参与意愿下降                              |
+|                                                                  |
+|  2. 惩罚适度                                                      |
+|     ├── 不活跃只剔除不罚没 (可能是技术原因)                       |
+|     ├── 质押不足给予宽限期 (可能是市场波动)                       |
+|     └── 只有恶意行为才罚没 (需要充分证据)                         |
+|                                                                  |
+|  3. 透明可预期                                                    |
+|     ├── 所有规则链上公开                                          |
+|     ├── 收益计算可验证                                            |
+|     └── 剔除前有警告和宽限期                                      |
+|                                                                  |
+|  4. 防止垄断                                                      |
+|     ├── 单个验证者质押上限 (如总质押的 10%)                       |
+|     ├── 投票贡献权重与质押量权重平衡                              |
+|     └── 鼓励更多小额质押者参与                                    |
+|                                                                  |
++------------------------------------------------------------------+
+```
+
 #### 6.1.0.1 硬分叉数据迁移与保留
 
 硬分叉时必须保留分叉前的所有数据，包括区块链状态、账户余额、合约存储、以及加密分区中的私钥数据。
