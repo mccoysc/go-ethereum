@@ -179,6 +179,61 @@ X Chain PoA-SGX:
       无交易时不出块，节省存储
 ```
 
+#### 3.3.2.1 与以太坊原有共识机制的关系
+
+X Chain 使用自定义的 PoA-SGX 共识引擎，**完全替换**（而非删除）以太坊原有的共识机制。
+
+**设计决策**：
+
+| 方面 | 以太坊原有机制 | X Chain PoA-SGX |
+|------|----------------|-----------------|
+| 出块方式 | 定时出块（PoS ~12秒/块） | 按需出块（有交易才出块） |
+| 共识算法 | Casper FFG + LMD GHOST | SGX 远程证明 + 确定性执行 |
+| 代码位置 | `consensus/beacon/` | `consensus/sgx/` |
+| 启用方式 | 默认启用 | 通过配置指定 |
+
+**代码保留策略**：
+
+```
+go-ethereum/consensus/
+├── beacon/          # 以太坊 PoS 共识（保留，不启用）
+├── clique/          # 以太坊 PoA 共识（保留，不启用）
+├── ethash/          # 以太坊 PoW 共识（保留，不启用）
+└── sgx/             # X Chain PoA-SGX 共识（新增，启用）
+    ├── consensus.go # 实现 consensus.Engine 接口
+    ├── attestor.go  # SGX 远程证明
+    └── verifier.go  # Quote 验证
+```
+
+**为什么保留原有代码**：
+
+1. **参考实现**：原有共识代码是成熟的参考实现，有助于理解 go-ethereum 的共识接口设计
+2. **测试兼容性**：部分测试用例可能依赖原有共识逻辑
+3. **降低维护成本**：删除代码可能导致大量依赖关系需要修改
+4. **未来扩展**：如果需要支持多种共识模式，保留代码更灵活
+
+**启动配置**：
+
+```go
+// cmd/geth/config.go
+type ConsensusConfig struct {
+    Engine string // "sgx" | "clique" | "beacon" (默认 "sgx")
+}
+
+// X Chain 启动时强制使用 SGX 共识引擎
+func NewConsensusEngine(config *ConsensusConfig) consensus.Engine {
+    switch config.Engine {
+    case "sgx":
+        return sgx.New(config.SGX)
+    default:
+        // X Chain 不支持其他共识引擎
+        panic("X Chain only supports SGX consensus engine")
+    }
+}
+```
+
+**重要说明**：X Chain 节点启动时会强制使用 PoA-SGX 共识引擎。即使配置文件中指定了其他共识引擎，也会被忽略或报错。这确保了网络中所有节点使用相同的共识机制。
+
 #### 3.3.3 出块触发条件
 
 ```go
