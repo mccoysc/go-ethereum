@@ -1263,98 +1263,96 @@ func (c *UptimeConsensus) RecordObservation(obs *UptimeObservation) error {
 节点 D ─┘
 
 防串谋机制:
-- 观测者必须是活跃节点（有出块记录）
+- 观测者必须是活跃节点（有交易处理记录）
 - 观测结果需要签名（可追溯责任）
 - 异常观测模式会被检测（如某节点总是报告他人离线）
 ```
 
-###### 3.3.8.3.3 区块生产追踪
+###### 3.3.8.3.3 交易参与追踪
 
-对于参与出块的节点，区块生产记录是最直接的在线证明：
+**重要说明**：X Chain 采用按需出块机制（有交易才出块），因此不能使用"出块频率"或"出块数量"作为节点贡献的衡量标准。正确的衡量方式是**交易参与比例**，即节点处理的交易数量占网络总交易数量的比例。
 
 ```go
-// consensus/sgx/block_tracker.go
+// consensus/sgx/tx_participation_tracker.go
 package sgx
 
-// BlockProductionTracker 区块生产追踪器
-type BlockProductionTracker struct {
-    productionLog map[common.Hash][]BlockProductionRecord
-    config        *TrackerConfig
+// TxParticipationTracker 交易参与追踪器
+type TxParticipationTracker struct {
+    participationLog map[common.Hash][]TxParticipationRecord
+    networkStats     *NetworkTxStats
+    config           *ParticipationConfig
 }
 
-// BlockProductionRecord 区块生产记录
-type BlockProductionRecord struct {
+// TxParticipationRecord 交易参与记录
+type TxParticipationRecord struct {
     NodeID      common.Hash
+    TxHash      common.Hash
     BlockNumber uint64
-    BlockHash   common.Hash
     Timestamp   uint64
-    TxCount     int
+    GasUsed     uint64
 }
 
-// TrackerConfig 追踪器配置
-type TrackerConfig struct {
-    WindowBlocks    uint64  // 统计窗口（区块数），默认 1000
-    MinBlocksForScore uint64 // 计算得分的最小区块数，默认 10
+// NetworkTxStats 网络交易统计
+type NetworkTxStats struct {
+    TotalTxCount    uint64    // 统计窗口内的总交易数
+    TotalGasUsed    uint64    // 统计窗口内的总 Gas 消耗
+    WindowStart     uint64    // 统计窗口开始时间
+    WindowEnd       uint64    // 统计窗口结束时间
 }
 
-// CalculateProductionScore 计算区块生产得分
-func (t *BlockProductionTracker) CalculateProductionScore(nodeID common.Hash) uint64 {
+// ParticipationConfig 参与追踪配置
+type ParticipationConfig struct {
+    WindowDuration    time.Duration // 统计窗口时长，默认 7 天
+    MinTxForScore     uint64        // 计算得分的最小交易数，默认 10
+}
+
+// CalculateParticipationScore 计算交易参与得分
+func (t *TxParticipationTracker) CalculateParticipationScore(nodeID common.Hash) uint64 {
     records := t.getRecentRecords(nodeID)
     
-    if len(records) < int(t.config.MinBlocksForScore) {
-        return 0 // 出块太少，无法评估
+    if len(records) < int(t.config.MinTxForScore) {
+        return 0 // 参与交易太少，无法评估
     }
     
-    // 计算出块频率和质量
     var totalScore uint64
     
-    // 1. 出块数量得分（占 50%）
-    blockCount := uint64(len(records))
-    expectedBlocks := t.getExpectedBlocks(nodeID) // 基于节点活跃时长
-    if expectedBlocks > 0 {
-        blockScore := min(blockCount*10000/expectedBlocks, 10000)
-        totalScore += blockScore * 50 / 100
+    // 1. 交易数量参与比例得分（占 60%）
+    nodeTxCount := uint64(len(records))
+    networkTxCount := t.networkStats.TotalTxCount
+    if networkTxCount > 0 {
+        // 计算节点处理的交易占网络总交易的比例
+        // 乘以节点数量进行归一化（假设理想情况下每个节点处理相等比例的交易）
+        activeNodes := t.getActiveNodeCount()
+        expectedShare := networkTxCount / activeNodes
+        if expectedShare > 0 {
+            participationScore := min(nodeTxCount*10000/expectedShare, 10000)
+            totalScore += participationScore * 60 / 100
+        }
     }
     
-    // 2. 出块间隔稳定性得分（占 30%）
-    intervalScore := t.calculateIntervalStability(records)
-    totalScore += intervalScore * 30 / 100
-    
-    // 3. 区块质量得分（交易数量）（占 20%）
-    qualityScore := t.calculateBlockQuality(records)
-    totalScore += qualityScore * 20 / 100
+    // 2. Gas 贡献比例得分（占 40%）
+    // 处理高 Gas 交易说明节点承担了更多计算负载
+    nodeGasUsed := t.calculateNodeGasUsed(records)
+    networkGasUsed := t.networkStats.TotalGasUsed
+    if networkGasUsed > 0 {
+        activeNodes := t.getActiveNodeCount()
+        expectedGasShare := networkGasUsed / activeNodes
+        if expectedGasShare > 0 {
+            gasScore := min(nodeGasUsed*10000/expectedGasShare, 10000)
+            totalScore += gasScore * 40 / 100
+        }
+    }
     
     return totalScore
 }
 
-// calculateIntervalStability 计算出块间隔稳定性
-func (t *BlockProductionTracker) calculateIntervalStability(records []BlockProductionRecord) uint64 {
-    if len(records) < 2 {
-        return 0
+// calculateNodeGasUsed 计算节点处理的总 Gas
+func (t *TxParticipationTracker) calculateNodeGasUsed(records []TxParticipationRecord) uint64 {
+    var totalGas uint64
+    for _, record := range records {
+        totalGas += record.GasUsed
     }
-    
-    // 计算间隔的标准差
-    var intervals []uint64
-    for i := 1; i < len(records); i++ {
-        interval := records[i].Timestamp - records[i-1].Timestamp
-        intervals = append(intervals, interval)
-    }
-    
-    // 标准差越小，得分越高
-    stdDev := t.calculateStdDev(intervals)
-    avgInterval := t.calculateAvg(intervals)
-    
-    if avgInterval == 0 {
-        return 0
-    }
-    
-    // 变异系数 (CV) = stdDev / avg
-    // CV 越小越稳定，得分越高
-    cv := float64(stdDev) / float64(avgInterval)
-    if cv > 1.0 {
-        return 0
-    }
-    return uint64((1.0 - cv) * 10000)
+    return totalGas
 }
 ```
 
@@ -1442,20 +1440,20 @@ package sgx
 
 // UptimeCalculator 综合在线率计算器
 type UptimeCalculator struct {
-    heartbeatMgr    *HeartbeatManager
-    consensusMgr    *UptimeConsensus
-    blockTracker    *BlockProductionTracker
-    responseTracker *ResponseTimeTracker
-    config          *UptimeConfig
+    heartbeatMgr        *HeartbeatManager
+    consensusMgr        *UptimeConsensus
+    txParticipation     *TxParticipationTracker
+    responseTracker     *ResponseTimeTracker
+    config              *UptimeConfig
 }
 
 // UptimeConfig 在线率计算配置
 type UptimeConfig struct {
     // 权重配置（总和 = 100）
-    HeartbeatWeight   uint8 // SGX 心跳权重，默认 40
-    ConsensusWeight   uint8 // 多节点共识权重，默认 30
-    BlockWeight       uint8 // 区块生产权重，默认 20
-    ResponseWeight    uint8 // 响应时间权重，默认 10
+    HeartbeatWeight       uint8 // SGX 心跳权重，默认 40
+    ConsensusWeight       uint8 // 多节点共识权重，默认 30
+    TxParticipationWeight uint8 // 交易参与权重，默认 20
+    ResponseWeight        uint8 // 响应时间权重，默认 10
 }
 
 // CalculateComprehensiveUptime 计算综合在线率
@@ -1468,8 +1466,8 @@ func (c *UptimeCalculator) CalculateComprehensiveUptime(nodeID common.Hash) uint
     // 2. 多节点共识得分
     consensusScore, _ := c.consensusMgr.CalculateUptimeScore(nodeID)
     
-    // 3. 区块生产得分
-    blockScore := c.blockTracker.CalculateProductionScore(nodeID)
+    // 3. 交易参与得分
+    txParticipationScore := c.txParticipation.CalculateParticipationScore(nodeID)
     
     // 4. 响应时间得分
     responseScore := c.responseTracker.CalculateResponseScore(nodeID)
@@ -1477,7 +1475,7 @@ func (c *UptimeCalculator) CalculateComprehensiveUptime(nodeID common.Hash) uint
     // 5. 加权计算
     totalScore := (heartbeatScore * uint64(cfg.HeartbeatWeight) +
                    consensusScore * uint64(cfg.ConsensusWeight) +
-                   blockScore * uint64(cfg.BlockWeight) +
+                   txParticipationScore * uint64(cfg.TxParticipationWeight) +
                    responseScore * uint64(cfg.ResponseWeight)) / 100
     
     return totalScore
@@ -1490,8 +1488,12 @@ func (c *UptimeCalculator) CalculateComprehensiveUptime(nodeID common.Hash) uint
 |------|------|----------|------------|
 | SGX 签名心跳 | 40% | 节点是否定期发送心跳 | SGX enclave 签名 + Quote |
 | 多节点共识 | 30% | 多个节点观测的共识结果 | 2/3 共识 + 签名追溯 |
-| 区块生产 | 20% | 实际出块数量和质量 | 区块链不可篡改记录 |
+| 交易参与 | 20% | 处理的交易数量和 Gas 贡献比例 | 区块链不可篡改记录 |
 | 响应时间 | 10% | 交易处理响应速度 | 交易哈希 + 时间戳 |
+
+**为什么不使用"出块数量"作为衡量标准**：
+
+X Chain 采用按需出块机制，只有在有用户交易时才会出块。这意味着出块频率完全取决于网络交易量，而不是节点的在线状态或贡献度。因此，使用"交易参与比例"（节点处理的交易数量占网络总交易数量的比例）更能准确反映节点的实际贡献。
 
 ##### 3.3.8.4 信誉系统设计
 
@@ -1505,7 +1507,7 @@ type NodeReputation struct {
     UptimeScore     uint64        // 在线时长得分 (0-10000, 代表 0%-100%)
     ResponseScore   uint64        // 响应速度得分
     SuccessRate     uint64        // 交易处理成功率
-    TotalBlocks     uint64        // 累计出块数
+    TotalTxProcessed uint64       // 累计处理的交易数
     LastActiveTime  uint64        // 最后活跃时间戳
     PenaltyCount    uint64        // 惩罚次数
     ReputationScore uint64        // 综合信誉分 (0-10000)
@@ -1774,7 +1776,7 @@ func (s *NodeSelector) GetNodePriority(nodeID common.Hash) int {
 │  ├─ 增值服务维度 ─────────────────────────────────────────────────┤ │
 │  │  API 服务、数据索引、优先处理等                                 │ │
 │  └─ 历史贡献维度 ─────────────────────────────────────────────────┘ │
-│     运营时长、累计出块数、网络贡献                                   │
+│     运营时长、累计处理交易数、网络贡献                               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -2034,8 +2036,8 @@ package sgx
 type HistoricalContribution struct {
     NodeID              common.Hash
     FirstActiveBlock    uint64        // 首次活跃区块
-    TotalBlocksProduced uint64        // 累计出块数
     TotalTxProcessed    uint64        // 累计处理交易数
+    TotalGasProcessed   uint64        // 累计处理的 Gas
     TotalUptime         time.Duration // 累计在线时长
     ConsecutiveDays     uint64        // 连续在线天数
     NetworkContribution uint64        // 网络贡献分（引入新用户等）
