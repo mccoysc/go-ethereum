@@ -85,19 +85,19 @@ func (s *SGXConsensus) Finalize(chain ChainHeaderReader, header *types.Header, s
 
 #### 2.2.2 预编译合约系统
 
-新增预编译合约地址范围：`0x0200` - `0x02FF`
+新增预编译合约地址范围：`0x8000` - `0x80FF`（从 32768 开始，避免与以太坊未来预编译地址冲突）
 
 | 地址 | 功能 | 描述 |
 |------|------|------|
-| 0x0200 | SGX_KEY_CREATE | 创建密钥对 |
-| 0x0201 | SGX_KEY_GET_PUBLIC | 获取公钥 |
-| 0x0202 | SGX_SIGN | 签名 |
-| 0x0203 | SGX_VERIFY | 验签 |
-| 0x0204 | SGX_ECDH | ECDH 密钥交换 |
-| 0x0205 | SGX_RANDOM | 硬件真随机数 |
-| 0x0206 | SGX_ENCRYPT | 对称加密 |
-| 0x0207 | SGX_DECRYPT | 对称解密 |
-| 0x0208 | SGX_KEY_DERIVE | 密钥派生 |
+| 0x8000 | SGX_KEY_CREATE | 创建密钥对 |
+| 0x8001 | SGX_KEY_GET_PUBLIC | 获取公钥 |
+| 0x8002 | SGX_SIGN | 签名 |
+| 0x8003 | SGX_VERIFY | 验签 |
+| 0x8004 | SGX_ECDH | ECDH 密钥交换 |
+| 0x8005 | SGX_RANDOM | 硬件真随机数 |
+| 0x8006 | SGX_ENCRYPT | 对称加密 |
+| 0x8007 | SGX_DECRYPT | 对称解密 |
+| 0x8008 | SGX_KEY_DERIVE | 密钥派生 |
 
 #### 2.2.3 Gramine 运行时集成
 
@@ -1156,7 +1156,485 @@ func (s *NodeSelector) GetNodePriority(nodeID common.Hash) int {
 }
 ```
 
-##### 3.3.8.7 激励机制总结
+##### 3.3.8.7 多维度差异化竞争机制
+
+**核心问题**：如果所有节点都稳定在线，仅靠在线率无法产生差异化竞争，激励机制会触及天花板。
+
+**解决方案**：稳定在线是"入场券"，不是"天花板"。节点必须在多个维度竞争才能获得更高收益。
+
+```
+激励模型架构:
+┌─────────────────────────────────────────────────────────────────────┐
+│                        收益 = 基础收益 + 竞争收益                    │
+├─────────────────────────────────────────────────────────────────────┤
+│  基础层（入场券）                                                    │
+│  ├─ 稳定在线率 >= 95%  ───────────────────────────────────────────┐ │
+│  │  满足条件才能参与出块和获得收益                                 │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────┤
+│  竞争层（无上限）                                                    │
+│  ├─ 服务质量维度 ─────────────────────────────────────────────────┐ │
+│  │  响应速度、吞吐量、成功率                                       │ │
+│  ├─ 交易量维度 ───────────────────────────────────────────────────┤ │
+│  │  处理更多交易 = 更多收入（直接激励）                            │ │
+│  ├─ 增值服务维度 ─────────────────────────────────────────────────┤ │
+│  │  API 服务、数据索引、优先处理等                                 │ │
+│  └─ 历史贡献维度 ─────────────────────────────────────────────────┘ │
+│     运营时长、累计出块数、网络贡献                                   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+###### 3.3.8.7.1 服务质量竞争
+
+即使所有节点都稳定在线，服务质量仍可产生差异：
+
+```go
+// consensus/sgx/service_quality.go
+package sgx
+
+// ServiceQualityMetrics 服务质量指标
+type ServiceQualityMetrics struct {
+    NodeID              common.Hash
+    
+    // 响应速度指标
+    AvgResponseTimeMs   uint32    // 平均响应时间（毫秒）
+    P95ResponseTimeMs   uint32    // P95 响应时间
+    P99ResponseTimeMs   uint32    // P99 响应时间
+    
+    // 吞吐量指标
+    TxPerSecond         float64   // 每秒处理交易数
+    PeakTxPerSecond     float64   // 峰值吞吐量
+    
+    // 成功率指标
+    SuccessRate         float64   // 交易处理成功率 (0-1)
+    ErrorRate           float64   // 错误率
+    
+    // 可用性指标
+    AvailabilityRate    float64   // 可用性 (0-1)
+}
+
+// ServiceQualityScorer 服务质量评分器
+type ServiceQualityScorer struct {
+    config *QualityConfig
+}
+
+// QualityConfig 质量评分配置
+type QualityConfig struct {
+    // 响应时间阈值（毫秒）
+    ExcellentResponseMs  uint32  // 优秀: < 50ms
+    GoodResponseMs       uint32  // 良好: < 200ms
+    AcceptableResponseMs uint32  // 可接受: < 1000ms
+    
+    // 吞吐量阈值
+    HighThroughput       float64 // 高吞吐: > 100 tx/s
+    MediumThroughput     float64 // 中吞吐: > 50 tx/s
+    
+    // 权重配置
+    ResponseWeight       uint8   // 响应时间权重，默认 40
+    ThroughputWeight     uint8   // 吞吐量权重，默认 30
+    SuccessRateWeight    uint8   // 成功率权重，默认 30
+}
+
+// CalculateQualityScore 计算服务质量得分 (0-10000)
+func (s *ServiceQualityScorer) CalculateQualityScore(m *ServiceQualityMetrics) uint64 {
+    cfg := s.config
+    
+    // 1. 响应时间得分
+    var responseScore uint64
+    switch {
+    case m.AvgResponseTimeMs <= cfg.ExcellentResponseMs:
+        responseScore = 10000
+    case m.AvgResponseTimeMs <= cfg.GoodResponseMs:
+        responseScore = 8000
+    case m.AvgResponseTimeMs <= cfg.AcceptableResponseMs:
+        responseScore = 6000
+    default:
+        responseScore = 3000
+    }
+    
+    // 2. 吞吐量得分
+    var throughputScore uint64
+    switch {
+    case m.TxPerSecond >= cfg.HighThroughput:
+        throughputScore = 10000
+    case m.TxPerSecond >= cfg.MediumThroughput:
+        throughputScore = 7000
+    default:
+        throughputScore = 4000
+    }
+    
+    // 3. 成功率得分
+    successScore := uint64(m.SuccessRate * 10000)
+    
+    // 4. 加权计算
+    totalScore := (responseScore * uint64(cfg.ResponseWeight) +
+                   throughputScore * uint64(cfg.ThroughputWeight) +
+                   successScore * uint64(cfg.SuccessRateWeight)) / 100
+    
+    return totalScore
+}
+```
+
+###### 3.3.8.7.2 交易量竞争
+
+处理更多交易直接带来更多收入，这是最直接的激励：
+
+```go
+// consensus/sgx/transaction_volume.go
+package sgx
+
+// TransactionVolumeTracker 交易量追踪器
+type TransactionVolumeTracker struct {
+    volumeLog map[common.Hash][]VolumeRecord
+    config    *VolumeConfig
+}
+
+// VolumeRecord 交易量记录
+type VolumeRecord struct {
+    NodeID      common.Hash
+    Period      uint64    // 统计周期（区块高度）
+    TxCount     uint64    // 交易数量
+    TotalGas    uint64    // 总 Gas 消耗
+    TotalFees   *big.Int  // 总交易费
+}
+
+// VolumeConfig 交易量配置
+type VolumeConfig struct {
+    WindowBlocks    uint64  // 统计窗口（区块数），默认 1000
+    BonusThreshold  uint64  // 奖励阈值（交易数），默认 10000
+    BonusMultiplier float64 // 奖励倍数，默认 1.5
+}
+
+// CalculateVolumeBonus 计算交易量奖励
+func (t *TransactionVolumeTracker) CalculateVolumeBonus(nodeID common.Hash) *big.Int {
+    records := t.getRecentRecords(nodeID)
+    
+    var totalTxCount uint64
+    totalFees := big.NewInt(0)
+    
+    for _, record := range records {
+        totalTxCount += record.TxCount
+        totalFees.Add(totalFees, record.TotalFees)
+    }
+    
+    // 基础收益 = 总交易费
+    bonus := new(big.Int).Set(totalFees)
+    
+    // 如果超过阈值，获得额外奖励
+    if totalTxCount >= t.config.BonusThreshold {
+        // 额外奖励 = 基础收益 * (倍数 - 1)
+        extraBonus := new(big.Int).Mul(bonus, big.NewInt(int64((t.config.BonusMultiplier-1)*100)))
+        extraBonus.Div(extraBonus, big.NewInt(100))
+        bonus.Add(bonus, extraBonus)
+    }
+    
+    return bonus
+}
+
+// GetMarketShare 获取节点市场份额
+func (t *TransactionVolumeTracker) GetMarketShare(nodeID common.Hash) float64 {
+    nodeVolume := t.getTotalVolume(nodeID)
+    networkVolume := t.getNetworkTotalVolume()
+    
+    if networkVolume == 0 {
+        return 0
+    }
+    
+    return float64(nodeVolume) / float64(networkVolume)
+}
+```
+
+**交易量激励的优势**：
+- 无上限：处理越多交易，收入越高
+- 直接激励：节点有动力吸引用户、提供更好服务
+- 市场驱动：用户自然选择服务更好的节点
+
+###### 3.3.8.7.3 增值服务竞争
+
+节点可以提供额外服务获得收入：
+
+```go
+// consensus/sgx/value_added_services.go
+package sgx
+
+// ValueAddedService 增值服务定义
+type ValueAddedService struct {
+    ServiceID   string    // 服务标识
+    Name        string    // 服务名称
+    Description string    // 服务描述
+    PricePerUse *big.Int  // 每次使用价格
+    IsEnabled   bool      // 是否启用
+}
+
+// 预定义增值服务
+var PredefinedServices = []ValueAddedService{
+    {
+        ServiceID:   "priority_tx",
+        Name:        "优先交易处理",
+        Description: "交易优先进入下一个区块",
+        PricePerUse: big.NewInt(1000000000), // 1 Gwei
+    },
+    {
+        ServiceID:   "fast_confirm",
+        Name:        "快速确认",
+        Description: "交易确认后立即通知",
+        PricePerUse: big.NewInt(500000000), // 0.5 Gwei
+    },
+    {
+        ServiceID:   "tx_history_api",
+        Name:        "交易历史 API",
+        Description: "查询历史交易记录",
+        PricePerUse: big.NewInt(100000000), // 0.1 Gwei
+    },
+    {
+        ServiceID:   "event_subscription",
+        Name:        "事件订阅",
+        Description: "订阅合约事件通知",
+        PricePerUse: big.NewInt(200000000), // 0.2 Gwei
+    },
+    {
+        ServiceID:   "data_indexing",
+        Name:        "数据索引服务",
+        Description: "提供高效的数据查询索引",
+        PricePerUse: big.NewInt(300000000), // 0.3 Gwei
+    },
+}
+
+// ValueAddedServiceManager 增值服务管理器
+type ValueAddedServiceManager struct {
+    services    map[string]*ValueAddedService
+    usageLog    map[common.Hash][]ServiceUsageRecord
+}
+
+// ServiceUsageRecord 服务使用记录
+type ServiceUsageRecord struct {
+    NodeID      common.Hash
+    ServiceID   string
+    UserAddress common.Address
+    Timestamp   uint64
+    Fee         *big.Int
+}
+
+// CalculateServiceRevenue 计算增值服务收入
+func (m *ValueAddedServiceManager) CalculateServiceRevenue(nodeID common.Hash, period time.Duration) *big.Int {
+    records := m.getRecentUsage(nodeID, period)
+    
+    totalRevenue := big.NewInt(0)
+    for _, record := range records {
+        totalRevenue.Add(totalRevenue, record.Fee)
+    }
+    
+    return totalRevenue
+}
+```
+
+###### 3.3.8.7.4 历史贡献竞争
+
+长期稳定运营的节点获得额外奖励：
+
+```go
+// consensus/sgx/historical_contribution.go
+package sgx
+
+// HistoricalContribution 历史贡献记录
+type HistoricalContribution struct {
+    NodeID              common.Hash
+    FirstActiveBlock    uint64        // 首次活跃区块
+    TotalBlocksProduced uint64        // 累计出块数
+    TotalTxProcessed    uint64        // 累计处理交易数
+    TotalUptime         time.Duration // 累计在线时长
+    ConsecutiveDays     uint64        // 连续在线天数
+    NetworkContribution uint64        // 网络贡献分（引入新用户等）
+}
+
+// HistoricalContributionScorer 历史贡献评分器
+type HistoricalContributionScorer struct {
+    config *ContributionConfig
+}
+
+// ContributionConfig 贡献评分配置
+type ContributionConfig struct {
+    // 运营时长奖励
+    DaysForBronze   uint64  // 铜牌: 30 天
+    DaysForSilver   uint64  // 银牌: 90 天
+    DaysForGold     uint64  // 金牌: 365 天
+    DaysForDiamond  uint64  // 钻石: 1000 天
+    
+    // 奖励倍数
+    BronzeMultiplier   float64 // 1.1x
+    SilverMultiplier   float64 // 1.2x
+    GoldMultiplier     float64 // 1.5x
+    DiamondMultiplier  float64 // 2.0x
+}
+
+// CalculateContributionMultiplier 计算历史贡献倍数
+func (s *HistoricalContributionScorer) CalculateContributionMultiplier(c *HistoricalContribution) float64 {
+    cfg := s.config
+    
+    // 根据连续在线天数确定等级
+    switch {
+    case c.ConsecutiveDays >= cfg.DaysForDiamond:
+        return cfg.DiamondMultiplier // 2.0x
+    case c.ConsecutiveDays >= cfg.DaysForGold:
+        return cfg.GoldMultiplier // 1.5x
+    case c.ConsecutiveDays >= cfg.DaysForSilver:
+        return cfg.SilverMultiplier // 1.2x
+    case c.ConsecutiveDays >= cfg.DaysForBronze:
+        return cfg.BronzeMultiplier // 1.1x
+    default:
+        return 1.0 // 无奖励
+    }
+}
+
+// GetContributionTier 获取贡献等级
+func (s *HistoricalContributionScorer) GetContributionTier(c *HistoricalContribution) string {
+    cfg := s.config
+    
+    switch {
+    case c.ConsecutiveDays >= cfg.DaysForDiamond:
+        return "Diamond"
+    case c.ConsecutiveDays >= cfg.DaysForGold:
+        return "Gold"
+    case c.ConsecutiveDays >= cfg.DaysForSilver:
+        return "Silver"
+    case c.ConsecutiveDays >= cfg.DaysForBronze:
+        return "Bronze"
+    default:
+        return "None"
+    }
+}
+```
+
+###### 3.3.8.7.5 综合收益计算
+
+```go
+// consensus/sgx/comprehensive_reward.go
+package sgx
+
+// ComprehensiveRewardCalculator 综合收益计算器
+type ComprehensiveRewardCalculator struct {
+    uptimeCalc       *UptimeCalculator
+    qualityScorer    *ServiceQualityScorer
+    volumeTracker    *TransactionVolumeTracker
+    serviceManager   *ValueAddedServiceManager
+    contributionScorer *HistoricalContributionScorer
+    config           *RewardConfig
+}
+
+// RewardConfig 收益配置
+type RewardConfig struct {
+    MinUptimeForReward float64 // 最低在线率要求，默认 0.95 (95%)
+}
+
+// CalculateTotalReward 计算节点总收益
+func (c *ComprehensiveRewardCalculator) CalculateTotalReward(
+    nodeID common.Hash,
+    period time.Duration,
+) (*TotalReward, error) {
+    
+    // 1. 检查是否满足基础条件（入场券）
+    uptimeScore := c.uptimeCalc.CalculateComprehensiveUptime(nodeID)
+    if float64(uptimeScore)/10000 < c.config.MinUptimeForReward {
+        return &TotalReward{
+            NodeID:     nodeID,
+            IsEligible: false,
+            Reason:     "在线率不足 95%，不满足参与条件",
+        }, nil
+    }
+    
+    // 2. 计算交易费收入（基础收益）
+    txFeeRevenue := c.volumeTracker.CalculateVolumeBonus(nodeID)
+    
+    // 3. 计算增值服务收入
+    serviceRevenue := c.serviceManager.CalculateServiceRevenue(nodeID, period)
+    
+    // 4. 计算服务质量奖励
+    qualityMetrics := c.getQualityMetrics(nodeID)
+    qualityScore := c.qualityScorer.CalculateQualityScore(qualityMetrics)
+    qualityBonus := c.calculateQualityBonus(txFeeRevenue, qualityScore)
+    
+    // 5. 计算历史贡献倍数
+    contribution := c.getHistoricalContribution(nodeID)
+    contributionMultiplier := c.contributionScorer.CalculateContributionMultiplier(contribution)
+    
+    // 6. 计算总收益
+    // 总收益 = (交易费 + 增值服务 + 质量奖励) * 历史贡献倍数
+    baseReward := new(big.Int).Add(txFeeRevenue, serviceRevenue)
+    baseReward.Add(baseReward, qualityBonus)
+    
+    totalReward := new(big.Int).Mul(baseReward, big.NewInt(int64(contributionMultiplier*100)))
+    totalReward.Div(totalReward, big.NewInt(100))
+    
+    return &TotalReward{
+        NodeID:                 nodeID,
+        IsEligible:             true,
+        UptimeScore:            uptimeScore,
+        TxFeeRevenue:           txFeeRevenue,
+        ServiceRevenue:         serviceRevenue,
+        QualityBonus:           qualityBonus,
+        ContributionMultiplier: contributionMultiplier,
+        ContributionTier:       c.contributionScorer.GetContributionTier(contribution),
+        TotalReward:            totalReward,
+    }, nil
+}
+
+// TotalReward 总收益结构
+type TotalReward struct {
+    NodeID                 common.Hash
+    IsEligible             bool
+    Reason                 string
+    UptimeScore            uint64
+    TxFeeRevenue           *big.Int
+    ServiceRevenue         *big.Int
+    QualityBonus           *big.Int
+    ContributionMultiplier float64
+    ContributionTier       string
+    TotalReward            *big.Int
+}
+```
+
+###### 3.3.8.7.6 激励机制总结
+
+| 维度 | 类型 | 上限 | 激励效果 |
+|------|------|------|----------|
+| 稳定在线 | 入场券 | 95% 阈值 | 必须达到才能参与 |
+| 服务质量 | 竞争 | 无上限 | 更快响应 = 更高奖励 |
+| 交易量 | 竞争 | 无上限 | 更多交易 = 更多收入 |
+| 增值服务 | 竞争 | 无上限 | 更多服务 = 更多收入 |
+| 历史贡献 | 倍数 | 2.0x | 长期运营 = 收益翻倍 |
+
+**激励效果示例**：
+
+```
+场景：两个节点都 100% 在线
+
+节点 A（新节点）:
+- 在线率: 100% ✓ (满足入场条件)
+- 服务质量: 一般 (响应 500ms)
+- 交易量: 1000 tx/天
+- 增值服务: 无
+- 历史贡献: 10 天 (无等级)
+- 收益倍数: 1.0x
+- 日收益: 100 X
+
+节点 B（老节点）:
+- 在线率: 100% ✓ (满足入场条件)
+- 服务质量: 优秀 (响应 50ms) → +20% 质量奖励
+- 交易量: 5000 tx/天 → 5x 交易费
+- 增值服务: 3 项 → +30% 服务收入
+- 历史贡献: 400 天 (Gold) → 1.5x 倍数
+- 日收益: (500 + 100 + 30) * 1.5 = 945 X
+
+差距: 节点 B 收益是节点 A 的 9.45 倍
+```
+
+**这种设计确保**：
+1. 稳定在线是必要条件，但不是充分条件
+2. 即使所有节点都稳定在线，仍有多个维度可以竞争
+3. 长期运营的节点有明显优势，激励节点持续稳定运营
+4. 新节点可以通过提高服务质量和交易量快速追赶
+
+##### 3.3.8.8 激励机制完整总结
 
 | 机制 | 目的 | 效果 |
 |------|------|------|
@@ -1165,6 +1643,10 @@ func (s *NodeSelector) GetNodePriority(nodeID common.Hash) int {
 | 惩罚机制 | 惩罚不稳定节点 | 降低不稳定节点收益 |
 | 优先级排序 | 引导用户选择 | 稳定节点获得更多交易 |
 | 暂时排除 | 保护网络质量 | 严重不稳定节点无法出块 |
+| 服务质量竞争 | 激励提升服务 | 更好服务 = 更高收益 |
+| 交易量竞争 | 激励吸引用户 | 更多交易 = 更多收入 |
+| 增值服务 | 激励创新 | 提供更多价值 = 更多收入 |
+| 历史贡献 | 激励长期运营 | 长期稳定 = 收益倍增 |
 
 **激励效果**：
 
@@ -1175,6 +1657,10 @@ func (s *NodeSelector) GetNodePriority(nodeID common.Hash) int {
 节点频繁离线 → 信誉分降低 → 交易费加权降低 → 收入减少
                          → 优先级降低 → 获得更少交易 → 收入减少
                          → 惩罚累积 → 暂时排除 → 无收入
+
+所有节点都稳定在线时:
+节点 A (服务好) → 质量奖励高 → 用户选择多 → 交易量大 → 收入高
+节点 B (服务差) → 质量奖励低 → 用户选择少 → 交易量小 → 收入低
 ```
 
 ```go
@@ -1191,14 +1677,18 @@ type FeeConfig struct {
     
     // 信誉加权开关
     UseReputationWeighting bool
+    
+    // 多维度竞争开关
+    UseMultiDimensionalCompetition bool
 }
 
-// 默认配置：极低费用 + 信誉加权
+// 默认配置：极低费用 + 信誉加权 + 多维度竞争
 var DefaultFeeConfig = FeeConfig{
-    BaseFee:                big.NewInt(0),           // 无基础费
-    GasPrice:               big.NewInt(1),           // 1 wei per gas
-    ProducerShare:          100,
-    UseReputationWeighting: true,                    // 启用信誉加权
+    BaseFee:                        big.NewInt(0),           // 无基础费
+    GasPrice:                       big.NewInt(1),           // 1 wei per gas
+    ProducerShare:                  100,
+    UseReputationWeighting:         true,                    // 启用信誉加权
+    UseMultiDimensionalCompetition: true,                    // 启用多维度竞争
 }
 ```
 
@@ -1319,7 +1809,7 @@ func (s *SGXConsensus) VerifyHeader(chain ChainHeaderReader, header *types.Heade
 
 ### 4.3 预编译合约接口定义
 
-#### 4.3.1 SGX_KEY_CREATE (0x0200)
+#### 4.3.1 SGX_KEY_CREATE (0x8000)
 
 创建新的密钥对，私钥存储在加密分区。
 
@@ -1381,7 +1871,7 @@ func (c *sgxKeyCreate) Run(input []byte, caller common.Address, evm *EVM) ([]byt
 }
 ```
 
-#### 4.3.2 SGX_KEY_GET_PUBLIC (0x0201)
+#### 4.3.2 SGX_KEY_GET_PUBLIC (0x8001)
 
 获取指定密钥的公钥。
 
@@ -1406,7 +1896,7 @@ func (c *sgxKeyCreate) Run(input []byte, caller common.Address, evm *EVM) ([]byt
 
 **Gas 消耗：** 3000
 
-#### 4.3.3 SGX_SIGN (0x0202)
+#### 4.3.3 SGX_SIGN (0x8002)
 
 使用私钥签名消息。
 
@@ -1459,7 +1949,7 @@ func (c *sgxSign) Run(input []byte, caller common.Address, evm *EVM) ([]byte, er
 }
 ```
 
-#### 4.3.4 SGX_VERIFY (0x0203)
+#### 4.3.4 SGX_VERIFY (0x8003)
 
 验证签名。
 
@@ -1486,7 +1976,7 @@ func (c *sgxSign) Run(input []byte, caller common.Address, evm *EVM) ([]byte, er
 
 **Gas 消耗：** 5000
 
-#### 4.3.5 SGX_ECDH (0x0204)
+#### 4.3.5 SGX_ECDH (0x8004)
 
 执行 ECDH 密钥交换，派生的共享秘密存储在加密分区。
 
@@ -1554,7 +2044,7 @@ func (c *sgxECDH) Run(input []byte, caller common.Address, evm *EVM) ([]byte, er
 }
 ```
 
-#### 4.3.6 SGX_RANDOM (0x0205)
+#### 4.3.6 SGX_RANDOM (0x8005)
 
 获取硬件真随机数。
 
@@ -1596,7 +2086,7 @@ func (c *sgxRandom) Run(input []byte) ([]byte, error) {
 }
 ```
 
-#### 4.3.7 SGX_ENCRYPT (0x0206)
+#### 4.3.7 SGX_ENCRYPT (0x8006)
 
 使用对称密钥加密数据。
 
@@ -1622,7 +2112,7 @@ func (c *sgxRandom) Run(input []byte) ([]byte, error) {
 
 **Gas 消耗：** 5000 + 10 * 数据长度
 
-#### 4.3.8 SGX_DECRYPT (0x0207)
+#### 4.3.8 SGX_DECRYPT (0x8007)
 
 使用对称密钥解密数据。
 
@@ -1648,7 +2138,7 @@ func (c *sgxRandom) Run(input []byte) ([]byte, error) {
 
 **Gas 消耗：** 5000 + 10 * 数据长度
 
-#### 4.3.9 SGX_KEY_DERIVE (0x0208)
+#### 4.3.9 SGX_KEY_DERIVE (0x8008)
 
 从现有密钥派生新密钥。
 
@@ -3730,27 +4220,27 @@ func ParseSGXPrecompileCall(tx *types.Transaction) *SGXCallInfo {
         return nil
     }
     
-    // 检查是否是 SGX 预编译合约地址 (0x0200 - 0x02FF)
+    // 检查是否是 SGX 预编译合约地址 (0x8000 - 0x80FF)
     addr := to.Big().Uint64()
-    if addr < 0x0200 || addr > 0x02FF {
+    if addr < 0x8000 || addr > 0x80FF {
         return nil
     }
     
     input := tx.Data()
     
     switch addr {
-    case 0x0200: // SGX_KEY_CREATE
+    case 0x8000: // SGX_KEY_CREATE
         return &SGXCallInfo{
             Type:      "KEY_CREATE",
             CurveType: getCurveName(input[0]),
         }
-    case 0x0202: // SGX_SIGN
+    case 0x8002: // SGX_SIGN
         return &SGXCallInfo{
             Type:    "SIGN",
             KeyID:   common.BytesToHash(input[0:32]).Hex(),
             MsgHash: common.BytesToHash(input[32:64]).Hex(),
         }
-    case 0x0204: // SGX_ECDH
+    case 0x8004: // SGX_ECDH
         return &SGXCallInfo{
             Type:       "ECDH",
             LocalKeyID: common.BytesToHash(input[0:32]).Hex(),
