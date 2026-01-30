@@ -413,7 +413,426 @@ X Chain 采用**低成本效用模型**结合**稳定性激励机制**，确保�
 - 不产生新代币，无通胀
 - 降低运营成本，无需高算力或大量质押
 
-##### 3.3.8.2 节点稳定性激励机制
+##### 3.3.8.2 出块权竞争与区块质量收益调整
+
+**设计目标**：保持"先广播先得"的简单出块逻辑，同时通过收益调整机制激励矿工批量打包交易，避免为抢先出块而拒绝打包更多交易。
+
+```
+问题场景:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  矿工 A: 收到 1 笔交易，立即出块广播（抢先）                              │
+│  矿工 B: 等待收集 10 笔交易，准备批量打包                                │
+│                                                                         │
+│  如果只按"先到先得"，矿工 A 获得出块权，但只打包了 1 笔交易              │
+│  这导致: 区块碎片化、网络效率低、存储浪费                                │
+└─────────────────────────────────────────────────────────────────────────┘
+
+解决方案:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  出块权: 保持"先广播先得"（简单、确定性）                                │
+│  收益:   根据区块质量调整（激励批量打包）                                │
+│                                                                         │
+│  结果: 矿工 A 虽然抢到出块权，但收益很低（区块质量差）                   │
+│        矿工 B 下次会更积极批量打包，因为高质量区块收益更高               │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+###### 3.3.8.2.1 区块质量评分
+
+```go
+// consensus/sgx/block_quality.go
+package sgx
+
+import (
+    "math/big"
+    
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+// BlockQualityScorer 区块质量评分器
+type BlockQualityScorer struct {
+    config *QualityConfig
+}
+
+// QualityConfig 质量评分配置
+type QualityConfig struct {
+    // 交易数量权重 (默认 40%)
+    TxCountWeight uint8
+    
+    // 区块大小权重 (默认 30%)
+    BlockSizeWeight uint8
+    
+    // Gas 利用率权重 (默认 20%)
+    GasUtilizationWeight uint8
+    
+    // 交易多样性权重 (默认 10%)
+    TxDiversityWeight uint8
+    
+    // 最小交易数阈值（低于此值收益大幅降低）
+    MinTxThreshold uint64
+    
+    // 目标区块大小（字节）
+    TargetBlockSize uint64
+    
+    // 目标 Gas 利用率
+    TargetGasUtilization float64
+}
+
+// DefaultQualityConfig 默认配置
+func DefaultQualityConfig() *QualityConfig {
+    return &QualityConfig{
+        TxCountWeight:        40,
+        BlockSizeWeight:      30,
+        GasUtilizationWeight: 20,
+        TxDiversityWeight:    10,
+        MinTxThreshold:       5,           // 至少 5 笔交易
+        TargetBlockSize:      1024 * 1024, // 1MB
+        TargetGasUtilization: 0.8,         // 80% Gas 利用率
+    }
+}
+
+// BlockQuality 区块质量评分结果
+type BlockQuality struct {
+    TxCount          uint64  // 交易数量
+    BlockSize        uint64  // 区块大小（字节）
+    GasUsed          uint64  // 使用的 Gas
+    GasLimit         uint64  // Gas 上限
+    UniqueSenders    uint64  // 不同发送者数量
+    
+    TxCountScore     uint16  // 交易数量得分 (0-10000)
+    BlockSizeScore   uint16  // 区块大小得分 (0-10000)
+    GasUtilScore     uint16  // Gas 利用率得分 (0-10000)
+    DiversityScore   uint16  // 多样性得分 (0-10000)
+    
+    TotalScore       uint16  // 综合得分 (0-10000)
+    RewardMultiplier float64 // 收益倍数 (0.1 - 2.0)
+}
+
+// CalculateQuality 计算区块质量
+func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality {
+    txs := block.Transactions()
+    
+    quality := &BlockQuality{
+        TxCount:   uint64(len(txs)),
+        BlockSize: uint64(block.Size()),
+        GasUsed:   block.GasUsed(),
+        GasLimit:  block.GasLimit(),
+    }
+    
+    // 统计不同发送者
+    senders := make(map[common.Address]bool)
+    for _, tx := range txs {
+        from, _ := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+        senders[from] = true
+    }
+    quality.UniqueSenders = uint64(len(senders))
+    
+    // 1. 交易数量得分
+    quality.TxCountScore = s.calculateTxCountScore(quality.TxCount)
+    
+    // 2. 区块大小得分
+    quality.BlockSizeScore = s.calculateBlockSizeScore(quality.BlockSize)
+    
+    // 3. Gas 利用率得分
+    quality.GasUtilScore = s.calculateGasUtilScore(quality.GasUsed, quality.GasLimit)
+    
+    // 4. 交易多样性得分
+    quality.DiversityScore = s.calculateDiversityScore(quality.TxCount, quality.UniqueSenders)
+    
+    // 计算综合得分
+    quality.TotalScore = uint16(
+        (uint32(quality.TxCountScore) * uint32(s.config.TxCountWeight) +
+         uint32(quality.BlockSizeScore) * uint32(s.config.BlockSizeWeight) +
+         uint32(quality.GasUtilScore) * uint32(s.config.GasUtilizationWeight) +
+         uint32(quality.DiversityScore) * uint32(s.config.TxDiversityWeight)) / 100,
+    )
+    
+    // 计算收益倍数
+    quality.RewardMultiplier = s.calculateRewardMultiplier(quality)
+    
+    return quality
+}
+
+// calculateTxCountScore 计算交易数量得分
+func (s *BlockQualityScorer) calculateTxCountScore(txCount uint64) uint16 {
+    if txCount == 0 {
+        return 0
+    }
+    
+    // 低于最小阈值，得分很低
+    if txCount < s.config.MinTxThreshold {
+        // 线性递减: 1 笔交易 = 20%, 4 笔交易 = 80%
+        return uint16(txCount * 2000 / s.config.MinTxThreshold)
+    }
+    
+    // 达到阈值后，对数增长（避免无限追求大区块）
+    // 5 笔 = 8000, 10 笔 = 8500, 50 笔 = 9500, 100+ 笔 = 10000
+    baseScore := uint16(8000)
+    bonus := uint16(2000 * min(txCount-s.config.MinTxThreshold, 95) / 95)
+    
+    return baseScore + bonus
+}
+
+// calculateBlockSizeScore 计算区块大小得分
+func (s *BlockQualityScorer) calculateBlockSizeScore(blockSize uint64) uint16 {
+    if blockSize == 0 {
+        return 0
+    }
+    
+    // 目标大小附近得分最高
+    ratio := float64(blockSize) / float64(s.config.TargetBlockSize)
+    
+    if ratio <= 1.0 {
+        // 未达到目标大小，线性增长
+        return uint16(ratio * 10000)
+    }
+    
+    // 超过目标大小，轻微惩罚（避免过大区块）
+    penalty := (ratio - 1.0) * 1000
+    if penalty > 2000 {
+        penalty = 2000
+    }
+    return uint16(10000 - penalty)
+}
+
+// calculateGasUtilScore 计算 Gas 利用率得分
+func (s *BlockQualityScorer) calculateGasUtilScore(gasUsed, gasLimit uint64) uint16 {
+    if gasLimit == 0 {
+        return 0
+    }
+    
+    utilization := float64(gasUsed) / float64(gasLimit)
+    target := s.config.TargetGasUtilization
+    
+    if utilization <= target {
+        // 未达到目标利用率，线性增长
+        return uint16(utilization / target * 10000)
+    }
+    
+    // 超过目标利用率，满分
+    return 10000
+}
+
+// calculateDiversityScore 计算交易多样性得分
+func (s *BlockQualityScorer) calculateDiversityScore(txCount, uniqueSenders uint64) uint16 {
+    if txCount == 0 {
+        return 0
+    }
+    
+    // 多样性 = 不同发送者数量 / 交易数量
+    diversity := float64(uniqueSenders) / float64(txCount)
+    
+    // 多样性越高越好（避免单一用户刷交易）
+    return uint16(diversity * 10000)
+}
+
+// calculateRewardMultiplier 计算收益倍数
+func (s *BlockQualityScorer) calculateRewardMultiplier(quality *BlockQuality) float64 {
+    // 基于综合得分计算收益倍数
+    // 得分 0-2000: 倍数 0.1-0.5 (惩罚低质量区块)
+    // 得分 2000-5000: 倍数 0.5-1.0 (正常区块)
+    // 得分 5000-8000: 倍数 1.0-1.5 (高质量区块)
+    // 得分 8000-10000: 倍数 1.5-2.0 (优质区块)
+    
+    score := float64(quality.TotalScore)
+    
+    if score < 2000 {
+        return 0.1 + (score/2000)*0.4
+    } else if score < 5000 {
+        return 0.5 + ((score-2000)/3000)*0.5
+    } else if score < 8000 {
+        return 1.0 + ((score-5000)/3000)*0.5
+    } else {
+        return 1.5 + ((score-8000)/2000)*0.5
+    }
+}
+```
+
+###### 3.3.8.2.2 收益计算
+
+```go
+// consensus/sgx/block_reward.go
+package sgx
+
+import (
+    "math/big"
+    
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+// BlockRewardCalculator 区块收益计算器
+type BlockRewardCalculator struct {
+    qualityScorer *BlockQualityScorer
+}
+
+// BlockReward 区块收益
+type BlockReward struct {
+    Block           *types.Block
+    Quality         *BlockQuality
+    
+    BaseFees        *big.Int // 基础交易费总和
+    AdjustedReward  *big.Int // 调整后的收益
+    
+    // 收益明细
+    TxFeeReward     *big.Int // 交易费收益
+    QualityBonus    *big.Int // 质量奖励
+}
+
+// CalculateReward 计算区块收益
+func (c *BlockRewardCalculator) CalculateReward(block *types.Block, receipts []*types.Receipt) *BlockReward {
+    // 1. 计算基础交易费
+    baseFees := big.NewInt(0)
+    for i, tx := range block.Transactions() {
+        if i < len(receipts) {
+            gasUsed := big.NewInt(int64(receipts[i].GasUsed))
+            gasPrice := tx.GasPrice()
+            fee := new(big.Int).Mul(gasUsed, gasPrice)
+            baseFees.Add(baseFees, fee)
+        }
+    }
+    
+    // 2. 计算区块质量
+    quality := c.qualityScorer.CalculateQuality(block)
+    
+    // 3. 应用质量倍数
+    multiplier := big.NewFloat(quality.RewardMultiplier)
+    baseFloat := new(big.Float).SetInt(baseFees)
+    adjustedFloat := new(big.Float).Mul(baseFloat, multiplier)
+    
+    adjustedReward := new(big.Int)
+    adjustedFloat.Int(adjustedReward)
+    
+    // 4. 计算质量奖励（调整后收益 - 基础费用）
+    qualityBonus := new(big.Int).Sub(adjustedReward, baseFees)
+    if qualityBonus.Sign() < 0 {
+        qualityBonus = big.NewInt(0)
+    }
+    
+    return &BlockReward{
+        Block:          block,
+        Quality:        quality,
+        BaseFees:       baseFees,
+        AdjustedReward: adjustedReward,
+        TxFeeReward:    baseFees,
+        QualityBonus:   qualityBonus,
+    }
+}
+```
+
+###### 3.3.8.2.3 收益调整示例
+
+```
+场景对比:
+
+矿工 A (抢先出块，低质量):
+┌─────────────────────────────────────────────────────────────┐
+│  交易数量: 1 笔                                              │
+│  区块大小: 500 字节                                          │
+│  Gas 利用率: 2%                                              │
+│  交易多样性: 100% (1/1)                                      │
+│                                                             │
+│  交易数量得分: 2000 (低于阈值 5 笔)                          │
+│  区块大小得分: 500 (远低于目标 1MB)                          │
+│  Gas 利用率得分: 250 (远低于目标 80%)                        │
+│  多样性得分: 10000 (满分)                                    │
+│                                                             │
+│  综合得分: 2000*40% + 500*30% + 250*20% + 10000*10%         │
+│          = 800 + 150 + 50 + 1000 = 2000                     │
+│                                                             │
+│  收益倍数: 0.5x                                              │
+│  基础交易费: 0.001 ETH                                       │
+│  实际收益: 0.0005 ETH                                        │
+└─────────────────────────────────────────────────────────────┘
+
+矿工 B (批量打包，高质量):
+┌─────────────────────────────────────────────────────────────┐
+│  交易数量: 50 笔                                             │
+│  区块大小: 100KB                                             │
+│  Gas 利用率: 60%                                             │
+│  交易多样性: 80% (40/50)                                     │
+│                                                             │
+│  交易数量得分: 9500 (超过阈值，对数增长)                     │
+│  区块大小得分: 1000 (10% 目标大小)                           │
+│  Gas 利用率得分: 7500 (75% 目标利用率)                       │
+│  多样性得分: 8000 (80% 多样性)                               │
+│                                                             │
+│  综合得分: 9500*40% + 1000*30% + 7500*20% + 8000*10%        │
+│          = 3800 + 300 + 1500 + 800 = 6400                   │
+│                                                             │
+│  收益倍数: 1.23x                                             │
+│  基础交易费: 0.05 ETH (50 笔交易)                            │
+│  实际收益: 0.0615 ETH                                        │
+└─────────────────────────────────────────────────────────────┘
+
+结论:
+- 矿工 A 抢先出块，但收益只有 0.0005 ETH
+- 矿工 B 批量打包，收益 0.0615 ETH (是 A 的 123 倍)
+- 激励效果: 矿工会倾向于等待更多交易再出块
+```
+
+###### 3.3.8.2.4 防止恶意行为
+
+```go
+// 防止恶意行为的额外规则
+
+// 1. 最小交易数惩罚
+// 如果区块只有 1-2 笔交易，收益倍数最高只有 0.3x
+func (s *BlockQualityScorer) applyMinTxPenalty(quality *BlockQuality) {
+    if quality.TxCount <= 2 {
+        if quality.RewardMultiplier > 0.3 {
+            quality.RewardMultiplier = 0.3
+        }
+    }
+}
+
+// 2. 连续低质量区块惩罚
+// 如果矿工连续出低质量区块，累积惩罚
+type ProducerPenalty struct {
+    ConsecutiveLowQuality int     // 连续低质量区块数
+    PenaltyMultiplier     float64 // 惩罚倍数
+}
+
+func (p *ProducerPenalty) UpdatePenalty(quality *BlockQuality) {
+    if quality.TotalScore < 3000 {
+        p.ConsecutiveLowQuality++
+        // 每连续 1 个低质量区块，惩罚 10%
+        p.PenaltyMultiplier = 1.0 - float64(p.ConsecutiveLowQuality)*0.1
+        if p.PenaltyMultiplier < 0.5 {
+            p.PenaltyMultiplier = 0.5 // 最低 50%
+        }
+    } else {
+        // 出高质量区块，重置惩罚
+        p.ConsecutiveLowQuality = 0
+        p.PenaltyMultiplier = 1.0
+    }
+}
+
+// 3. 自我交易检测
+// 如果区块中大部分交易来自出块者自己，降低收益
+func (s *BlockQualityScorer) detectSelfTransactions(
+    block *types.Block,
+    producer common.Address,
+) float64 {
+    selfTxCount := 0
+    for _, tx := range block.Transactions() {
+        from, _ := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+        if from == producer {
+            selfTxCount++
+        }
+    }
+    
+    selfRatio := float64(selfTxCount) / float64(len(block.Transactions()))
+    
+    // 自我交易比例超过 50%，收益降低
+    if selfRatio > 0.5 {
+        return 1.0 - (selfRatio-0.5) // 50% 自我交易 = 100% 收益，100% 自我交易 = 50% 收益
+    }
+    
+    return 1.0
+}
+```
+
+##### 3.3.8.3 节点稳定性激励机制
 
 **核心问题**：节点必须稳定在线提供服务，否则会损害用户体验，降低使用积极性，进而减少矿工收入，形成恶性循环。
 
