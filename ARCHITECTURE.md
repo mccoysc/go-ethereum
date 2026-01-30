@@ -640,6 +640,116 @@ func (c *sgxECDH) Run(input []byte, caller common.Address, evm *EVM) ([]byte, er
 }
 ```
 
+#### 4.4.4 身份验证机制
+
+访问秘密数据**必须通过签名验证身份**。这是通过以太坊标准的交易签名机制实现的：
+
+```
++------------------+                    +------------------+
+|   用户钱包       |                    |   X Chain 节点   |
++------------------+                    +------------------+
+        |                                       |
+        | 1. 构造交易 (调用 SGX_SIGN)           |
+        |                                       |
+        | 2. 用以太坊私钥签名交易               |
+        |   signature = sign(tx, privateKey)    |
+        |                                       |
+        | 3. 提交签名交易                       |
+        |-------------------------------------->|
+        |                                       |
+        |                    4. EVM 验证交易签名 |
+        |                    sender = ecrecover(tx, sig)
+        |                                       |
+        |                    5. 提取 msg.sender |
+        |                                       |
+        |                    6. 预编译合约检查权限
+        |                    if msg.sender != keyOwner:
+        |                        revert("Not key owner")
+        |                                       |
+        |                    7. 权限验证通过    |
+        |                    执行签名操作       |
+        |                                       |
+        | 8. 返回签名结果                       |
+        |<--------------------------------------|
+```
+
+**身份验证的安全保证：**
+
+| 攻击场景 | 防护机制 |
+|----------|----------|
+| 未签名交易 | EVM 拒绝执行，交易无效 |
+| 签名错误 | ecrecover 恢复出错误地址，权限检查失败 |
+| 重放攻击 | 交易 nonce 机制防止重放 |
+| 伪造 msg.sender | 不可能，msg.sender 由签名密码学保证 |
+| 知道 keyId 但无签名 | 无法提交有效交易，无法访问秘密 |
+
+**实现代码：**
+
+```go
+// core/vm/contracts_sgx.go
+
+// 通用权限检查函数
+func checkKeyOwnership(evm *EVM, keyId common.Hash, caller common.Address) error {
+    // caller 是通过交易签名验证后提取的 msg.sender
+    // 这个值由 EVM 保证其真实性，无法伪造
+    
+    owner := evm.StateDB.GetKeyOwner(keyId)
+    if owner == (common.Address{}) {
+        return ErrKeyNotFound
+    }
+    if owner != caller {
+        return ErrNotKeyOwner
+    }
+    return nil
+}
+
+// 签名操作示例
+func (c *sgxSign) Run(input []byte, caller common.Address, evm *EVM) ([]byte, error) {
+    keyId := common.BytesToHash(input[0:32])
+    
+    // 权限检查：caller 必须是密钥所有者
+    // caller 的身份已通过交易签名验证
+    if err := checkKeyOwnership(evm, keyId, caller); err != nil {
+        return nil, err
+    }
+    
+    // 身份验证通过，执行签名操作
+    // ...
+}
+```
+
+**合约调用场景：**
+
+当智能合约调用预编译合约时，`msg.sender` 是调用合约的地址，而非原始交易发起者（EOA）：
+
+```
+EOA (0x1234...) --调用--> 合约 A (0xAAAA...) --调用--> SGX_SIGN
+                                                        |
+                                              msg.sender = 0xAAAA...
+                                              (不是 0x1234...)
+```
+
+这意味着：
+- 如果合约 A 是密钥所有者，合约 A 可以使用该密钥
+- 如果 EOA 是密钥所有者，合约 A 无法代替 EOA 使用该密钥
+- 这提供了细粒度的权限控制，防止未授权的合约访问用户密钥
+
+**无签名 = 无访问：**
+
+```
+攻击者知道 keyId = 0xABCD...
+攻击者想调用 SGX_SIGN(keyId, msgHash)
+
+但是：
+1. 攻击者没有密钥所有者的以太坊私钥
+2. 攻击者无法签名有效交易
+3. 即使构造交易，EVM 也会拒绝（签名无效）
+4. 即使通过某种方式提交，msg.sender 也不会是所有者
+5. 权限检查失败，操作被拒绝
+
+结论：没有所有者的签名，绝对无法访问秘密数据
+```
+
 ## 5. 数据存储与同步
 
 ### 5.1 存储架构
@@ -704,27 +814,178 @@ type SGXNodeRecord struct {
       |                                  |
 ```
 
-#### 5.2.3 加密分区数据同步
+#### 5.2.3 加密分区数据同步（秘密数据同步）
 
-加密分区中的数据需要在节点间保持一致：
+加密分区中的**所有数据**（包括秘密数据）都需要在节点间同步，以保持网络一致性。通过**度量值检测**确保秘密数据只会同步到运行相同可信代码的节点，防止泄露。
 
 **同步的数据：**
 - 密钥元数据（所有者、曲线类型、创建时间）
 - 公钥数据
+- **私钥数据**（通过 RA-TLS 安全通道传输）
+- **派生秘密**（ECDH 结果等）
 - 密钥所有权记录
 
-**不同步的数据：**
-- 私钥（每个节点独立生成，但通过 SGX sealing 保证一致性）
+**秘密数据同步的安全保证：**
+
+```
++------------------+                    +------------------+
+|   源节点 A       |                    |   目标节点 B     |
+| (已有秘密数据)   |                    | (需要同步数据)   |
++------------------+                    +------------------+
+        |                                       |
+        |  1. RA-TLS 握手开始                   |
+        |<------------------------------------->|
+        |                                       |
+        |  2. 双向 SGX 远程证明                 |
+        |  A 验证 B 的度量值:                   |
+        |  - MRENCLAVE 是否在白名单?            |
+        |  - MRSIGNER 是否在白名单?             |
+        |  - TCB 状态是否可接受?                |
+        |                                       |
+        |  B 验证 A 的度量值:                   |
+        |  - MRENCLAVE 是否在白名单?            |
+        |  - MRSIGNER 是否在白名单?             |
+        |  - TCB 状态是否可接受?                |
+        |                                       |
+        |  3. 双向验证通过                      |
+        |  (确认双方都运行相同的可信代码)       |
+        |<------------------------------------->|
+        |                                       |
+        |  4. A 解封本地加密分区数据            |
+        |  (在 enclave 内部解密)                |
+        |                                       |
+        |  5. 通过 RA-TLS 通道传输秘密数据      |
+        |  (传输过程中 TLS 加密保护)            |
+        |-------------------------------------->|
+        |                                       |
+        |                    6. B 接收秘密数据  |
+        |                    在 enclave 内部    |
+        |                                       |
+        |                    7. B 重新封装数据  |
+        |                    用 B 的 seal key   |
+        |                    存入加密分区       |
+        |                                       |
+```
+
+**度量值检测防止泄露：**
+
+| 攻击场景 | 防护机制 |
+|----------|----------|
+| 恶意节点伪装 | RA-TLS 验证 SGX Quote，无法伪造 MRENCLAVE |
+| 修改过的代码 | MRENCLAVE 不匹配，拒绝同步 |
+| 中间人攻击 | RA-TLS 端到端加密，无法窃听 |
+| 重放攻击 | TLS 会话密钥唯一，Quote 包含时间戳 |
+| 非 SGX 节点 | 无法生成有效 SGX Quote，验证失败 |
+
+**实现代码：**
 
 ```go
-// 密钥同步协议
-type KeySyncMessage struct {
-    KeyId     common.Hash
-    Metadata  KeyMetadata
-    PublicKey []byte
-    // 私钥通过 SGX sealing 机制在各节点独立派生
-    // 使用相同的 MRENCLAVE 和 sealing key 保证一致性
+// internal/sgx/secret_sync.go
+package sgx
+
+// SecretSyncManager 管理秘密数据的节点间同步
+type SecretSyncManager struct {
+    ratls       *RATLSTransport
+    keyStore    *EncryptedKeyStore
+    whitelist   *MeasurementWhitelist
 }
+
+// SyncSecretsFromPeer 从对等节点同步秘密数据
+func (m *SecretSyncManager) SyncSecretsFromPeer(ctx context.Context, peer *Peer) error {
+    // 1. 建立 RA-TLS 连接（双向验证度量值）
+    conn, err := m.ratls.Connect(peer.Address)
+    if err != nil {
+        return fmt.Errorf("RA-TLS connection failed: %w", err)
+    }
+    defer conn.Close()
+    
+    // 2. 验证对方度量值是否在白名单中
+    peerQuote := conn.PeerQuote()
+    if !m.whitelist.IsAllowed(peerQuote.MRENCLAVE, peerQuote.MRSIGNER) {
+        return ErrPeerNotInWhitelist
+    }
+    
+    // 3. 请求秘密数据列表
+    keyList, err := m.requestKeyList(conn)
+    if err != nil {
+        return err
+    }
+    
+    // 4. 同步每个密钥（包括私钥）
+    for _, keyId := range keyList {
+        // 检查本地是否已有
+        if m.keyStore.Exists(keyId) {
+            continue
+        }
+        
+        // 请求完整密钥数据（包括私钥）
+        keyData, err := m.requestKeyData(conn, keyId)
+        if err != nil {
+            return fmt.Errorf("failed to sync key %s: %w", keyId.Hex(), err)
+        }
+        
+        // 存储到本地加密分区（自动用本地 seal key 重新封装）
+        if err := m.keyStore.Store(keyId, keyData); err != nil {
+            return fmt.Errorf("failed to store key %s: %w", keyId.Hex(), err)
+        }
+    }
+    
+    return nil
+}
+
+// ServeSecretSync 响应其他节点的秘密数据同步请求
+func (m *SecretSyncManager) ServeSecretSync(conn *RATLSConn) error {
+    // 1. 验证请求方度量值
+    peerQuote := conn.PeerQuote()
+    if !m.whitelist.IsAllowed(peerQuote.MRENCLAVE, peerQuote.MRSIGNER) {
+        return ErrPeerNotInWhitelist
+    }
+    
+    // 2. 只有度量值验证通过，才提供秘密数据
+    // 这确保秘密数据只会发送给运行相同可信代码的节点
+    
+    for {
+        req, err := conn.ReadRequest()
+        if err != nil {
+            return err
+        }
+        
+        switch req.Type {
+        case RequestKeyList:
+            keys := m.keyStore.ListKeys()
+            conn.WriteResponse(keys)
+            
+        case RequestKeyData:
+            keyId := common.BytesToHash(req.Data)
+            // 从加密分区读取（在 enclave 内解密）
+            keyData, err := m.keyStore.Load(keyId)
+            if err != nil {
+                conn.WriteError(err)
+                continue
+            }
+            // 通过 RA-TLS 通道发送（传输中加密）
+            conn.WriteResponse(keyData)
+        }
+    }
+}
+```
+
+**关键安全原则：**
+
+1. **度量值验证是前提**：在传输任何秘密数据之前，必须先通过 RA-TLS 验证对方的 MRENCLAVE/MRSIGNER
+2. **只信任相同代码**：只有运行完全相同代码（相同 MRENCLAVE）的节点才能接收秘密数据
+3. **端到端加密**：秘密数据在 enclave 内解密，通过 TLS 传输，在目标 enclave 内重新封装
+4. **无明文暴露**：秘密数据在整个同步过程中从不以明文形式暴露给主机操作系统
+
+```
+秘密数据生命周期：
+
+源节点 enclave          RA-TLS 通道           目标节点 enclave
+[seal key A 加密] --解密--> [明文] --TLS加密--> [明文] --加密--> [seal key B 加密]
+     |                        |                   |                    |
+     |                        |                   |                    |
+  存储在磁盘              仅在 enclave 内       仅在 enclave 内      存储在磁盘
+  (加密状态)              (受 SGX 保护)        (受 SGX 保护)        (加密状态)
 ```
 
 ### 5.3 数据一致性验证
@@ -753,6 +1014,393 @@ func (s *SGXConsensus) VerifyNetworkConsistency(peer *Peer) error {
     }
     
     return nil
+}
+```
+
+### 5.4 侧信道攻击防护（代码级方案）
+
+SGX enclave 虽然提供了内存隔离，但仍然容易受到侧信道攻击。以下防护方案**完全依赖代码逻辑实现**，不依赖任何硬件特性。
+
+#### 5.4.1 攻击类型与防护策略
+
+| 攻击类型 | 攻击原理 | 代码级防护策略 |
+|----------|----------|----------------|
+| 时序攻击 | 测量执行时间推断秘密 | 常量时间操作 |
+| 缓存攻击 | 观察缓存访问模式 | 预加载 + 避免秘密索引 |
+| 页面错误攻击 | 观察内存页访问模式 | 内存访问模式混淆 |
+| 分支预测攻击 | 观察分支预测行为 | 控制流混淆 |
+| 推测执行攻击 | Spectre/Meltdown 变种 | 序列化屏障 + 常量时间 |
+
+#### 5.4.2 常量时间操作
+
+**核心原则**：代码执行时间不能依赖于秘密数据的值。
+
+```go
+// internal/sgx/constant_time.go
+package sgx
+
+// ConstantTimeCompare 常量时间比较两个字节切片
+// 无论内容是否相同，执行时间都相同
+func ConstantTimeCompare(a, b []byte) bool {
+    if len(a) != len(b) {
+        // 长度不同时，仍然遍历较长的切片以保持常量时间
+        maxLen := len(a)
+        if len(b) > maxLen {
+            maxLen = len(b)
+        }
+        var result byte = 1 // 长度不同，结果为 false
+        for i := 0; i < maxLen; i++ {
+            var x, y byte
+            if i < len(a) {
+                x = a[i]
+            }
+            if i < len(b) {
+                y = b[i]
+            }
+            result |= x ^ y
+        }
+        return false
+    }
+    
+    // 长度相同，逐字节比较
+    var result byte = 0
+    for i := 0; i < len(a); i++ {
+        result |= a[i] ^ b[i]
+    }
+    return result == 0
+}
+
+// ConstantTimeSelect 常量时间条件选择
+// 根据 condition 选择 a 或 b，不使用分支
+func ConstantTimeSelect(condition bool, a, b []byte) []byte {
+    result := make([]byte, len(a))
+    
+    // 将 bool 转换为掩码：true -> 0xFF, false -> 0x00
+    var mask byte
+    if condition {
+        mask = 0xFF
+    }
+    
+    for i := 0; i < len(a); i++ {
+        // result[i] = (a[i] & mask) | (b[i] & ^mask)
+        result[i] = (a[i] & mask) | (b[i] & (^mask))
+    }
+    return result
+}
+
+// ConstantTimeCopy 常量时间条件复制
+// 如果 condition 为 true，将 src 复制到 dst
+func ConstantTimeCopy(condition bool, dst, src []byte) {
+    var mask byte
+    if condition {
+        mask = 0xFF
+    }
+    
+    for i := 0; i < len(dst) && i < len(src); i++ {
+        dst[i] = (src[i] & mask) | (dst[i] & (^mask))
+    }
+}
+```
+
+#### 5.4.3 避免数据依赖的分支
+
+**错误示例（有侧信道泄露）：**
+```go
+// 危险：分支依赖于秘密数据
+func checkPassword(input, secret []byte) bool {
+    if len(input) != len(secret) {
+        return false  // 早期退出泄露长度信息
+    }
+    for i := 0; i < len(input); i++ {
+        if input[i] != secret[i] {
+            return false  // 早期退出泄露匹配位置
+        }
+    }
+    return true
+}
+```
+
+**正确示例（常量时间）：**
+```go
+// 安全：执行时间不依赖于秘密数据
+func checkPasswordConstantTime(input, secret []byte) bool {
+    // 使用常量时间比较
+    return ConstantTimeCompare(input, secret)
+}
+```
+
+#### 5.4.4 避免秘密索引的内存访问
+
+**错误示例（缓存侧信道）：**
+```go
+// 危险：使用秘密值作为数组索引
+var sbox = [256]byte{...}  // S-box 查找表
+
+func lookupSbox(secretByte byte) byte {
+    return sbox[secretByte]  // 缓存访问模式泄露 secretByte
+}
+```
+
+**正确示例（全表扫描）：**
+```go
+// 安全：访问所有表项，使用掩码选择
+func lookupSboxConstantTime(secretByte byte) byte {
+    var result byte = 0
+    for i := 0; i < 256; i++ {
+        // 当 i == secretByte 时，mask = 0xFF，否则 mask = 0x00
+        mask := constantTimeByteEq(byte(i), secretByte)
+        result |= sbox[i] & mask
+    }
+    return result
+}
+
+func constantTimeByteEq(a, b byte) byte {
+    // 如果 a == b，返回 0xFF；否则返回 0x00
+    x := a ^ b
+    // 将非零值映射到 0，零值映射到 1
+    x = ^x
+    x &= x >> 4
+    x &= x >> 2
+    x &= x >> 1
+    x &= 1
+    // 扩展到全字节
+    return byte(int8(x<<7) >> 7)
+}
+```
+
+#### 5.4.5 内存访问模式混淆（ORAM 简化版）
+
+对于需要随机访问加密分区数据的场景，使用混淆访问模式：
+
+```go
+// internal/sgx/oblivious_access.go
+package sgx
+
+// ObliviousKeyStore 混淆访问模式的密钥存储
+type ObliviousKeyStore struct {
+    keys      []KeyEntry
+    positions map[common.Hash]int  // 真实位置映射
+    rng       *SecureRNG
+}
+
+// ObliviousRead 混淆读取 - 访问所有位置，只返回目标数据
+func (s *ObliviousKeyStore) ObliviousRead(keyId common.Hash) (*KeyEntry, error) {
+    targetPos := s.positions[keyId]
+    
+    var result *KeyEntry
+    
+    // 访问所有位置（混淆真实访问模式）
+    for i := 0; i < len(s.keys); i++ {
+        entry := &s.keys[i]
+        
+        // 常量时间选择：如果是目标位置，保存结果
+        isTarget := constantTimeIntEq(i, targetPos)
+        if isTarget == 1 {
+            result = entry
+        }
+        
+        // 即使不是目标，也执行相同的内存访问
+        _ = entry.PrivateKey[0]  // 触发缓存加载
+    }
+    
+    return result, nil
+}
+
+// ObliviousWrite 混淆写入 - 访问所有位置，只修改目标
+func (s *ObliviousKeyStore) ObliviousWrite(keyId common.Hash, newData *KeyEntry) error {
+    targetPos := s.positions[keyId]
+    
+    for i := 0; i < len(s.keys); i++ {
+        isTarget := constantTimeIntEq(i, targetPos)
+        
+        // 常量时间条件写入
+        ConstantTimeCopy(isTarget == 1, s.keys[i].PrivateKey, newData.PrivateKey)
+    }
+    
+    return nil
+}
+
+func constantTimeIntEq(a, b int) int {
+    x := uint64(a ^ b)
+    x = ^x
+    x &= x >> 32
+    x &= x >> 16
+    x &= x >> 8
+    x &= x >> 4
+    x &= x >> 2
+    x &= x >> 1
+    return int(x & 1)
+}
+```
+
+#### 5.4.6 控制流混淆
+
+对于必须有分支的代码，执行两个分支并选择结果：
+
+```go
+// 安全：执行两个分支，常量时间选择结果
+func processKeyOperation(op int, key *KeyEntry) ([]byte, error) {
+    // 执行所有可能的操作
+    signResult := performSign(key)      // 总是执行
+    verifyResult := performVerify(key)  // 总是执行
+    ecdhResult := performECDH(key)      // 总是执行
+    
+    // 常量时间选择正确的结果
+    var result []byte
+    result = ConstantTimeSelect(op == OpSign, signResult, result)
+    result = ConstantTimeSelect(op == OpVerify, verifyResult, result)
+    result = ConstantTimeSelect(op == OpECDH, ecdhResult, result)
+    
+    return result, nil
+}
+```
+
+#### 5.4.7 密码学库要求
+
+X Chain 必须使用经过侧信道审计的密码学库：
+
+| 操作 | 推荐库 | 要求 |
+|------|--------|------|
+| 椭圆曲线运算 | libsodium / BearSSL | 常量时间标量乘法 |
+| AES 加密 | AES-NI 指令 / bitsliced | 避免 T-table 实现 |
+| SHA256 哈希 | 标准实现 | 无秘密依赖分支 |
+| RSA 签名 | 带盲化的实现 | Montgomery 乘法 + 盲化 |
+| ECDSA 签名 | RFC 6979 确定性 | 常量时间 k 生成 |
+
+**Go 语言实现要求：**
+
+```go
+// internal/sgx/crypto_requirements.go
+package sgx
+
+import (
+    "crypto/subtle"  // Go 标准库的常量时间操作
+    "golang.org/x/crypto/curve25519"  // 常量时间 X25519
+)
+
+// 使用 Go 标准库的常量时间比较
+func secureCompare(a, b []byte) bool {
+    return subtle.ConstantTimeCompare(a, b) == 1
+}
+
+// 使用常量时间的椭圆曲线库
+func performX25519(privateKey, publicKey []byte) ([]byte, error) {
+    var shared [32]byte
+    var priv, pub [32]byte
+    copy(priv[:], privateKey)
+    copy(pub[:], publicKey)
+    
+    // curve25519.ScalarMult 是常量时间实现
+    curve25519.ScalarMult(&shared, &priv, &pub)
+    return shared[:], nil
+}
+```
+
+#### 5.4.8 预编译合约的侧信道防护
+
+所有 SGX 预编译合约必须遵循以下规则：
+
+```go
+// core/vm/contracts_sgx_secure.go
+package vm
+
+// SGX 预编译合约的安全包装器
+type SecureSGXPrecompile struct {
+    inner PrecompiledContract
+}
+
+func (s *SecureSGXPrecompile) Run(input []byte, caller common.Address, evm *EVM) ([]byte, error) {
+    // 1. 输入长度标准化（防止长度泄露）
+    paddedInput := padToFixedLength(input, MaxInputLength)
+    
+    // 2. 执行操作（内部使用常量时间实现）
+    result, err := s.inner.Run(paddedInput, caller, evm)
+    
+    // 3. 输出长度标准化
+    paddedResult := padToFixedLength(result, MaxOutputLength)
+    
+    // 4. 添加随机延迟（弱防护，但增加攻击难度）
+    // 注意：这不是主要防护手段，只是额外层
+    addRandomDelay()
+    
+    return paddedResult, err
+}
+
+func padToFixedLength(data []byte, length int) []byte {
+    result := make([]byte, length)
+    copy(result, data)
+    return result
+}
+
+func addRandomDelay() {
+    // 使用硬件随机数生成随机延迟
+    var delay [1]byte
+    sgxRandom(delay[:])
+    
+    // 执行空操作循环（编译器不会优化掉）
+    for i := 0; i < int(delay[0]); i++ {
+        runtime.Gosched()
+    }
+}
+```
+
+#### 5.4.9 侧信道防护检查清单
+
+实现密码学操作时，必须检查以下项目：
+
+```
+[ ] 所有比较操作使用常量时间函数
+[ ] 没有基于秘密数据的条件分支
+[ ] 没有使用秘密值作为数组索引
+[ ] 没有基于秘密数据的循环次数
+[ ] 使用经过审计的密码学库
+[ ] 输入/输出长度不泄露信息
+[ ] 错误处理不泄露时序信息
+[ ] 内存访问模式不依赖秘密数据
+```
+
+#### 5.4.10 测试与验证
+
+```go
+// internal/sgx/sidechannel_test.go
+package sgx
+
+import (
+    "testing"
+    "time"
+)
+
+// 测试常量时间比较
+func TestConstantTimeCompare(t *testing.T) {
+    secret := []byte("secret_password_12345")
+    
+    // 测试不同输入的执行时间
+    inputs := [][]byte{
+        []byte("wrong_password_12345"),  // 完全不同
+        []byte("secret_password_12344"),  // 最后一位不同
+        []byte("aecret_password_12345"),  // 第一位不同
+        []byte("secret_password_12345"),  // 完全相同
+    }
+    
+    var times []time.Duration
+    iterations := 10000
+    
+    for _, input := range inputs {
+        start := time.Now()
+        for i := 0; i < iterations; i++ {
+            ConstantTimeCompare(input, secret)
+        }
+        times = append(times, time.Since(start))
+    }
+    
+    // 验证所有执行时间在统计误差范围内
+    avgTime := averageDuration(times)
+    for i, d := range times {
+        deviation := float64(d-avgTime) / float64(avgTime)
+        if deviation > 0.05 { // 允许 5% 误差
+            t.Errorf("Input %d has timing deviation: %.2f%%", i, deviation*100)
+        }
+    }
 }
 ```
 
@@ -1929,16 +2577,133 @@ allowed_tcb_status = ["UpToDate", "SWHardeningNeeded"]
 # Keystone 特定配置 (未来)
 ```
 
-## 13. 附录
+## 13. 区块浏览器与数据可见性
 
-### 13.1 参考资料
+### 13.1 设计原则
+
+X Chain 的架构设计确保敏感数据永远不会出现在公开的区块链数据中。区块浏览器**无需特殊处理**即可安全运行，因为所有链上数据本身就是设计为公开的。
+
+### 13.2 数据可见性分类
+
+| 数据类型 | 存储位置 | 区块浏览器可见 | 说明 |
+|----------|----------|----------------|------|
+| 交易哈希 | 区块链 | 是 | 标准以太坊数据 |
+| 发送者/接收者地址 | 区块链 | 是 | 标准以太坊数据 |
+| Gas、Value | 区块链 | 是 | 标准以太坊数据 |
+| 合约调用输入数据 | 区块链 | 是 | 包括预编译合约参数 |
+| 公钥 | 区块链状态 | 是 | 通过 SGX_KEY_GET_PUBLIC 返回 |
+| 密钥 ID | 区块链状态 | 是 | 只是标识符，不含敏感信息 |
+| 签名数据 | 交易返回值 | 是 | 签名本身是公开的 |
+| 派生秘密 ID | 区块链状态 | 是 | 只是标识符，不含实际秘密 |
+| **私钥** | Gramine 加密分区 | **否** | 永不离开 SGX enclave |
+| **ECDH 派生秘密** | Gramine 加密分区 | **否** | 实际值存储在加密分区 |
+| **对称加密密钥** | Gramine 加密分区 | **否** | 派生的加密密钥 |
+
+### 13.3 预编译合约调用的数据流
+
+```
++------------------+                    +------------------+
+|   智能合约       |                    |   区块浏览器     |
++------------------+                    +------------------+
+        |                                       |
+        | 调用 SGX_KEY_CREATE(curveType=1)      |
+        |-------------------------------------->| 可见: curveType=1
+        |                                       |
+        | 返回: keyId                           |
+        |<--------------------------------------| 可见: keyId
+        |                                       |
+        | 调用 SGX_SIGN(keyId, msgHash)         |
+        |-------------------------------------->| 可见: keyId, msgHash
+        |                                       |
+        | 返回: signature                       |
+        |<--------------------------------------| 可见: signature
+        |                                       |
+        | 调用 SGX_ECDH(myKeyId, peerPubKey)    |
+        |-------------------------------------->| 可见: myKeyId, peerPubKey
+        |                                       |
+        | 返回: derivedSecretId                 |
+        |<--------------------------------------| 可见: derivedSecretId
+        |                                       |   (不可见: 实际的派生秘密值)
+```
+
+### 13.4 安全保证
+
+1. **私钥隔离**：私钥在 SGX enclave 内生成，存储在 Gramine 加密分区，永不出现在交易数据或区块链状态中。
+
+2. **派生秘密保护**：ECDH 等操作产生的派生秘密只返回一个 ID 给合约，实际秘密值存储在加密分区中，只能通过后续的加密/解密操作使用。
+
+3. **操作可审计**：虽然私钥和秘密值不可见，但所有操作（谁创建了密钥、谁进行了签名、谁执行了 ECDH）都记录在链上，可供审计。
+
+4. **元数据可见性**：密钥的元数据（所有者地址、曲线类型、创建时间）是公开的，这是设计如此，便于合约逻辑和用户查询。
+
+### 13.5 区块浏览器实现建议
+
+区块浏览器可以像标准以太坊浏览器一样实现，额外支持以下功能：
+
+```go
+// 解析 SGX 预编译合约调用
+func ParseSGXPrecompileCall(tx *types.Transaction) *SGXCallInfo {
+    to := tx.To()
+    if to == nil {
+        return nil
+    }
+    
+    // 检查是否是 SGX 预编译合约地址 (0x0200 - 0x02FF)
+    addr := to.Big().Uint64()
+    if addr < 0x0200 || addr > 0x02FF {
+        return nil
+    }
+    
+    input := tx.Data()
+    
+    switch addr {
+    case 0x0200: // SGX_KEY_CREATE
+        return &SGXCallInfo{
+            Type:      "KEY_CREATE",
+            CurveType: getCurveName(input[0]),
+        }
+    case 0x0202: // SGX_SIGN
+        return &SGXCallInfo{
+            Type:    "SIGN",
+            KeyID:   common.BytesToHash(input[0:32]).Hex(),
+            MsgHash: common.BytesToHash(input[32:64]).Hex(),
+        }
+    case 0x0204: // SGX_ECDH
+        return &SGXCallInfo{
+            Type:       "ECDH",
+            LocalKeyID: common.BytesToHash(input[0:32]).Hex(),
+            // 对方公钥是公开的
+        }
+    // ... 其他预编译合约
+    }
+    
+    return nil
+}
+```
+
+### 13.6 隐私考虑
+
+虽然私钥和秘密值是安全的，但以下信息是公开可见的，用户应当了解：
+
+| 可见信息 | 隐私影响 | 缓解措施 |
+|----------|----------|----------|
+| 密钥创建时间 | 可推断用户活动模式 | 使用批量创建或延迟创建 |
+| 签名操作频率 | 可推断交易活动 | 使用代理合约聚合操作 |
+| ECDH 参与方 | 可推断通信关系 | 使用中间密钥或混淆 |
+| 密钥所有者地址 | 关联用户身份 | 使用多个地址分散密钥 |
+
+这些是区块链透明性的固有特性，与传统以太坊相同。X Chain 的安全保证是：**即使所有链上数据都被分析，私钥和派生秘密的实际值仍然是安全的**。
+
+## 14. 附录
+
+### 14.1 参考资料
 
 - [Intel SGX Developer Reference](https://download.01.org/intel-sgx/sgx-linux/2.19/docs/)
 - [Gramine Documentation](https://gramine.readthedocs.io/)
 - [go-ethereum Documentation](https://geth.ethereum.org/docs)
 - [RA-TLS Specification](https://gramine.readthedocs.io/en/stable/attestation.html)
 
-### 12.2 术语表
+### 14.2 术语表
 
 | 术语 | 定义 |
 |------|------|
