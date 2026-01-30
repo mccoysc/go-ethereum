@@ -3692,6 +3692,912 @@ mrenclave = [
 | 回滚可能 | 困难 | 恢复旧 MRENCLAVE 即可 |
 | 验证方式 | 区块验证规则 | SGX 远程证明 |
 
+#### 6.1.0.0.1 硬分叉安全风险与防护
+
+硬分叉机制存在一个根本性的安全矛盾：允许硬分叉意味着允许新版本代码访问旧版本的所有加密分区数据（包括私钥）。如果恶意代码的 MRENCLAVE 被加入白名单，所有历史机密数据都会泄露。
+
+**风险分析：**
+
+| 风险类型 | 描述 | 影响 |
+|----------|------|------|
+| 白名单管理被攻破 | 攻击者获得白名单管理权限 | 可添加恶意 MRENCLAVE |
+| 供应链攻击 | 官方发布的代码被植入后门 | 恶意代码获得合法 MRENCLAVE |
+| 内部威胁 | 核心开发者作恶 | 发布包含数据泄露功能的代码 |
+| 社会工程 | 欺骗白名单管理者 | 恶意代码被误加入白名单 |
+
+**核心矛盾：**
+
+```
+信任根的转移:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  SGX 原本的安全模型: "只信任硬件"                                        │
+│                                                                         │
+│  支持硬分叉后: "信任硬件 + 信任白名单管理者"                             │
+│                                                                         │
+│  问题: 白名单管理成为单点故障                                            │
+│        一旦白名单被攻破，所有历史数据永久泄露                            │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 6.1.0.0.2 分层验证者白名单治理机制
+
+为解决白名单管理的单点故障问题，X Chain 采用分层验证者机制，通过 2/3 多数投票来管理 MRENCLAVE 白名单更新。
+
+**分层验证者架构：**
+
+```
++------------------------------------------------------------------+
+|                     白名单治理架构                                 |
++------------------------------------------------------------------+
+|                                                                  |
+|  ┌────────────────────────────────────────────────────────────┐  |
+|  │                    核心验证者层                              │  |
+|  │  (5-7 个固定成员，负责日常升级决策)                          │  |
+|  │                                                            │  |
+|  │  成员构成:                                                  │  |
+|  │  - 项目核心开发者 (2-3 人)                                  │  |
+|  │  - 知名安全审计机构 (1-2 人)                                │  |
+|  │  - 社区选举代表 (1-2 人)                                    │  |
+|  │  - 合作伙伴/生态项目代表 (1 人)                             │  |
+|  │                                                            │  |
+|  │  投票规则: 2/3 多数同意 (如 7 人中需 5 人同意)              │  |
+|  └────────────────────────────────────────────────────────────┘  |
+|                              │                                   |
+|                              │ 提案                              |
+|                              ▼                                   |
+|  ┌────────────────────────────────────────────────────────────┐  |
+|  │                    社区验证者层                              │  |
+|  │  (动态成员，对重大升级有否决权)                              │  |
+|  │                                                            │  |
+|  │  准入条件:                                                  │  |
+|  │  - 节点运行时间 > 30 天                                     │  |
+|  │  - 质押代币 > 10,000 X                                      │  |
+|  │  - SGX 硬件验证通过                                         │  |
+|  │  - 无历史恶意行为记录                                       │  |
+|  │                                                            │  |
+|  │  否决规则: > 1/3 社区验证者反对则否决升级                   │  |
+|  └────────────────────────────────────────────────────────────┘  |
+|                                                                  |
++------------------------------------------------------------------+
+```
+
+**验证者身份与投票权：**
+
+```go
+// governance/validator.go
+package governance
+
+import (
+    "crypto/ecdsa"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// ValidatorType 验证者类型
+type ValidatorType uint8
+
+const (
+    CoreValidator      ValidatorType = 0x01  // 核心验证者
+    CommunityValidator ValidatorType = 0x02  // 社区验证者
+)
+
+// Validator 验证者信息
+type Validator struct {
+    Address       common.Address  // 验证者地址
+    Type          ValidatorType   // 验证者类型
+    PublicKey     *ecdsa.PublicKey // 投票公钥
+    JoinedAt      time.Time       // 加入时间
+    StakedAmount  *big.Int        // 质押数量 (仅社区验证者)
+    NodeUptime    time.Duration   // 节点运行时间
+    SGXVerified   bool            // SGX 硬件验证状态
+    VotingPower   uint64          // 投票权重
+}
+
+// CoreValidatorConfig 核心验证者配置
+type CoreValidatorConfig struct {
+    MinMembers       int     // 最小成员数 (默认 5)
+    MaxMembers       int     // 最大成员数 (默认 7)
+    QuorumThreshold  float64 // 法定人数阈值 (默认 2/3)
+}
+
+// CommunityValidatorConfig 社区验证者配置
+type CommunityValidatorConfig struct {
+    MinUptime        time.Duration // 最小运行时间 (默认 30 天)
+    MinStake         *big.Int      // 最小质押量 (默认 10,000 X)
+    VetoThreshold    float64       // 否决阈值 (默认 1/3)
+}
+
+// DefaultCoreValidatorConfig 默认核心验证者配置
+func DefaultCoreValidatorConfig() *CoreValidatorConfig {
+    return &CoreValidatorConfig{
+        MinMembers:      5,
+        MaxMembers:      7,
+        QuorumThreshold: 0.667, // 2/3
+    }
+}
+
+// DefaultCommunityValidatorConfig 默认社区验证者配置
+func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
+    return &CommunityValidatorConfig{
+        MinUptime:     30 * 24 * time.Hour, // 30 天
+        MinStake:      big.NewInt(10000),   // 10,000 X
+        VetoThreshold: 0.334,               // 1/3
+    }
+}
+```
+
+**白名单更新提案与投票流程：**
+
+```
+白名单更新流程
+==============
+
+1. 提案阶段
+   ├── 核心验证者提交 MRENCLAVE 更新提案
+   ├── 提案内容: 新 MRENCLAVE、版本说明、审计报告链接
+   └── 提案进入公示期
+
+2. 核心验证者投票阶段 (3 天)
+   ├── 核心验证者审查代码和审计报告
+   ├── 核心验证者投票 (同意/反对/弃权)
+   └── 需要 2/3 多数同意才能进入下一阶段
+
+3. 社区公示与否决阶段 (7 天)
+   ├── 提案向全网公示
+   ├── 社区验证者可以投否决票
+   ├── 如果 > 1/3 社区验证者否决，提案被拒绝
+   └── 公示期结束且未被否决，提案通过
+
+4. 生效阶段
+   ├── 新 MRENCLAVE 加入白名单
+   ├── 节点可以开始升级
+   └── 数据迁移通道开启
+
+紧急升级流程 (安全漏洞修复)
+===========================
+
+1. 紧急提案
+   ├── 需要 100% 核心验证者同意
+   ├── 必须附带安全漏洞详情和修复说明
+   └── 只能用于安全修复，不能添加新功能
+
+2. 快速公示期 (24 小时)
+   ├── 社区验证者仍有否决权
+   └── 否决阈值提高到 1/2
+
+3. 立即生效
+   └── 公示期结束后立即生效
+```
+
+**投票合约实现：**
+
+```go
+// governance/whitelist_governance.go
+package governance
+
+import (
+    "errors"
+    "sync"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// ProposalType 提案类型
+type ProposalType uint8
+
+const (
+    NormalUpgrade    ProposalType = 0x01  // 普通升级
+    EmergencyUpgrade ProposalType = 0x02  // 紧急升级
+)
+
+// ProposalStatus 提案状态
+type ProposalStatus uint8
+
+const (
+    ProposalPending      ProposalStatus = 0x00  // 待投票
+    ProposalCoreVoting   ProposalStatus = 0x01  // 核心验证者投票中
+    ProposalPublicReview ProposalStatus = 0x02  // 社区公示中
+    ProposalApproved     ProposalStatus = 0x03  // 已通过
+    ProposalRejected     ProposalStatus = 0x04  // 已拒绝
+    ProposalExpired      ProposalStatus = 0x05  // 已过期
+)
+
+// WhitelistProposal MRENCLAVE 白名单更新提案
+type WhitelistProposal struct {
+    ID              common.Hash     // 提案 ID
+    Proposer        common.Address  // 提案者
+    Type            ProposalType    // 提案类型
+    NewMREnclave    []byte          // 新的 MRENCLAVE
+    VersionInfo     string          // 版本说明
+    AuditReportURL  string          // 审计报告链接
+    CreatedAt       time.Time       // 创建时间
+    Status          ProposalStatus  // 当前状态
+    
+    // 核心验证者投票
+    CoreVotes       map[common.Address]bool  // true=同意, false=反对
+    CoreVoteDeadline time.Time               // 核心投票截止时间
+    
+    // 社区验证者否决
+    CommunityVetos  map[common.Address]bool  // true=否决
+    PublicReviewEnd time.Time                // 公示期结束时间
+}
+
+// WhitelistGovernance 白名单治理合约
+type WhitelistGovernance struct {
+    mu sync.RWMutex
+    
+    coreConfig      *CoreValidatorConfig
+    communityConfig *CommunityValidatorConfig
+    
+    coreValidators      map[common.Address]*Validator
+    communityValidators map[common.Address]*Validator
+    
+    proposals map[common.Hash]*WhitelistProposal
+    whitelist map[string]bool  // MRENCLAVE 白名单
+}
+
+// NewWhitelistGovernance 创建白名单治理实例
+func NewWhitelistGovernance(
+    coreConfig *CoreValidatorConfig,
+    communityConfig *CommunityValidatorConfig,
+) *WhitelistGovernance {
+    return &WhitelistGovernance{
+        coreConfig:          coreConfig,
+        communityConfig:     communityConfig,
+        coreValidators:      make(map[common.Address]*Validator),
+        communityValidators: make(map[common.Address]*Validator),
+        proposals:           make(map[common.Hash]*WhitelistProposal),
+        whitelist:           make(map[string]bool),
+    }
+}
+
+// SubmitProposal 提交白名单更新提案
+func (g *WhitelistGovernance) SubmitProposal(
+    proposer common.Address,
+    proposalType ProposalType,
+    newMREnclave []byte,
+    versionInfo string,
+    auditReportURL string,
+) (*WhitelistProposal, error) {
+    g.mu.Lock()
+    defer g.mu.Unlock()
+    
+    // 验证提案者是核心验证者
+    if _, ok := g.coreValidators[proposer]; !ok {
+        return nil, errors.New("only core validators can submit proposals")
+    }
+    
+    // 创建提案
+    proposal := &WhitelistProposal{
+        ID:              common.BytesToHash(newMREnclave),
+        Proposer:        proposer,
+        Type:            proposalType,
+        NewMREnclave:    newMREnclave,
+        VersionInfo:     versionInfo,
+        AuditReportURL:  auditReportURL,
+        CreatedAt:       time.Now(),
+        Status:          ProposalCoreVoting,
+        CoreVotes:       make(map[common.Address]bool),
+        CommunityVetos:  make(map[common.Address]bool),
+    }
+    
+    // 设置投票截止时间
+    if proposalType == EmergencyUpgrade {
+        proposal.CoreVoteDeadline = time.Now().Add(6 * time.Hour)
+        proposal.PublicReviewEnd = time.Now().Add(24 * time.Hour)
+    } else {
+        proposal.CoreVoteDeadline = time.Now().Add(3 * 24 * time.Hour)
+        proposal.PublicReviewEnd = time.Now().Add(10 * 24 * time.Hour) // 3天投票 + 7天公示
+    }
+    
+    g.proposals[proposal.ID] = proposal
+    return proposal, nil
+}
+
+// CoreVote 核心验证者投票
+func (g *WhitelistGovernance) CoreVote(
+    proposalID common.Hash,
+    voter common.Address,
+    approve bool,
+    signature []byte,
+) error {
+    g.mu.Lock()
+    defer g.mu.Unlock()
+    
+    proposal, ok := g.proposals[proposalID]
+    if !ok {
+        return errors.New("proposal not found")
+    }
+    
+    if proposal.Status != ProposalCoreVoting {
+        return errors.New("proposal not in core voting phase")
+    }
+    
+    if time.Now().After(proposal.CoreVoteDeadline) {
+        return errors.New("core voting period ended")
+    }
+    
+    // 验证投票者是核心验证者
+    validator, ok := g.coreValidators[voter]
+    if !ok || validator.Type != CoreValidator {
+        return errors.New("only core validators can vote")
+    }
+    
+    // TODO: 验证签名
+    
+    // 记录投票
+    proposal.CoreVotes[voter] = approve
+    
+    // 检查是否达到法定人数
+    g.checkCoreVotingResult(proposal)
+    
+    return nil
+}
+
+// checkCoreVotingResult 检查核心投票结果
+func (g *WhitelistGovernance) checkCoreVotingResult(proposal *WhitelistProposal) {
+    totalCoreValidators := len(g.coreValidators)
+    approveCount := 0
+    rejectCount := 0
+    
+    for _, approve := range proposal.CoreVotes {
+        if approve {
+            approveCount++
+        } else {
+            rejectCount++
+        }
+    }
+    
+    // 紧急升级需要 100% 同意
+    if proposal.Type == EmergencyUpgrade {
+        if approveCount == totalCoreValidators {
+            proposal.Status = ProposalPublicReview
+        } else if rejectCount > 0 {
+            proposal.Status = ProposalRejected
+        }
+        return
+    }
+    
+    // 普通升级需要 2/3 同意
+    threshold := int(float64(totalCoreValidators) * g.coreConfig.QuorumThreshold)
+    if approveCount >= threshold {
+        proposal.Status = ProposalPublicReview
+    } else if rejectCount > totalCoreValidators-threshold {
+        // 反对票已经足够阻止通过
+        proposal.Status = ProposalRejected
+    }
+}
+
+// CommunityVeto 社区验证者否决
+func (g *WhitelistGovernance) CommunityVeto(
+    proposalID common.Hash,
+    voter common.Address,
+    signature []byte,
+) error {
+    g.mu.Lock()
+    defer g.mu.Unlock()
+    
+    proposal, ok := g.proposals[proposalID]
+    if !ok {
+        return errors.New("proposal not found")
+    }
+    
+    if proposal.Status != ProposalPublicReview {
+        return errors.New("proposal not in public review phase")
+    }
+    
+    if time.Now().After(proposal.PublicReviewEnd) {
+        return errors.New("public review period ended")
+    }
+    
+    // 验证投票者是社区验证者
+    validator, ok := g.communityValidators[voter]
+    if !ok || validator.Type != CommunityValidator {
+        return errors.New("only community validators can veto")
+    }
+    
+    // TODO: 验证签名
+    
+    // 记录否决
+    proposal.CommunityVetos[voter] = true
+    
+    // 检查是否达到否决阈值
+    g.checkCommunityVetoResult(proposal)
+    
+    return nil
+}
+
+// checkCommunityVetoResult 检查社区否决结果
+func (g *WhitelistGovernance) checkCommunityVetoResult(proposal *WhitelistProposal) {
+    totalCommunityValidators := len(g.communityValidators)
+    vetoCount := len(proposal.CommunityVetos)
+    
+    // 确定否决阈值
+    var threshold float64
+    if proposal.Type == EmergencyUpgrade {
+        threshold = 0.5  // 紧急升级需要 1/2 否决
+    } else {
+        threshold = g.communityConfig.VetoThreshold  // 普通升级需要 1/3 否决
+    }
+    
+    vetoThreshold := int(float64(totalCommunityValidators) * threshold)
+    if vetoCount > vetoThreshold {
+        proposal.Status = ProposalRejected
+    }
+}
+
+// FinalizeProposal 完成提案（公示期结束后调用）
+func (g *WhitelistGovernance) FinalizeProposal(proposalID common.Hash) error {
+    g.mu.Lock()
+    defer g.mu.Unlock()
+    
+    proposal, ok := g.proposals[proposalID]
+    if !ok {
+        return errors.New("proposal not found")
+    }
+    
+    if proposal.Status != ProposalPublicReview {
+        return errors.New("proposal not in public review phase")
+    }
+    
+    if time.Now().Before(proposal.PublicReviewEnd) {
+        return errors.New("public review period not ended")
+    }
+    
+    // 提案通过，加入白名单
+    proposal.Status = ProposalApproved
+    g.whitelist[string(proposal.NewMREnclave)] = true
+    
+    return nil
+}
+
+// IsWhitelisted 检查 MRENCLAVE 是否在白名单中
+func (g *WhitelistGovernance) IsWhitelisted(mrenclave []byte) bool {
+    g.mu.RLock()
+    defer g.mu.RUnlock()
+    return g.whitelist[string(mrenclave)]
+}
+```
+
+**防止女巫攻击：**
+
+社区验证者的准入条件设计用于防止女巫攻击：
+
+| 防护措施 | 作用 | 攻击成本 |
+|----------|------|----------|
+| 最小运行时间 30 天 | 攻击者需要提前部署节点 | 时间成本 |
+| 最小质押 10,000 X | 攻击者需要大量资金 | 资金成本 |
+| SGX 硬件验证 | 每个物理 CPU 只能注册一个验证者 | 硬件成本 |
+| 历史行为记录 | 恶意行为会被记录并禁止 | 声誉成本 |
+
+```go
+// governance/sybil_protection.go
+package governance
+
+import (
+    "errors"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// SybilProtection 女巫攻击防护
+type SybilProtection struct {
+    // SGX 硬件 ID 到验证者地址的映射（防止同一硬件注册多个验证者）
+    hardwareToValidator map[string]common.Address
+    
+    // 验证者黑名单
+    blacklist map[common.Address]time.Time
+}
+
+// RegisterCommunityValidator 注册社区验证者
+func (s *SybilProtection) RegisterCommunityValidator(
+    address common.Address,
+    sgxQuote []byte,
+    stakeAmount *big.Int,
+    nodeUptime time.Duration,
+    config *CommunityValidatorConfig,
+) error {
+    // 1. 检查是否在黑名单中
+    if banTime, ok := s.blacklist[address]; ok {
+        if time.Now().Before(banTime) {
+            return errors.New("address is blacklisted")
+        }
+        delete(s.blacklist, address)
+    }
+    
+    // 2. 验证 SGX Quote 并提取硬件 ID
+    hardwareID, err := extractHardwareID(sgxQuote)
+    if err != nil {
+        return errors.New("invalid SGX quote")
+    }
+    
+    // 3. 检查硬件是否已被其他验证者使用
+    if existingValidator, ok := s.hardwareToValidator[hardwareID]; ok {
+        if existingValidator != address {
+            return errors.New("hardware already registered by another validator")
+        }
+    }
+    
+    // 4. 检查质押数量
+    if stakeAmount.Cmp(config.MinStake) < 0 {
+        return errors.New("insufficient stake amount")
+    }
+    
+    // 5. 检查节点运行时间
+    if nodeUptime < config.MinUptime {
+        return errors.New("insufficient node uptime")
+    }
+    
+    // 6. 注册成功
+    s.hardwareToValidator[hardwareID] = address
+    return nil
+}
+
+// extractHardwareID 从 SGX Quote 中提取硬件唯一标识
+func extractHardwareID(sgxQuote []byte) (string, error) {
+    // 从 Quote 中提取 EPID 或 DCAP 硬件标识
+    // 这个标识对于每个物理 CPU 是唯一的
+    // TODO: 实现具体的提取逻辑
+    return "", nil
+}
+```
+
+#### 6.1.0.0.3 用户级密钥迁移授权
+
+即使白名单治理机制被攻破，用户仍然可以通过拒绝授权来保护自己的私钥。
+
+**设计原则：**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  核心原则: 用户是自己私钥的最终守护者                                    │
+│                                                                         │
+│  即使:                                                                  │
+│  - 2/3 核心验证者被收买                                                 │
+│  - 恶意 MRENCLAVE 被加入白名单                                          │
+│  - 攻击者控制了网络中的大部分节点                                        │
+│                                                                         │
+│  用户的私钥仍然安全，因为:                                               │
+│  - 私钥迁移需要用户用以太坊私钥签名授权                                  │
+│  - 没有用户授权，新版本代码无法获取用户的私钥                            │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**密钥迁移授权机制：**
+
+```go
+// keystore/migration_auth.go
+package keystore
+
+import (
+    "crypto/ecdsa"
+    "errors"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+    "github.com/ethereum/go-ethereum/crypto"
+)
+
+// MigrationAuthRequest 密钥迁移授权请求
+type MigrationAuthRequest struct {
+    KeyID           common.Hash    // 要迁移的密钥 ID
+    Owner           common.Address // 密钥所有者
+    SourceMREnclave []byte         // 源版本 MRENCLAVE
+    TargetMREnclave []byte         // 目标版本 MRENCLAVE
+    RequestTime     time.Time      // 请求时间
+    ExpiresAt       time.Time      // 授权过期时间
+    Signature       []byte         // 用户签名
+}
+
+// MigrationAuthManager 迁移授权管理器
+type MigrationAuthManager struct {
+    // 已授权的迁移请求
+    authorizedMigrations map[common.Hash]*MigrationAuthRequest
+}
+
+// RequestMigrationAuth 请求密钥迁移授权
+// 返回需要用户签名的消息
+func (m *MigrationAuthManager) RequestMigrationAuth(
+    keyID common.Hash,
+    owner common.Address,
+    sourceMREnclave []byte,
+    targetMREnclave []byte,
+) ([]byte, error) {
+    // 构造需要签名的消息
+    message := constructMigrationMessage(keyID, owner, sourceMREnclave, targetMREnclave)
+    return message, nil
+}
+
+// constructMigrationMessage 构造迁移授权消息
+func constructMigrationMessage(
+    keyID common.Hash,
+    owner common.Address,
+    sourceMREnclave []byte,
+    targetMREnclave []byte,
+) []byte {
+    // 消息格式:
+    // "X Chain Key Migration Authorization\n"
+    // "Key ID: {keyID}\n"
+    // "Owner: {owner}\n"
+    // "From MRENCLAVE: {sourceMREnclave}\n"
+    // "To MRENCLAVE: {targetMREnclave}\n"
+    // "Timestamp: {timestamp}\n"
+    // "Valid for: 24 hours"
+    
+    timestamp := time.Now().Unix()
+    message := []byte("X Chain Key Migration Authorization\n")
+    message = append(message, []byte("Key ID: ")...)
+    message = append(message, keyID.Bytes()...)
+    message = append(message, []byte("\nOwner: ")...)
+    message = append(message, owner.Bytes()...)
+    message = append(message, []byte("\nFrom MRENCLAVE: ")...)
+    message = append(message, sourceMREnclave...)
+    message = append(message, []byte("\nTo MRENCLAVE: ")...)
+    message = append(message, targetMREnclave...)
+    message = append(message, []byte("\nTimestamp: ")...)
+    message = append(message, []byte(string(timestamp))...)
+    message = append(message, []byte("\nValid for: 24 hours")...)
+    
+    return message
+}
+
+// SubmitMigrationAuth 提交迁移授权（用户签名后）
+func (m *MigrationAuthManager) SubmitMigrationAuth(
+    keyID common.Hash,
+    owner common.Address,
+    sourceMREnclave []byte,
+    targetMREnclave []byte,
+    signature []byte,
+) error {
+    // 1. 重构消息
+    message := constructMigrationMessage(keyID, owner, sourceMREnclave, targetMREnclave)
+    messageHash := crypto.Keccak256Hash(message)
+    
+    // 2. 从签名恢复公钥
+    pubKey, err := crypto.SigToPub(messageHash.Bytes(), signature)
+    if err != nil {
+        return errors.New("invalid signature")
+    }
+    
+    // 3. 验证签名者是密钥所有者
+    recoveredAddr := crypto.PubkeyToAddress(*pubKey)
+    if recoveredAddr != owner {
+        return errors.New("signature does not match owner")
+    }
+    
+    // 4. 记录授权
+    authRequest := &MigrationAuthRequest{
+        KeyID:           keyID,
+        Owner:           owner,
+        SourceMREnclave: sourceMREnclave,
+        TargetMREnclave: targetMREnclave,
+        RequestTime:     time.Now(),
+        ExpiresAt:       time.Now().Add(24 * time.Hour),
+        Signature:       signature,
+    }
+    
+    m.authorizedMigrations[keyID] = authRequest
+    return nil
+}
+
+// IsMigrationAuthorized 检查密钥迁移是否已授权
+func (m *MigrationAuthManager) IsMigrationAuthorized(
+    keyID common.Hash,
+    targetMREnclave []byte,
+) bool {
+    auth, ok := m.authorizedMigrations[keyID]
+    if !ok {
+        return false
+    }
+    
+    // 检查是否过期
+    if time.Now().After(auth.ExpiresAt) {
+        delete(m.authorizedMigrations, keyID)
+        return false
+    }
+    
+    // 检查目标 MRENCLAVE 是否匹配
+    if !bytes.Equal(auth.TargetMREnclave, targetMREnclave) {
+        return false
+    }
+    
+    return true
+}
+```
+
+**用户迁移流程：**
+
+```
+用户密钥迁移流程
+================
+
+1. 升级公告
+   ├── 用户收到新版本升级通知
+   ├── 用户查看新版本的审计报告和变更说明
+   └── 用户决定是否升级
+
+2. 授权请求
+   ├── 用户的钱包客户端显示迁移授权请求
+   ├── 显示内容:
+   │   - 要迁移的密钥列表
+   │   - 源版本 MRENCLAVE
+   │   - 目标版本 MRENCLAVE
+   │   - 授权有效期 (24 小时)
+   └── 用户使用以太坊私钥签名授权
+
+3. 密钥迁移
+   ├── 旧版本节点验证用户授权
+   ├── 解封用户私钥
+   ├── 通过 RA-TLS 传输到新版本节点
+   └── 新版本节点重新封装
+
+4. 迁移完成
+   ├── 用户确认新版本可以正常使用密钥
+   └── 旧版本授权自动过期
+
+不授权的后果
+============
+
+如果用户选择不授权迁移:
+- 用户的私钥保留在旧版本节点中
+- 用户可以继续使用旧版本（如果旧版本仍在白名单中）
+- 如果旧版本被移出白名单，用户需要:
+  - 授权迁移到新版本，或
+  - 使用其他方式导出/备份密钥（如果支持）
+```
+
+**安全保证：**
+
+| 攻击场景 | 防护机制 | 用户操作 |
+|----------|----------|----------|
+| 恶意升级 | 用户不授权迁移 | 拒绝签名 |
+| 钓鱼攻击 | 验证 MRENCLAVE 是否为官方发布 | 核对审计报告 |
+| 中间人攻击 | RA-TLS 端到端加密 | 无需额外操作 |
+| 授权被盗用 | 授权绑定特定 MRENCLAVE | 检查授权内容 |
+
+#### 6.1.0.0.4 渐进式权限机制
+
+新版本代码在获得白名单批准后，不会立即获得完全权限，而是需要经过一段验证期。
+
+```go
+// governance/progressive_permission.go
+package governance
+
+import (
+    "time"
+)
+
+// PermissionLevel 权限级别
+type PermissionLevel uint8
+
+const (
+    PermissionBasic    PermissionLevel = 0x01  // 基础权限
+    PermissionStandard PermissionLevel = 0x02  // 标准权限
+    PermissionFull     PermissionLevel = 0x03  // 完全权限
+)
+
+// ProgressivePermissionConfig 渐进式权限配置
+type ProgressivePermissionConfig struct {
+    // 基础权限期 (默认 7 天)
+    // 只能执行基本操作，不能批量迁移密钥
+    BasicPeriod time.Duration
+    
+    // 标准权限期 (默认 30 天)
+    // 可以执行大部分操作，但有速率限制
+    StandardPeriod time.Duration
+    
+    // 完全权限
+    // 无限制
+}
+
+// DefaultProgressivePermissionConfig 默认配置
+func DefaultProgressivePermissionConfig() *ProgressivePermissionConfig {
+    return &ProgressivePermissionConfig{
+        BasicPeriod:    7 * 24 * time.Hour,   // 7 天
+        StandardPeriod: 30 * 24 * time.Hour,  // 30 天
+    }
+}
+
+// PermissionManager 权限管理器
+type PermissionManager struct {
+    config *ProgressivePermissionConfig
+    
+    // MRENCLAVE 加入白名单的时间
+    whitelistTime map[string]time.Time
+}
+
+// GetPermissionLevel 获取 MRENCLAVE 的当前权限级别
+func (p *PermissionManager) GetPermissionLevel(mrenclave []byte) PermissionLevel {
+    joinTime, ok := p.whitelistTime[string(mrenclave)]
+    if !ok {
+        return 0  // 不在白名单中
+    }
+    
+    elapsed := time.Since(joinTime)
+    
+    if elapsed < p.config.BasicPeriod {
+        return PermissionBasic
+    }
+    
+    if elapsed < p.config.StandardPeriod {
+        return PermissionStandard
+    }
+    
+    return PermissionFull
+}
+
+// PermissionRestrictions 各权限级别的限制
+type PermissionRestrictions struct {
+    // 基础权限限制
+    Basic struct {
+        MaxKeyMigrationsPerDay int  // 每天最多迁移密钥数 (默认 10)
+        AllowBatchMigration    bool // 是否允许批量迁移 (默认 false)
+        AllowKeyExport         bool // 是否允许密钥导出 (默认 false)
+    }
+    
+    // 标准权限限制
+    Standard struct {
+        MaxKeyMigrationsPerDay int  // 每天最多迁移密钥数 (默认 100)
+        AllowBatchMigration    bool // 是否允许批量迁移 (默认 true)
+        AllowKeyExport         bool // 是否允许密钥导出 (默认 false)
+    }
+    
+    // 完全权限
+    Full struct {
+        // 无限制
+    }
+}
+
+// DefaultPermissionRestrictions 默认限制
+func DefaultPermissionRestrictions() *PermissionRestrictions {
+    r := &PermissionRestrictions{}
+    
+    r.Basic.MaxKeyMigrationsPerDay = 10
+    r.Basic.AllowBatchMigration = false
+    r.Basic.AllowKeyExport = false
+    
+    r.Standard.MaxKeyMigrationsPerDay = 100
+    r.Standard.AllowBatchMigration = true
+    r.Standard.AllowKeyExport = false
+    
+    return r
+}
+```
+
+**渐进式权限时间线：**
+
+```
+新版本加入白名单后的权限演进
+============================
+
+Day 0-7: 基础权限期
+├── 可以: 正常区块生产、交易处理、新密钥创建
+├── 限制: 每天最多迁移 10 个密钥
+├── 禁止: 批量迁移、密钥导出
+└── 目的: 给社区时间发现潜在问题
+
+Day 7-30: 标准权限期
+├── 可以: 大部分正常操作
+├── 限制: 每天最多迁移 100 个密钥
+├── 禁止: 密钥导出
+└── 目的: 逐步放开限制，观察运行情况
+
+Day 30+: 完全权限
+├── 可以: 所有操作
+├── 限制: 无
+└── 目的: 版本已经过充分验证
+```
+
+**安全效果：**
+
+即使恶意代码通过了 2/3 投票并加入白名单：
+1. 前 7 天只能每天迁移 10 个密钥，大规模数据泄露需要很长时间
+2. 社区有 7-30 天时间发现异常并发起否决/回滚
+3. 用户有时间注意到异常并拒绝授权迁移
+
 #### 6.1.0.1 硬分叉数据迁移与保留
 
 硬分叉时必须保留分叉前的所有数据，包括区块链状态、账户余额、合约存储、以及加密分区中的私钥数据。
