@@ -4302,6 +4302,457 @@ func extractHardwareID(sgxQuote []byte) (string, error) {
 }
 ```
 
+**投票人列表链上记录与迁移前置条件：**
+
+为防止恶意节点自己运营多个节点进行投票并导出数据，X Chain 在每个区块中记录投票人列表快照，并在数据迁移前强制验证投票合法性。
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  核心安全原则: 没有合法投票和合法共识，用户秘密数据不允许迁移             │
+│                                                                         │
+│  1. 投票人列表链上记录 - 每个区块记录当前投票人列表快照                   │
+│  2. 投票完整性验证 - 迁移前验证投票是否达到法定人数                       │
+│  3. SGX 内部强制执行 - enclave 代码强制检查投票合法性                    │
+│  4. 可追溯性 - 任何人都能验证"该投票的人是否投了票"                      │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+```go
+// governance/voter_list_snapshot.go
+package governance
+
+import (
+    "crypto/sha256"
+    "encoding/binary"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// VoterListSnapshot 投票人列表快照
+type VoterListSnapshot struct {
+    BlockNumber     uint64                      // 区块高度
+    BlockHash       common.Hash                 // 区块哈希
+    Timestamp       uint64                      // 时间戳
+    
+    // 核心验证者列表
+    CoreValidators  []ValidatorInfo             // 核心验证者信息
+    CoreListRoot    common.Hash                 // 核心验证者列表 Merkle 根
+    
+    // 社区验证者列表
+    CommunityValidators []ValidatorInfo         // 社区验证者信息
+    CommunityListRoot   common.Hash             // 社区验证者列表 Merkle 根
+    
+    // 综合根哈希（记录在区块头中）
+    VoterListRoot   common.Hash                 // 投票人列表综合 Merkle 根
+}
+
+// ValidatorInfo 验证者信息（用于快照）
+type ValidatorInfo struct {
+    Address       common.Address  // 验证者地址
+    PublicKey     []byte          // 投票公钥
+    VotingPower   uint64          // 投票权重
+    JoinedBlock   uint64          // 加入时的区块高度
+    SGXQuoteHash  common.Hash     // SGX Quote 哈希（用于验证硬件唯一性）
+}
+
+// BlockHeaderExtension 区块头扩展字段
+type BlockHeaderExtension struct {
+    // 原有字段...
+    
+    // 新增：投票人列表根哈希
+    VoterListRoot common.Hash  // 当前区块生成时的投票人列表 Merkle 根
+}
+
+// CalculateVoterListRoot 计算投票人列表根哈希
+func CalculateVoterListRoot(snapshot *VoterListSnapshot) common.Hash {
+    // 1. 计算核心验证者列表 Merkle 根
+    coreRoot := calculateValidatorListRoot(snapshot.CoreValidators)
+    
+    // 2. 计算社区验证者列表 Merkle 根
+    communityRoot := calculateValidatorListRoot(snapshot.CommunityValidators)
+    
+    // 3. 组合计算综合根
+    combined := append(coreRoot[:], communityRoot[:]...)
+    hash := sha256.Sum256(combined)
+    return common.BytesToHash(hash[:])
+}
+
+// calculateValidatorListRoot 计算验证者列表 Merkle 根
+func calculateValidatorListRoot(validators []ValidatorInfo) common.Hash {
+    if len(validators) == 0 {
+        return common.Hash{}
+    }
+    
+    // 构建 Merkle 树
+    leaves := make([]common.Hash, len(validators))
+    for i, v := range validators {
+        leaves[i] = hashValidatorInfo(&v)
+    }
+    
+    return buildMerkleRoot(leaves)
+}
+```
+
+**投票记录链上存储：**
+
+```go
+// governance/vote_record.go
+package governance
+
+// VoteRecord 投票记录（存储在链上）
+type VoteRecord struct {
+    ProposalID      common.Hash     // 提案 ID
+    Voter           common.Address  // 投票者地址
+    VoteType        VoteType        // 投票类型
+    Timestamp       uint64          // 投票时间戳
+    BlockNumber     uint64          // 投票所在区块
+    Signature       []byte          // 投票签名
+    
+    // 投票时的投票人列表快照引用
+    VoterListRoot   common.Hash     // 投票时的投票人列表根哈希
+}
+
+type VoteType uint8
+
+const (
+    VoteApprove VoteType = 0x01  // 同意
+    VoteReject  VoteType = 0x02  // 反对
+    VoteAbstain VoteType = 0x03  // 弃权
+)
+
+// ProposalVotingState 提案投票状态（链上存储）
+type ProposalVotingState struct {
+    ProposalID          common.Hash             // 提案 ID
+    VoterListSnapshot   common.Hash             // 投票开始时的投票人列表快照
+    ExpectedVoters      []common.Address        // 应该投票的验证者列表
+    ActualVotes         map[common.Address]*VoteRecord  // 实际投票记录
+    
+    // 投票统计
+    ApproveCount        int                     // 同意票数
+    RejectCount         int                     // 反对票数
+    AbstainCount        int                     // 弃权票数
+    NotVotedCount       int                     // 未投票数
+    
+    // 状态
+    IsComplete          bool                    // 投票是否完成
+    IsValid             bool                    // 投票是否有效（达到法定人数）
+}
+
+// GetNotVotedValidators 获取未投票的验证者列表
+func (s *ProposalVotingState) GetNotVotedValidators() []common.Address {
+    notVoted := make([]common.Address, 0)
+    for _, voter := range s.ExpectedVoters {
+        if _, ok := s.ActualVotes[voter]; !ok {
+            notVoted = append(notVoted, voter)
+        }
+    }
+    return notVoted
+}
+
+// ValidateVotingResult 验证投票结果是否合法
+func (s *ProposalVotingState) ValidateVotingResult(threshold float64) error {
+    totalExpected := len(s.ExpectedVoters)
+    if totalExpected == 0 {
+        return errors.New("no expected voters")
+    }
+    
+    // 检查是否达到法定人数
+    requiredVotes := int(float64(totalExpected) * threshold)
+    if s.ApproveCount < requiredVotes {
+        return fmt.Errorf("insufficient votes: got %d, need %d (%.0f%% of %d)",
+            s.ApproveCount, requiredVotes, threshold*100, totalExpected)
+    }
+    
+    // 检查所有投票是否来自预期的投票人列表
+    for voter := range s.ActualVotes {
+        found := false
+        for _, expected := range s.ExpectedVoters {
+            if voter == expected {
+                found = true
+                break
+            }
+        }
+        if !found {
+            return fmt.Errorf("vote from unexpected voter: %s", voter.Hex())
+        }
+    }
+    
+    return nil
+}
+```
+
+**迁移前置条件验证（SGX enclave 内部强制执行）：**
+
+```go
+// keystore/migration_precondition.go
+package keystore
+
+import (
+    "errors"
+    "fmt"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// MigrationPrecondition 迁移前置条件验证器
+// 注意：此代码在 SGX enclave 内部运行，无法被绕过
+type MigrationPrecondition struct {
+    governance      *WhitelistGovernance
+    chainReader     ChainReader
+}
+
+// MigrationRequest 迁移请求
+type MigrationRequest struct {
+    TargetMREnclave []byte          // 目标 MRENCLAVE
+    SourceNodeID    common.Hash     // 源节点 ID
+    TargetNodeID    common.Hash     // 目标节点 ID
+    KeyIDs          []common.Hash   // 要迁移的密钥 ID 列表
+}
+
+// ValidateMigrationRequest 验证迁移请求是否合法
+// 此函数在 SGX enclave 内部执行，确保无法绕过
+func (p *MigrationPrecondition) ValidateMigrationRequest(req *MigrationRequest) error {
+    // 1. 验证目标 MRENCLAVE 是否在白名单中
+    if !p.governance.IsWhitelisted(req.TargetMREnclave) {
+        return errors.New("target MRENCLAVE not in whitelist")
+    }
+    
+    // 2. 获取将目标 MRENCLAVE 加入白名单的提案
+    proposal, err := p.governance.GetApprovedProposal(req.TargetMREnclave)
+    if err != nil {
+        return fmt.Errorf("failed to get approved proposal: %w", err)
+    }
+    
+    // 3. 验证投票是否合法
+    votingState, err := p.governance.GetProposalVotingState(proposal.ID)
+    if err != nil {
+        return fmt.Errorf("failed to get voting state: %w", err)
+    }
+    
+    // 4. 验证投票完整性
+    if err := p.validateVotingIntegrity(votingState, proposal); err != nil {
+        return fmt.Errorf("voting integrity check failed: %w", err)
+    }
+    
+    // 5. 验证投票人列表快照
+    if err := p.validateVoterListSnapshot(votingState); err != nil {
+        return fmt.Errorf("voter list snapshot validation failed: %w", err)
+    }
+    
+    return nil
+}
+
+// validateVotingIntegrity 验证投票完整性
+func (p *MigrationPrecondition) validateVotingIntegrity(
+    votingState *ProposalVotingState,
+    proposal *WhitelistProposal,
+) error {
+    // 1. 检查投票是否完成
+    if !votingState.IsComplete {
+        return errors.New("voting not complete")
+    }
+    
+    // 2. 检查投票是否有效
+    if !votingState.IsValid {
+        return errors.New("voting result not valid")
+    }
+    
+    // 3. 验证投票结果（核心验证者 2/3 同意）
+    threshold := 0.67  // 2/3
+    if err := votingState.ValidateVotingResult(threshold); err != nil {
+        return err
+    }
+    
+    // 4. 检查是否有未投票的核心验证者（警告，但不阻止）
+    notVoted := votingState.GetNotVotedValidators()
+    if len(notVoted) > 0 {
+        // 记录警告日志，但只要达到 2/3 就允许迁移
+        logWarning("validators did not vote: %v", notVoted)
+    }
+    
+    return nil
+}
+
+// validateVoterListSnapshot 验证投票人列表快照
+func (p *MigrationPrecondition) validateVoterListSnapshot(
+    votingState *ProposalVotingState,
+) error {
+    // 1. 获取投票时的投票人列表快照
+    snapshotRoot := votingState.VoterListSnapshot
+    
+    // 2. 从链上获取该快照对应的区块
+    snapshot, err := p.chainReader.GetVoterListSnapshot(snapshotRoot)
+    if err != nil {
+        return fmt.Errorf("failed to get voter list snapshot: %w", err)
+    }
+    
+    // 3. 验证快照的 Merkle 根
+    calculatedRoot := CalculateVoterListRoot(snapshot)
+    if calculatedRoot != snapshotRoot {
+        return errors.New("voter list snapshot root mismatch")
+    }
+    
+    // 4. 验证所有投票者都在快照的投票人列表中
+    for voter := range votingState.ActualVotes {
+        if !isValidatorInSnapshot(voter, snapshot) {
+            return fmt.Errorf("voter %s not in snapshot", voter.Hex())
+        }
+    }
+    
+    return nil
+}
+
+// isValidatorInSnapshot 检查验证者是否在快照中
+func isValidatorInSnapshot(voter common.Address, snapshot *VoterListSnapshot) bool {
+    for _, v := range snapshot.CoreValidators {
+        if v.Address == voter {
+            return true
+        }
+    }
+    for _, v := range snapshot.CommunityValidators {
+        if v.Address == voter {
+            return true
+        }
+    }
+    return false
+}
+```
+
+**投票透明性查询接口：**
+
+```go
+// governance/voting_transparency.go
+package governance
+
+// VotingTransparencyQuery 投票透明性查询
+type VotingTransparencyQuery struct {
+    chainReader ChainReader
+    governance  *WhitelistGovernance
+}
+
+// QueryVotingStatus 查询投票状态（任何人都可以调用）
+func (q *VotingTransparencyQuery) QueryVotingStatus(proposalID common.Hash) (*VotingStatusReport, error) {
+    votingState, err := q.governance.GetProposalVotingState(proposalID)
+    if err != nil {
+        return nil, err
+    }
+    
+    return &VotingStatusReport{
+        ProposalID:       proposalID,
+        TotalExpected:    len(votingState.ExpectedVoters),
+        TotalVoted:       len(votingState.ActualVotes),
+        ApproveCount:     votingState.ApproveCount,
+        RejectCount:      votingState.RejectCount,
+        AbstainCount:     votingState.AbstainCount,
+        NotVotedCount:    votingState.NotVotedCount,
+        NotVotedList:     votingState.GetNotVotedValidators(),
+        IsComplete:       votingState.IsComplete,
+        IsValid:          votingState.IsValid,
+        VoterListRoot:    votingState.VoterListSnapshot,
+    }, nil
+}
+
+// VotingStatusReport 投票状态报告
+type VotingStatusReport struct {
+    ProposalID       common.Hash
+    TotalExpected    int                 // 应该投票的总人数
+    TotalVoted       int                 // 实际投票人数
+    ApproveCount     int                 // 同意票数
+    RejectCount      int                 // 反对票数
+    AbstainCount     int                 // 弃权票数
+    NotVotedCount    int                 // 未投票人数
+    NotVotedList     []common.Address    // 未投票的验证者列表
+    IsComplete       bool                // 投票是否完成
+    IsValid          bool                // 投票是否有效
+    VoterListRoot    common.Hash         // 投票人列表快照根
+}
+
+// VerifyVoteLegitimacy 验证投票合法性（任何人都可以调用）
+func (q *VotingTransparencyQuery) VerifyVoteLegitimacy(proposalID common.Hash) (*LegitimacyReport, error) {
+    votingState, err := q.governance.GetProposalVotingState(proposalID)
+    if err != nil {
+        return nil, err
+    }
+    
+    report := &LegitimacyReport{
+        ProposalID: proposalID,
+        Checks:     make([]LegitimacyCheck, 0),
+    }
+    
+    // 检查 1: 投票人数是否达到法定人数
+    threshold := 0.67
+    requiredVotes := int(float64(len(votingState.ExpectedVoters)) * threshold)
+    check1 := LegitimacyCheck{
+        Name:     "QuorumCheck",
+        Passed:   votingState.ApproveCount >= requiredVotes,
+        Details:  fmt.Sprintf("需要 %d 票，实际 %d 票", requiredVotes, votingState.ApproveCount),
+    }
+    report.Checks = append(report.Checks, check1)
+    
+    // 检查 2: 所有投票是否来自预期的投票人列表
+    allVotersValid := true
+    for voter := range votingState.ActualVotes {
+        found := false
+        for _, expected := range votingState.ExpectedVoters {
+            if voter == expected {
+                found = true
+                break
+            }
+        }
+        if !found {
+            allVotersValid = false
+            break
+        }
+    }
+    check2 := LegitimacyCheck{
+        Name:     "VoterValidityCheck",
+        Passed:   allVotersValid,
+        Details:  "所有投票者都在预期的投票人列表中",
+    }
+    report.Checks = append(report.Checks, check2)
+    
+    // 检查 3: 投票人列表快照是否有效
+    snapshot, err := q.chainReader.GetVoterListSnapshot(votingState.VoterListSnapshot)
+    snapshotValid := err == nil && snapshot != nil
+    check3 := LegitimacyCheck{
+        Name:     "SnapshotValidityCheck",
+        Passed:   snapshotValid,
+        Details:  fmt.Sprintf("投票人列表快照根: %s", votingState.VoterListSnapshot.Hex()),
+    }
+    report.Checks = append(report.Checks, check3)
+    
+    // 综合结果
+    report.IsLegitimate = check1.Passed && check2.Passed && check3.Passed
+    
+    return report, nil
+}
+
+// LegitimacyReport 合法性报告
+type LegitimacyReport struct {
+    ProposalID   common.Hash
+    IsLegitimate bool
+    Checks       []LegitimacyCheck
+}
+
+// LegitimacyCheck 合法性检查项
+type LegitimacyCheck struct {
+    Name    string
+    Passed  bool
+    Details string
+}
+```
+
+**安全保障总结：**
+
+| 攻击场景 | 防护机制 | 效果 |
+|----------|----------|------|
+| 恶意节点自己运营多个节点投票 | SGX 硬件唯一性验证 + 投票人列表链上记录 | 每个物理 CPU 只能注册一个验证者 |
+| 伪造投票记录 | 投票签名 + 链上存储 | 投票不可伪造、不可篡改 |
+| 绕过投票直接迁移数据 | SGX enclave 内部强制验证 | 代码在 TEE 中运行，无法绕过 |
+| 投票人列表被篡改 | Merkle 根记录在区块头 | 任何篡改都会被检测到 |
+| 少数节点自己投票通过 | 2/3 法定人数要求 + 透明查询 | 任何人都能查看"谁没投票" |
+
 #### 6.1.0.0.3 自动密钥迁移机制
 
 硬分叉升级时，密钥迁移自动进行，无需用户授权。这简化了升级流程，提高了用户体验。
