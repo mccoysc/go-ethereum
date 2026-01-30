@@ -4245,218 +4245,255 @@ func extractHardwareID(sgxQuote []byte) (string, error) {
 }
 ```
 
-#### 6.1.0.0.3 用户级密钥迁移授权
+#### 6.1.0.0.3 自动密钥迁移机制
 
-即使白名单治理机制被攻破，用户仍然可以通过拒绝授权来保护自己的私钥。
+硬分叉升级时，密钥迁移自动进行，无需用户授权。这简化了升级流程，提高了用户体验。
 
 **设计原则：**
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  核心原则: 用户是自己私钥的最终守护者                                    │
+│  核心原则: 信任治理机制，简化用户体验                                     │
 │                                                                         │
-│  即使:                                                                  │
-│  - 2/3 核心验证者被收买                                                 │
-│  - 恶意 MRENCLAVE 被加入白名单                                          │
-│  - 攻击者控制了网络中的大部分节点                                        │
-│                                                                         │
-│  用户的私钥仍然安全，因为:                                               │
-│  - 私钥迁移需要用户用以太坊私钥签名授权                                  │
-│  - 没有用户授权，新版本代码无法获取用户的私钥                            │
+│  密钥迁移自动进行，因为:                                                 │
+│  - 2/3 核心验证者投票 + 社区验证者否决权已提供足够安全保障               │
+│  - 渐进式权限机制限制了恶意代码的破坏能力                                │
+│  - 用户无需理解复杂的技术细节即可安全使用                                │
+│  - 避免因用户不操作导致密钥无法迁移的问题                                │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**密钥迁移授权机制：**
+**自动迁移机制：**
 
 ```go
-// keystore/migration_auth.go
+// keystore/auto_migration.go
 package keystore
 
 import (
-    "crypto/ecdsa"
-    "errors"
+    "context"
     "time"
     
     "github.com/ethereum/go-ethereum/common"
-    "github.com/ethereum/go-ethereum/crypto"
 )
 
-// MigrationAuthRequest 密钥迁移授权请求
-type MigrationAuthRequest struct {
-    KeyID           common.Hash    // 要迁移的密钥 ID
-    Owner           common.Address // 密钥所有者
-    SourceMREnclave []byte         // 源版本 MRENCLAVE
-    TargetMREnclave []byte         // 目标版本 MRENCLAVE
-    RequestTime     time.Time      // 请求时间
-    ExpiresAt       time.Time      // 授权过期时间
-    Signature       []byte         // 用户签名
+// AutoMigrationConfig 自动迁移配置
+type AutoMigrationConfig struct {
+    // 迁移批次大小
+    BatchSize int
+    
+    // 迁移间隔（避免一次性迁移过多密钥）
+    MigrationInterval time.Duration
+    
+    // 重试次数
+    MaxRetries int
+    
+    // 重试间隔
+    RetryInterval time.Duration
 }
 
-// MigrationAuthManager 迁移授权管理器
-type MigrationAuthManager struct {
-    // 已授权的迁移请求
-    authorizedMigrations map[common.Hash]*MigrationAuthRequest
+// DefaultAutoMigrationConfig 默认配置
+func DefaultAutoMigrationConfig() *AutoMigrationConfig {
+    return &AutoMigrationConfig{
+        BatchSize:         100,
+        MigrationInterval: 1 * time.Second,
+        MaxRetries:        3,
+        RetryInterval:     5 * time.Second,
+    }
 }
 
-// RequestMigrationAuth 请求密钥迁移授权
-// 返回需要用户签名的消息
-func (m *MigrationAuthManager) RequestMigrationAuth(
-    keyID common.Hash,
-    owner common.Address,
+// AutoMigrationManager 自动迁移管理器
+type AutoMigrationManager struct {
+    config          *AutoMigrationConfig
+    ratls           *RATLSTransport
+    permissionMgr   *PermissionManager  // 渐进式权限管理器
+}
+
+// MigrateAllKeys 自动迁移所有密钥
+func (m *AutoMigrationManager) MigrateAllKeys(
+    ctx context.Context,
     sourceMREnclave []byte,
     targetMREnclave []byte,
-) ([]byte, error) {
-    // 构造需要签名的消息
-    message := constructMigrationMessage(keyID, owner, sourceMREnclave, targetMREnclave)
-    return message, nil
-}
-
-// constructMigrationMessage 构造迁移授权消息
-func constructMigrationMessage(
-    keyID common.Hash,
-    owner common.Address,
-    sourceMREnclave []byte,
-    targetMREnclave []byte,
-) []byte {
-    // 消息格式:
-    // "X Chain Key Migration Authorization\n"
-    // "Key ID: {keyID}\n"
-    // "Owner: {owner}\n"
-    // "From MRENCLAVE: {sourceMREnclave}\n"
-    // "To MRENCLAVE: {targetMREnclave}\n"
-    // "Timestamp: {timestamp}\n"
-    // "Valid for: 24 hours"
+) (*MigrationResult, error) {
+    // 1. 验证目标 MRENCLAVE 在白名单中
+    if !m.isWhitelisted(targetMREnclave) {
+        return nil, errors.New("target MRENCLAVE not in whitelist")
+    }
     
-    timestamp := time.Now().Unix()
-    message := []byte("X Chain Key Migration Authorization\n")
-    message = append(message, []byte("Key ID: ")...)
-    message = append(message, keyID.Bytes()...)
-    message = append(message, []byte("\nOwner: ")...)
-    message = append(message, owner.Bytes()...)
-    message = append(message, []byte("\nFrom MRENCLAVE: ")...)
-    message = append(message, sourceMREnclave...)
-    message = append(message, []byte("\nTo MRENCLAVE: ")...)
-    message = append(message, targetMREnclave...)
-    message = append(message, []byte("\nTimestamp: ")...)
-    message = append(message, []byte(string(timestamp))...)
-    message = append(message, []byte("\nValid for: 24 hours")...)
+    // 2. 检查渐进式权限限制
+    permLevel := m.permissionMgr.GetPermissionLevel(targetMREnclave)
+    dailyLimit := m.getDailyMigrationLimit(permLevel)
     
-    return message
-}
-
-// SubmitMigrationAuth 提交迁移授权（用户签名后）
-func (m *MigrationAuthManager) SubmitMigrationAuth(
-    keyID common.Hash,
-    owner common.Address,
-    sourceMREnclave []byte,
-    targetMREnclave []byte,
-    signature []byte,
-) error {
-    // 1. 重构消息
-    message := constructMigrationMessage(keyID, owner, sourceMREnclave, targetMREnclave)
-    messageHash := crypto.Keccak256Hash(message)
-    
-    // 2. 从签名恢复公钥
-    pubKey, err := crypto.SigToPub(messageHash.Bytes(), signature)
+    // 3. 获取所有需要迁移的密钥
+    keys, err := m.getAllKeys()
     if err != nil {
-        return errors.New("invalid signature")
+        return nil, err
     }
     
-    // 3. 验证签名者是密钥所有者
-    recoveredAddr := crypto.PubkeyToAddress(*pubKey)
-    if recoveredAddr != owner {
-        return errors.New("signature does not match owner")
+    // 4. 按批次迁移
+    result := &MigrationResult{
+        TotalKeys:     len(keys),
+        MigratedKeys:  0,
+        FailedKeys:    0,
+        SkippedKeys:   0,
     }
     
-    // 4. 记录授权
-    authRequest := &MigrationAuthRequest{
-        KeyID:           keyID,
-        Owner:           owner,
-        SourceMREnclave: sourceMREnclave,
-        TargetMREnclave: targetMREnclave,
-        RequestTime:     time.Now(),
-        ExpiresAt:       time.Now().Add(24 * time.Hour),
-        Signature:       signature,
+    migratedToday := m.getMigratedCountToday()
+    
+    for i := 0; i < len(keys); i += m.config.BatchSize {
+        // 检查每日限制
+        if migratedToday >= dailyLimit {
+            result.SkippedKeys = len(keys) - i
+            result.Message = "达到每日迁移限制，剩余密钥将在明天继续迁移"
+            break
+        }
+        
+        end := i + m.config.BatchSize
+        if end > len(keys) {
+            end = len(keys)
+        }
+        
+        batch := keys[i:end]
+        
+        // 迁移当前批次
+        for _, key := range batch {
+            if migratedToday >= dailyLimit {
+                break
+            }
+            
+            err := m.migrateKey(ctx, key, sourceMREnclave, targetMREnclave)
+            if err != nil {
+                result.FailedKeys++
+                // 记录失败，稍后重试
+                m.recordFailedMigration(key, err)
+            } else {
+                result.MigratedKeys++
+                migratedToday++
+            }
+        }
+        
+        // 批次间隔
+        time.Sleep(m.config.MigrationInterval)
     }
     
-    m.authorizedMigrations[keyID] = authRequest
+    return result, nil
+}
+
+// getDailyMigrationLimit 根据权限级别获取每日迁移限制
+func (m *AutoMigrationManager) getDailyMigrationLimit(level PermissionLevel) int {
+    switch level {
+    case PermissionBasic:
+        return 10    // 基础权限: 每天 10 个
+    case PermissionStandard:
+        return 100   // 标准权限: 每天 100 个
+    case PermissionFull:
+        return -1    // 完全权限: 无限制
+    default:
+        return 0
+    }
+}
+
+// MigrationResult 迁移结果
+type MigrationResult struct {
+    TotalKeys    int
+    MigratedKeys int
+    FailedKeys   int
+    SkippedKeys  int
+    Message      string
+}
+
+// migrateKey 迁移单个密钥
+func (m *AutoMigrationManager) migrateKey(
+    ctx context.Context,
+    key *KeyInfo,
+    sourceMREnclave []byte,
+    targetMREnclave []byte,
+) error {
+    // 1. 通过 RA-TLS 连接到旧版本节点
+    conn, err := m.ratls.Connect(key.SourceNode)
+    if err != nil {
+        return err
+    }
+    defer conn.Close()
+    
+    // 2. 请求密钥数据（在 RA-TLS 通道中传输）
+    keyData, err := m.requestKeyData(conn, key.ID)
+    if err != nil {
+        return err
+    }
+    
+    // 3. 使用新 MRENCLAVE 重新封装
+    err = m.sealWithNewMREnclave(keyData, targetMREnclave)
+    if err != nil {
+        return err
+    }
+    
+    // 4. 记录迁移完成
+    m.recordMigrationComplete(key.ID, sourceMREnclave, targetMREnclave)
+    
     return nil
 }
-
-// IsMigrationAuthorized 检查密钥迁移是否已授权
-func (m *MigrationAuthManager) IsMigrationAuthorized(
-    keyID common.Hash,
-    targetMREnclave []byte,
-) bool {
-    auth, ok := m.authorizedMigrations[keyID]
-    if !ok {
-        return false
-    }
-    
-    // 检查是否过期
-    if time.Now().After(auth.ExpiresAt) {
-        delete(m.authorizedMigrations, keyID)
-        return false
-    }
-    
-    // 检查目标 MRENCLAVE 是否匹配
-    if !bytes.Equal(auth.TargetMREnclave, targetMREnclave) {
-        return false
-    }
-    
-    return true
-}
 ```
 
-**用户迁移流程：**
+**自动迁移流程：**
 
 ```
-用户密钥迁移流程
+自动密钥迁移流程
 ================
 
-1. 升级公告
-   ├── 用户收到新版本升级通知
-   ├── 用户查看新版本的审计报告和变更说明
-   └── 用户决定是否升级
+1. 升级触发
+   ├── 新版本 MRENCLAVE 通过 2/3 投票加入白名单
+   ├── 社区验证者否决期结束（无否决）
+   └── 新版本节点开始运行
 
-2. 授权请求
-   ├── 用户的钱包客户端显示迁移授权请求
-   ├── 显示内容:
-   │   - 要迁移的密钥列表
-   │   - 源版本 MRENCLAVE
-   │   - 目标版本 MRENCLAVE
-   │   - 授权有效期 (24 小时)
-   └── 用户使用以太坊私钥签名授权
+2. 自动迁移启动
+   ├── 新版本节点检测到需要迁移的密钥
+   ├── 验证自身 MRENCLAVE 在白名单中
+   ├── 检查当前权限级别和每日限制
+   └── 开始批量迁移
 
 3. 密钥迁移
-   ├── 旧版本节点验证用户授权
-   ├── 解封用户私钥
+   ├── 建立 RA-TLS 安全通道到旧版本节点
+   ├── 旧版本节点解封密钥数据
    ├── 通过 RA-TLS 传输到新版本节点
    └── 新版本节点重新封装
 
 4. 迁移完成
-   ├── 用户确认新版本可以正常使用密钥
-   └── 旧版本授权自动过期
+   ├── 记录迁移日志
+   ├── 更新密钥元数据
+   └── 用户无感知，继续正常使用
 
-不授权的后果
-============
+渐进式迁移限制
+==============
 
-如果用户选择不授权迁移:
-- 用户的私钥保留在旧版本节点中
-- 用户可以继续使用旧版本（如果旧版本仍在白名单中）
-- 如果旧版本被移出白名单，用户需要:
-  - 授权迁移到新版本，或
-  - 使用其他方式导出/备份密钥（如果支持）
+Day 0-7 (基础权限期):
+├── 每天最多迁移 10 个密钥
+├── 大量密钥需要多天完成迁移
+└── 给社区时间发现问题
+
+Day 7-30 (标准权限期):
+├── 每天最多迁移 100 个密钥
+└── 加速迁移进度
+
+Day 30+ (完全权限):
+├── 无迁移限制
+└── 可一次性完成所有迁移
 ```
 
 **安全保证：**
 
-| 攻击场景 | 防护机制 | 用户操作 |
-|----------|----------|----------|
-| 恶意升级 | 用户不授权迁移 | 拒绝签名 |
-| 钓鱼攻击 | 验证 MRENCLAVE 是否为官方发布 | 核对审计报告 |
-| 中间人攻击 | RA-TLS 端到端加密 | 无需额外操作 |
-| 授权被盗用 | 授权绑定特定 MRENCLAVE | 检查授权内容 |
+| 攻击场景 | 防护机制 |
+|----------|----------|
+| 恶意升级 | 2/3 核心验证者投票 + 社区否决权 |
+| 快速大规模泄露 | 渐进式权限限制每日迁移数量 |
+| 中间人攻击 | RA-TLS 端到端加密 |
+| 未授权迁移 | 只有白名单中的 MRENCLAVE 可接收密钥 |
+
+**与渐进式权限的配合：**
+
+自动迁移机制与渐进式权限机制紧密配合，即使恶意代码通过投票加入白名单：
+1. 前 7 天每天只能迁移 10 个密钥，大规模泄露需要很长时间
+2. 社区有充足时间发现异常并发起否决/回滚
+3. 迁移日志公开透明，异常行为容易被发现
 
 #### 6.1.0.0.4 渐进式权限机制
 
@@ -4596,7 +4633,7 @@ Day 30+: 完全权限
 即使恶意代码通过了 2/3 投票并加入白名单：
 1. 前 7 天只能每天迁移 10 个密钥，大规模数据泄露需要很长时间
 2. 社区有 7-30 天时间发现异常并发起否决/回滚
-3. 用户有时间注意到异常并拒绝授权迁移
+3. 迁移日志公开透明，异常行为容易被社区发现
 
 #### 6.1.0.0.5 验证者质押收益与动态管理机制
 
