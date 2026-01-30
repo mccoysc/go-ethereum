@@ -399,7 +399,9 @@ func (p *BlockProducer) ResolveConflict(blocks []*types.Block) *types.Block {
 
 #### 3.3.8 节点激励模型
 
-X Chain 采用**低成本效用模型**：
+X Chain 采用**低成本效用模型**结合**稳定性激励机制**，确保节点长期稳定在线。
+
+##### 3.3.8.1 基础激励来源
 
 | 激励来源 | 说明 |
 |----------|------|
@@ -411,6 +413,300 @@ X Chain 采用**低成本效用模型**：
 - 不产生新代币，无通胀
 - 降低运营成本，无需高算力或大量质押
 
+##### 3.3.8.2 节点稳定性激励机制
+
+**核心问题**：节点必须稳定在线提供服务，否则会损害用户体验，降低使用积极性，进而减少矿工收入，形成恶性循环。
+
+```
+恶性循环:
+节点不稳定 → 用户体验差 → 使用减少 → 交易费减少 → 矿工收入降低 → 更少人运营节点
+                                    ↑                                    |
+                                    +------------------------------------+
+
+良性循环 (目标):
+节点稳定 → 用户体验好 → 使用增加 → 交易费增加 → 矿工收入提高 → 更多人运营节点
+                                    ↑                                    |
+                                    +------------------------------------+
+```
+
+##### 3.3.8.3 信誉系统设计
+
+```go
+// consensus/sgx/reputation.go
+package sgx
+
+// NodeReputation 节点信誉数据
+type NodeReputation struct {
+    NodeID          common.Hash   // 节点标识
+    UptimeScore     uint64        // 在线时长得分 (0-10000, 代表 0%-100%)
+    ResponseScore   uint64        // 响应速度得分
+    SuccessRate     uint64        // 交易处理成功率
+    TotalBlocks     uint64        // 累计出块数
+    LastActiveTime  uint64        // 最后活跃时间戳
+    PenaltyCount    uint64        // 惩罚次数
+    ReputationScore uint64        // 综合信誉分 (0-10000)
+}
+
+// ReputationManager 信誉管理器
+type ReputationManager struct {
+    reputations map[common.Hash]*NodeReputation
+    config      *ReputationConfig
+}
+
+// ReputationConfig 信誉系统配置
+type ReputationConfig struct {
+    // 权重配置 (总和 = 100)
+    UptimeWeight      uint8  // 在线时长权重，默认 40
+    ResponseWeight    uint8  // 响应速度权重，默认 20
+    SuccessRateWeight uint8  // 成功率权重，默认 30
+    HistoryWeight     uint8  // 历史记录权重，默认 10
+    
+    // 阈值配置
+    MinUptimeForReward    uint64        // 获得奖励的最低在线率，默认 95%
+    PenaltyThreshold      uint64        // 触发惩罚的在线率阈值，默认 80%
+    RecoveryPeriod        time.Duration // 惩罚恢复期，默认 24 小时
+}
+
+// CalculateReputationScore 计算综合信誉分
+func (m *ReputationManager) CalculateReputationScore(r *NodeReputation) uint64 {
+    cfg := m.config
+    
+    // 加权计算
+    score := (r.UptimeScore * uint64(cfg.UptimeWeight) +
+              r.ResponseScore * uint64(cfg.ResponseWeight) +
+              r.SuccessRate * uint64(cfg.SuccessRateWeight) +
+              m.calculateHistoryScore(r) * uint64(cfg.HistoryWeight)) / 100
+    
+    // 惩罚扣分
+    if r.PenaltyCount > 0 {
+        penaltyDeduction := r.PenaltyCount * 500 // 每次惩罚扣 5%
+        if penaltyDeduction > score {
+            score = 0
+        } else {
+            score -= penaltyDeduction
+        }
+    }
+    
+    return score
+}
+
+// UpdateUptime 更新在线时长
+func (m *ReputationManager) UpdateUptime(nodeID common.Hash, isOnline bool) {
+    r := m.getOrCreateReputation(nodeID)
+    
+    now := uint64(time.Now().Unix())
+    
+    if isOnline {
+        // 在线：增加得分
+        r.UptimeScore = min(r.UptimeScore + 1, 10000)
+        r.LastActiveTime = now
+    } else {
+        // 离线：减少得分
+        if r.UptimeScore > 10 {
+            r.UptimeScore -= 10 // 离线惩罚更重
+        } else {
+            r.UptimeScore = 0
+        }
+    }
+    
+    r.ReputationScore = m.CalculateReputationScore(r)
+}
+```
+
+##### 3.3.8.4 交易费加权分配
+
+高信誉节点获得更高比例的交易费：
+
+```go
+// 交易费分配策略
+type FeeDistribution struct {
+    // 基础费用分配
+    BaseFee *big.Int
+    
+    // 信誉加权系数
+    ReputationMultiplier func(score uint64) *big.Int
+}
+
+// CalculateFeeShare 计算节点的交易费份额
+func (d *FeeDistribution) CalculateFeeShare(
+    totalFee *big.Int,
+    nodeReputation uint64,
+    allNodes []*NodeReputation,
+) *big.Int {
+    // 计算所有节点的加权总分
+    var totalWeightedScore uint64
+    for _, node := range allNodes {
+        totalWeightedScore += d.getWeightedScore(node.ReputationScore)
+    }
+    
+    if totalWeightedScore == 0 {
+        return big.NewInt(0)
+    }
+    
+    // 按加权比例分配
+    nodeWeightedScore := d.getWeightedScore(nodeReputation)
+    share := new(big.Int).Mul(totalFee, big.NewInt(int64(nodeWeightedScore)))
+    share.Div(share, big.NewInt(int64(totalWeightedScore)))
+    
+    return share
+}
+
+// getWeightedScore 获取加权得分（高信誉节点获得更高权重）
+func (d *FeeDistribution) getWeightedScore(reputationScore uint64) uint64 {
+    // 信誉分 >= 9000 (90%): 权重 x2.0
+    // 信誉分 >= 8000 (80%): 权重 x1.5
+    // 信誉分 >= 7000 (70%): 权重 x1.0
+    // 信誉分 < 7000: 权重 x0.5
+    
+    switch {
+    case reputationScore >= 9000:
+        return reputationScore * 2
+    case reputationScore >= 8000:
+        return reputationScore * 3 / 2
+    case reputationScore >= 7000:
+        return reputationScore
+    default:
+        return reputationScore / 2
+    }
+}
+```
+
+##### 3.3.8.5 惩罚机制
+
+```go
+// PenaltyManager 惩罚管理器
+type PenaltyManager struct {
+    reputationMgr *ReputationManager
+    config        *PenaltyConfig
+}
+
+// PenaltyConfig 惩罚配置
+type PenaltyConfig struct {
+    // 离线惩罚
+    OfflineThreshold   time.Duration // 离线多久触发惩罚，默认 10 分钟
+    OfflinePenalty     uint64        // 离线惩罚扣分，默认 500 (5%)
+    
+    // 频繁离线惩罚
+    FrequentOfflineCount    int           // 频繁离线次数阈值，默认 3 次/天
+    FrequentOfflinePenalty  uint64        // 频繁离线惩罚，默认 1000 (10%)
+    
+    // 恢复机制
+    RecoveryRate       uint64        // 每小时恢复的惩罚分，默认 50
+    MaxPenaltyCount    uint64        // 最大惩罚次数（超过则暂时排除），默认 10
+}
+
+// CheckAndPenalize 检查并执行惩罚
+func (p *PenaltyManager) CheckAndPenalize(nodeID common.Hash) {
+    r := p.reputationMgr.getReputation(nodeID)
+    if r == nil {
+        return
+    }
+    
+    now := uint64(time.Now().Unix())
+    offlineDuration := now - r.LastActiveTime
+    
+    // 检查是否超过离线阈值
+    if offlineDuration > uint64(p.config.OfflineThreshold.Seconds()) {
+        r.PenaltyCount++
+        r.ReputationScore = p.reputationMgr.CalculateReputationScore(r)
+        
+        log.Warn("Node penalized for being offline",
+            "nodeID", nodeID,
+            "offlineDuration", offlineDuration,
+            "penaltyCount", r.PenaltyCount)
+    }
+    
+    // 检查是否应该暂时排除
+    if r.PenaltyCount >= p.config.MaxPenaltyCount {
+        p.excludeNode(nodeID)
+    }
+}
+
+// excludeNode 暂时排除节点（不参与出块）
+func (p *PenaltyManager) excludeNode(nodeID common.Hash) {
+    log.Warn("Node excluded from block production due to excessive penalties",
+        "nodeID", nodeID)
+    // 节点仍可同步数据，但不能出块
+    // 需要连续在线一段时间后才能恢复
+}
+```
+
+##### 3.3.8.6 节点优先级排序
+
+用户提交交易时，优先选择高信誉节点：
+
+```go
+// NodeSelector 节点选择器
+type NodeSelector struct {
+    reputationMgr *ReputationManager
+    nodes         []*NodeInfo
+}
+
+// SelectBestNodes 选择最佳节点（按信誉排序）
+func (s *NodeSelector) SelectBestNodes(count int) []*NodeInfo {
+    // 获取所有在线节点
+    onlineNodes := s.getOnlineNodes()
+    
+    // 按信誉分排序
+    sort.Slice(onlineNodes, func(i, j int) bool {
+        ri := s.reputationMgr.getReputation(onlineNodes[i].ID)
+        rj := s.reputationMgr.getReputation(onlineNodes[j].ID)
+        return ri.ReputationScore > rj.ReputationScore
+    })
+    
+    // 返回前 N 个高信誉节点
+    if len(onlineNodes) > count {
+        return onlineNodes[:count]
+    }
+    return onlineNodes
+}
+
+// GetNodePriority 获取节点处理交易的优先级
+func (s *NodeSelector) GetNodePriority(nodeID common.Hash) int {
+    r := s.reputationMgr.getReputation(nodeID)
+    if r == nil {
+        return 0
+    }
+    
+    // 信誉分 >= 9000: 优先级 3 (最高)
+    // 信誉分 >= 8000: 优先级 2
+    // 信誉分 >= 7000: 优先级 1
+    // 信誉分 < 7000: 优先级 0 (最低)
+    
+    switch {
+    case r.ReputationScore >= 9000:
+        return 3
+    case r.ReputationScore >= 8000:
+        return 2
+    case r.ReputationScore >= 7000:
+        return 1
+    default:
+        return 0
+    }
+}
+```
+
+##### 3.3.8.7 激励机制总结
+
+| 机制 | 目的 | 效果 |
+|------|------|------|
+| 信誉系统 | 跟踪节点稳定性 | 量化节点表现 |
+| 交易费加权 | 奖励稳定节点 | 高信誉节点收入更高 |
+| 惩罚机制 | 惩罚不稳定节点 | 降低不稳定节点收益 |
+| 优先级排序 | 引导用户选择 | 稳定节点获得更多交易 |
+| 暂时排除 | 保护网络质量 | 严重不稳定节点无法出块 |
+
+**激励效果**：
+
+```
+节点稳定在线 → 信誉分提高 → 交易费加权提高 → 收入增加
+                         → 优先级提高 → 获得更多交易 → 收入增加
+
+节点频繁离线 → 信誉分降低 → 交易费加权降低 → 收入减少
+                         → 优先级降低 → 获得更少交易 → 收入减少
+                         → 惩罚累积 → 暂时排除 → 无收入
+```
+
 ```go
 // 交易费配置
 type FeeConfig struct {
@@ -420,15 +716,19 @@ type FeeConfig struct {
     // 每 Gas 单位费用
     GasPrice *big.Int
     
-    // 费用分配：100% 给出块节点
+    // 费用分配：100% 给出块节点（按信誉加权）
     ProducerShare uint8 // 100
+    
+    // 信誉加权开关
+    UseReputationWeighting bool
 }
 
-// 默认配置：极低费用
+// 默认配置：极低费用 + 信誉加权
 var DefaultFeeConfig = FeeConfig{
-    BaseFee:       big.NewInt(0),           // 无基础费
-    GasPrice:      big.NewInt(1),           // 1 wei per gas
-    ProducerShare: 100,
+    BaseFee:                big.NewInt(0),           // 无基础费
+    GasPrice:               big.NewInt(1),           // 1 wei per gas
+    ProducerShare:          100,
+    UseReputationWeighting: true,                    // 启用信誉加权
 }
 ```
 
