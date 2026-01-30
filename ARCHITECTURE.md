@@ -814,27 +814,178 @@ type SGXNodeRecord struct {
       |                                  |
 ```
 
-#### 5.2.3 加密分区数据同步
+#### 5.2.3 加密分区数据同步（秘密数据同步）
 
-加密分区中的数据需要在节点间保持一致：
+加密分区中的**所有数据**（包括秘密数据）都需要在节点间同步，以保持网络一致性。通过**度量值检测**确保秘密数据只会同步到运行相同可信代码的节点，防止泄露。
 
 **同步的数据：**
 - 密钥元数据（所有者、曲线类型、创建时间）
 - 公钥数据
+- **私钥数据**（通过 RA-TLS 安全通道传输）
+- **派生秘密**（ECDH 结果等）
 - 密钥所有权记录
 
-**不同步的数据：**
-- 私钥（每个节点独立生成，但通过 SGX sealing 保证一致性）
+**秘密数据同步的安全保证：**
+
+```
++------------------+                    +------------------+
+|   源节点 A       |                    |   目标节点 B     |
+| (已有秘密数据)   |                    | (需要同步数据)   |
++------------------+                    +------------------+
+        |                                       |
+        |  1. RA-TLS 握手开始                   |
+        |<------------------------------------->|
+        |                                       |
+        |  2. 双向 SGX 远程证明                 |
+        |  A 验证 B 的度量值:                   |
+        |  - MRENCLAVE 是否在白名单?            |
+        |  - MRSIGNER 是否在白名单?             |
+        |  - TCB 状态是否可接受?                |
+        |                                       |
+        |  B 验证 A 的度量值:                   |
+        |  - MRENCLAVE 是否在白名单?            |
+        |  - MRSIGNER 是否在白名单?             |
+        |  - TCB 状态是否可接受?                |
+        |                                       |
+        |  3. 双向验证通过                      |
+        |  (确认双方都运行相同的可信代码)       |
+        |<------------------------------------->|
+        |                                       |
+        |  4. A 解封本地加密分区数据            |
+        |  (在 enclave 内部解密)                |
+        |                                       |
+        |  5. 通过 RA-TLS 通道传输秘密数据      |
+        |  (传输过程中 TLS 加密保护)            |
+        |-------------------------------------->|
+        |                                       |
+        |                    6. B 接收秘密数据  |
+        |                    在 enclave 内部    |
+        |                                       |
+        |                    7. B 重新封装数据  |
+        |                    用 B 的 seal key   |
+        |                    存入加密分区       |
+        |                                       |
+```
+
+**度量值检测防止泄露：**
+
+| 攻击场景 | 防护机制 |
+|----------|----------|
+| 恶意节点伪装 | RA-TLS 验证 SGX Quote，无法伪造 MRENCLAVE |
+| 修改过的代码 | MRENCLAVE 不匹配，拒绝同步 |
+| 中间人攻击 | RA-TLS 端到端加密，无法窃听 |
+| 重放攻击 | TLS 会话密钥唯一，Quote 包含时间戳 |
+| 非 SGX 节点 | 无法生成有效 SGX Quote，验证失败 |
+
+**实现代码：**
 
 ```go
-// 密钥同步协议
-type KeySyncMessage struct {
-    KeyId     common.Hash
-    Metadata  KeyMetadata
-    PublicKey []byte
-    // 私钥通过 SGX sealing 机制在各节点独立派生
-    // 使用相同的 MRENCLAVE 和 sealing key 保证一致性
+// internal/sgx/secret_sync.go
+package sgx
+
+// SecretSyncManager 管理秘密数据的节点间同步
+type SecretSyncManager struct {
+    ratls       *RATLSTransport
+    keyStore    *EncryptedKeyStore
+    whitelist   *MeasurementWhitelist
 }
+
+// SyncSecretsFromPeer 从对等节点同步秘密数据
+func (m *SecretSyncManager) SyncSecretsFromPeer(ctx context.Context, peer *Peer) error {
+    // 1. 建立 RA-TLS 连接（双向验证度量值）
+    conn, err := m.ratls.Connect(peer.Address)
+    if err != nil {
+        return fmt.Errorf("RA-TLS connection failed: %w", err)
+    }
+    defer conn.Close()
+    
+    // 2. 验证对方度量值是否在白名单中
+    peerQuote := conn.PeerQuote()
+    if !m.whitelist.IsAllowed(peerQuote.MRENCLAVE, peerQuote.MRSIGNER) {
+        return ErrPeerNotInWhitelist
+    }
+    
+    // 3. 请求秘密数据列表
+    keyList, err := m.requestKeyList(conn)
+    if err != nil {
+        return err
+    }
+    
+    // 4. 同步每个密钥（包括私钥）
+    for _, keyId := range keyList {
+        // 检查本地是否已有
+        if m.keyStore.Exists(keyId) {
+            continue
+        }
+        
+        // 请求完整密钥数据（包括私钥）
+        keyData, err := m.requestKeyData(conn, keyId)
+        if err != nil {
+            return fmt.Errorf("failed to sync key %s: %w", keyId.Hex(), err)
+        }
+        
+        // 存储到本地加密分区（自动用本地 seal key 重新封装）
+        if err := m.keyStore.Store(keyId, keyData); err != nil {
+            return fmt.Errorf("failed to store key %s: %w", keyId.Hex(), err)
+        }
+    }
+    
+    return nil
+}
+
+// ServeSecretSync 响应其他节点的秘密数据同步请求
+func (m *SecretSyncManager) ServeSecretSync(conn *RATLSConn) error {
+    // 1. 验证请求方度量值
+    peerQuote := conn.PeerQuote()
+    if !m.whitelist.IsAllowed(peerQuote.MRENCLAVE, peerQuote.MRSIGNER) {
+        return ErrPeerNotInWhitelist
+    }
+    
+    // 2. 只有度量值验证通过，才提供秘密数据
+    // 这确保秘密数据只会发送给运行相同可信代码的节点
+    
+    for {
+        req, err := conn.ReadRequest()
+        if err != nil {
+            return err
+        }
+        
+        switch req.Type {
+        case RequestKeyList:
+            keys := m.keyStore.ListKeys()
+            conn.WriteResponse(keys)
+            
+        case RequestKeyData:
+            keyId := common.BytesToHash(req.Data)
+            // 从加密分区读取（在 enclave 内解密）
+            keyData, err := m.keyStore.Load(keyId)
+            if err != nil {
+                conn.WriteError(err)
+                continue
+            }
+            // 通过 RA-TLS 通道发送（传输中加密）
+            conn.WriteResponse(keyData)
+        }
+    }
+}
+```
+
+**关键安全原则：**
+
+1. **度量值验证是前提**：在传输任何秘密数据之前，必须先通过 RA-TLS 验证对方的 MRENCLAVE/MRSIGNER
+2. **只信任相同代码**：只有运行完全相同代码（相同 MRENCLAVE）的节点才能接收秘密数据
+3. **端到端加密**：秘密数据在 enclave 内解密，通过 TLS 传输，在目标 enclave 内重新封装
+4. **无明文暴露**：秘密数据在整个同步过程中从不以明文形式暴露给主机操作系统
+
+```
+秘密数据生命周期：
+
+源节点 enclave          RA-TLS 通道           目标节点 enclave
+[seal key A 加密] --解密--> [明文] --TLS加密--> [明文] --加密--> [seal key B 加密]
+     |                        |                   |                    |
+     |                        |                   |                    |
+  存储在磁盘              仅在 enclave 内       仅在 enclave 内      存储在磁盘
+  (加密状态)              (受 SGX 保护)        (受 SGX 保护)        (加密状态)
 ```
 
 ### 5.3 数据一致性验证
@@ -863,6 +1014,393 @@ func (s *SGXConsensus) VerifyNetworkConsistency(peer *Peer) error {
     }
     
     return nil
+}
+```
+
+### 5.4 侧信道攻击防护（代码级方案）
+
+SGX enclave 虽然提供了内存隔离，但仍然容易受到侧信道攻击。以下防护方案**完全依赖代码逻辑实现**，不依赖任何硬件特性。
+
+#### 5.4.1 攻击类型与防护策略
+
+| 攻击类型 | 攻击原理 | 代码级防护策略 |
+|----------|----------|----------------|
+| 时序攻击 | 测量执行时间推断秘密 | 常量时间操作 |
+| 缓存攻击 | 观察缓存访问模式 | 预加载 + 避免秘密索引 |
+| 页面错误攻击 | 观察内存页访问模式 | 内存访问模式混淆 |
+| 分支预测攻击 | 观察分支预测行为 | 控制流混淆 |
+| 推测执行攻击 | Spectre/Meltdown 变种 | 序列化屏障 + 常量时间 |
+
+#### 5.4.2 常量时间操作
+
+**核心原则**：代码执行时间不能依赖于秘密数据的值。
+
+```go
+// internal/sgx/constant_time.go
+package sgx
+
+// ConstantTimeCompare 常量时间比较两个字节切片
+// 无论内容是否相同，执行时间都相同
+func ConstantTimeCompare(a, b []byte) bool {
+    if len(a) != len(b) {
+        // 长度不同时，仍然遍历较长的切片以保持常量时间
+        maxLen := len(a)
+        if len(b) > maxLen {
+            maxLen = len(b)
+        }
+        var result byte = 1 // 长度不同，结果为 false
+        for i := 0; i < maxLen; i++ {
+            var x, y byte
+            if i < len(a) {
+                x = a[i]
+            }
+            if i < len(b) {
+                y = b[i]
+            }
+            result |= x ^ y
+        }
+        return false
+    }
+    
+    // 长度相同，逐字节比较
+    var result byte = 0
+    for i := 0; i < len(a); i++ {
+        result |= a[i] ^ b[i]
+    }
+    return result == 0
+}
+
+// ConstantTimeSelect 常量时间条件选择
+// 根据 condition 选择 a 或 b，不使用分支
+func ConstantTimeSelect(condition bool, a, b []byte) []byte {
+    result := make([]byte, len(a))
+    
+    // 将 bool 转换为掩码：true -> 0xFF, false -> 0x00
+    var mask byte
+    if condition {
+        mask = 0xFF
+    }
+    
+    for i := 0; i < len(a); i++ {
+        // result[i] = (a[i] & mask) | (b[i] & ^mask)
+        result[i] = (a[i] & mask) | (b[i] & (^mask))
+    }
+    return result
+}
+
+// ConstantTimeCopy 常量时间条件复制
+// 如果 condition 为 true，将 src 复制到 dst
+func ConstantTimeCopy(condition bool, dst, src []byte) {
+    var mask byte
+    if condition {
+        mask = 0xFF
+    }
+    
+    for i := 0; i < len(dst) && i < len(src); i++ {
+        dst[i] = (src[i] & mask) | (dst[i] & (^mask))
+    }
+}
+```
+
+#### 5.4.3 避免数据依赖的分支
+
+**错误示例（有侧信道泄露）：**
+```go
+// 危险：分支依赖于秘密数据
+func checkPassword(input, secret []byte) bool {
+    if len(input) != len(secret) {
+        return false  // 早期退出泄露长度信息
+    }
+    for i := 0; i < len(input); i++ {
+        if input[i] != secret[i] {
+            return false  // 早期退出泄露匹配位置
+        }
+    }
+    return true
+}
+```
+
+**正确示例（常量时间）：**
+```go
+// 安全：执行时间不依赖于秘密数据
+func checkPasswordConstantTime(input, secret []byte) bool {
+    // 使用常量时间比较
+    return ConstantTimeCompare(input, secret)
+}
+```
+
+#### 5.4.4 避免秘密索引的内存访问
+
+**错误示例（缓存侧信道）：**
+```go
+// 危险：使用秘密值作为数组索引
+var sbox = [256]byte{...}  // S-box 查找表
+
+func lookupSbox(secretByte byte) byte {
+    return sbox[secretByte]  // 缓存访问模式泄露 secretByte
+}
+```
+
+**正确示例（全表扫描）：**
+```go
+// 安全：访问所有表项，使用掩码选择
+func lookupSboxConstantTime(secretByte byte) byte {
+    var result byte = 0
+    for i := 0; i < 256; i++ {
+        // 当 i == secretByte 时，mask = 0xFF，否则 mask = 0x00
+        mask := constantTimeByteEq(byte(i), secretByte)
+        result |= sbox[i] & mask
+    }
+    return result
+}
+
+func constantTimeByteEq(a, b byte) byte {
+    // 如果 a == b，返回 0xFF；否则返回 0x00
+    x := a ^ b
+    // 将非零值映射到 0，零值映射到 1
+    x = ^x
+    x &= x >> 4
+    x &= x >> 2
+    x &= x >> 1
+    x &= 1
+    // 扩展到全字节
+    return byte(int8(x<<7) >> 7)
+}
+```
+
+#### 5.4.5 内存访问模式混淆（ORAM 简化版）
+
+对于需要随机访问加密分区数据的场景，使用混淆访问模式：
+
+```go
+// internal/sgx/oblivious_access.go
+package sgx
+
+// ObliviousKeyStore 混淆访问模式的密钥存储
+type ObliviousKeyStore struct {
+    keys      []KeyEntry
+    positions map[common.Hash]int  // 真实位置映射
+    rng       *SecureRNG
+}
+
+// ObliviousRead 混淆读取 - 访问所有位置，只返回目标数据
+func (s *ObliviousKeyStore) ObliviousRead(keyId common.Hash) (*KeyEntry, error) {
+    targetPos := s.positions[keyId]
+    
+    var result *KeyEntry
+    
+    // 访问所有位置（混淆真实访问模式）
+    for i := 0; i < len(s.keys); i++ {
+        entry := &s.keys[i]
+        
+        // 常量时间选择：如果是目标位置，保存结果
+        isTarget := constantTimeIntEq(i, targetPos)
+        if isTarget == 1 {
+            result = entry
+        }
+        
+        // 即使不是目标，也执行相同的内存访问
+        _ = entry.PrivateKey[0]  // 触发缓存加载
+    }
+    
+    return result, nil
+}
+
+// ObliviousWrite 混淆写入 - 访问所有位置，只修改目标
+func (s *ObliviousKeyStore) ObliviousWrite(keyId common.Hash, newData *KeyEntry) error {
+    targetPos := s.positions[keyId]
+    
+    for i := 0; i < len(s.keys); i++ {
+        isTarget := constantTimeIntEq(i, targetPos)
+        
+        // 常量时间条件写入
+        ConstantTimeCopy(isTarget == 1, s.keys[i].PrivateKey, newData.PrivateKey)
+    }
+    
+    return nil
+}
+
+func constantTimeIntEq(a, b int) int {
+    x := uint64(a ^ b)
+    x = ^x
+    x &= x >> 32
+    x &= x >> 16
+    x &= x >> 8
+    x &= x >> 4
+    x &= x >> 2
+    x &= x >> 1
+    return int(x & 1)
+}
+```
+
+#### 5.4.6 控制流混淆
+
+对于必须有分支的代码，执行两个分支并选择结果：
+
+```go
+// 安全：执行两个分支，常量时间选择结果
+func processKeyOperation(op int, key *KeyEntry) ([]byte, error) {
+    // 执行所有可能的操作
+    signResult := performSign(key)      // 总是执行
+    verifyResult := performVerify(key)  // 总是执行
+    ecdhResult := performECDH(key)      // 总是执行
+    
+    // 常量时间选择正确的结果
+    var result []byte
+    result = ConstantTimeSelect(op == OpSign, signResult, result)
+    result = ConstantTimeSelect(op == OpVerify, verifyResult, result)
+    result = ConstantTimeSelect(op == OpECDH, ecdhResult, result)
+    
+    return result, nil
+}
+```
+
+#### 5.4.7 密码学库要求
+
+X Chain 必须使用经过侧信道审计的密码学库：
+
+| 操作 | 推荐库 | 要求 |
+|------|--------|------|
+| 椭圆曲线运算 | libsodium / BearSSL | 常量时间标量乘法 |
+| AES 加密 | AES-NI 指令 / bitsliced | 避免 T-table 实现 |
+| SHA256 哈希 | 标准实现 | 无秘密依赖分支 |
+| RSA 签名 | 带盲化的实现 | Montgomery 乘法 + 盲化 |
+| ECDSA 签名 | RFC 6979 确定性 | 常量时间 k 生成 |
+
+**Go 语言实现要求：**
+
+```go
+// internal/sgx/crypto_requirements.go
+package sgx
+
+import (
+    "crypto/subtle"  // Go 标准库的常量时间操作
+    "golang.org/x/crypto/curve25519"  // 常量时间 X25519
+)
+
+// 使用 Go 标准库的常量时间比较
+func secureCompare(a, b []byte) bool {
+    return subtle.ConstantTimeCompare(a, b) == 1
+}
+
+// 使用常量时间的椭圆曲线库
+func performX25519(privateKey, publicKey []byte) ([]byte, error) {
+    var shared [32]byte
+    var priv, pub [32]byte
+    copy(priv[:], privateKey)
+    copy(pub[:], publicKey)
+    
+    // curve25519.ScalarMult 是常量时间实现
+    curve25519.ScalarMult(&shared, &priv, &pub)
+    return shared[:], nil
+}
+```
+
+#### 5.4.8 预编译合约的侧信道防护
+
+所有 SGX 预编译合约必须遵循以下规则：
+
+```go
+// core/vm/contracts_sgx_secure.go
+package vm
+
+// SGX 预编译合约的安全包装器
+type SecureSGXPrecompile struct {
+    inner PrecompiledContract
+}
+
+func (s *SecureSGXPrecompile) Run(input []byte, caller common.Address, evm *EVM) ([]byte, error) {
+    // 1. 输入长度标准化（防止长度泄露）
+    paddedInput := padToFixedLength(input, MaxInputLength)
+    
+    // 2. 执行操作（内部使用常量时间实现）
+    result, err := s.inner.Run(paddedInput, caller, evm)
+    
+    // 3. 输出长度标准化
+    paddedResult := padToFixedLength(result, MaxOutputLength)
+    
+    // 4. 添加随机延迟（弱防护，但增加攻击难度）
+    // 注意：这不是主要防护手段，只是额外层
+    addRandomDelay()
+    
+    return paddedResult, err
+}
+
+func padToFixedLength(data []byte, length int) []byte {
+    result := make([]byte, length)
+    copy(result, data)
+    return result
+}
+
+func addRandomDelay() {
+    // 使用硬件随机数生成随机延迟
+    var delay [1]byte
+    sgxRandom(delay[:])
+    
+    // 执行空操作循环（编译器不会优化掉）
+    for i := 0; i < int(delay[0]); i++ {
+        runtime.Gosched()
+    }
+}
+```
+
+#### 5.4.9 侧信道防护检查清单
+
+实现密码学操作时，必须检查以下项目：
+
+```
+[ ] 所有比较操作使用常量时间函数
+[ ] 没有基于秘密数据的条件分支
+[ ] 没有使用秘密值作为数组索引
+[ ] 没有基于秘密数据的循环次数
+[ ] 使用经过审计的密码学库
+[ ] 输入/输出长度不泄露信息
+[ ] 错误处理不泄露时序信息
+[ ] 内存访问模式不依赖秘密数据
+```
+
+#### 5.4.10 测试与验证
+
+```go
+// internal/sgx/sidechannel_test.go
+package sgx
+
+import (
+    "testing"
+    "time"
+)
+
+// 测试常量时间比较
+func TestConstantTimeCompare(t *testing.T) {
+    secret := []byte("secret_password_12345")
+    
+    // 测试不同输入的执行时间
+    inputs := [][]byte{
+        []byte("wrong_password_12345"),  // 完全不同
+        []byte("secret_password_12344"),  // 最后一位不同
+        []byte("aecret_password_12345"),  // 第一位不同
+        []byte("secret_password_12345"),  // 完全相同
+    }
+    
+    var times []time.Duration
+    iterations := 10000
+    
+    for _, input := range inputs {
+        start := time.Now()
+        for i := 0; i < iterations; i++ {
+            ConstantTimeCompare(input, secret)
+        }
+        times = append(times, time.Since(start))
+    }
+    
+    // 验证所有执行时间在统计误差范围内
+    avgTime := averageDuration(times)
+    for i, d := range times {
+        deviation := float64(d-avgTime) / float64(avgTime)
+        if deviation > 0.05 { // 允许 5% 误差
+            t.Errorf("Input %d has timing deviation: %.2f%%", i, deviation*100)
+        }
+    }
 }
 ```
 
