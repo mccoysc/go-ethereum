@@ -30,15 +30,23 @@
         +---> 数据存储模块（状态持久化）
         |
         +---> P2P 网络模块（心跳检测）
+        |
+        +---> 治理模块（奖励参数配置）
 ```
 
 ### 上游依赖
-- 共识引擎模块（提供区块生产信息）
+- 共识引擎模块（提供区块生产信息、多生产者候选区块）
 - 核心 go-ethereum StateDB
+- 治理模块（通过 SecurityConfigContract 获取奖励配置参数）
 
 ### 下游依赖（被以下模块使用）
-- 共识引擎模块（奖励分配）
-- 治理模块（验证者质押收益）
+- 共识引擎模块（奖励分配、声誉系统影响出块权重）
+- 治理模块（验证者质押收益、投票权重计算）
+
+### 与治理模块的集成
+- 奖励参数（如衰减率、质量权重）从链上 SecurityConfigContract 动态读取
+- 治理投票可以修改激励机制参数，无需重启节点
+- 升级期间，激励计算会考虑节点的版本和权限级别
 
 ## 核心数据结构
 
@@ -104,12 +112,18 @@ import (
 )
 
 // MultiProducerRewardConfig 多生产者奖励配置
+// 
+// 设计目标：前三名都给收益，根据广播速度和区块质量综合调整收益分配，
+// 避免"赢家通吃"导致的恶性抢先行为。
 type MultiProducerRewardConfig struct {
-    // 主生产者奖励比例（百分比）
-    PrimaryProducerShare uint64
+    // 速度基础奖励比例（第1名=100%, 第2名=60%, 第3名=30%）
+    SpeedRewardRatios []float64
     
-    // 次生产者奖励比例（百分比）
-    SecondaryProducerShare uint64
+    // 候选区块收集窗口（收到第一个区块后等待多久收集其他候选）
+    CandidateWindow time.Duration
+    
+    // 最大候选区块数
+    MaxCandidates int
     
     // 质量评分权重
     QualityScoreWeight uint64
@@ -121,10 +135,11 @@ type MultiProducerRewardConfig struct {
 // DefaultMultiProducerRewardConfig 默认配置
 func DefaultMultiProducerRewardConfig() *MultiProducerRewardConfig {
     return &MultiProducerRewardConfig{
-        PrimaryProducerShare:   70,
-        SecondaryProducerShare: 30,
-        QualityScoreWeight:     60,
-        TimestampWeight:        40,
+        SpeedRewardRatios: []float64{1.0, 0.6, 0.3}, // 100%, 60%, 30%
+        CandidateWindow:   500 * time.Millisecond,   // 500ms 窗口
+        MaxCandidates:     3,
+        QualityScoreWeight: 60,
+        TimestampWeight:    40,
     }
 }
 
@@ -140,43 +155,125 @@ func NewMultiProducerRewardCalculator(config *MultiProducerRewardConfig) *MultiP
 
 // BlockCandidate 区块候选
 type BlockCandidate struct {
-    Producer     common.Address
-    BlockHash    common.Hash
-    Timestamp    uint64
-    TxCount      int
-    GasUsed      uint64
+    Block       *types.Block
+    Producer    common.Address
+    BlockHash   common.Hash
+    ReceivedAt  time.Time      // 收到区块的时间
+    Timestamp   uint64
+    TxCount     int
+    GasUsed     uint64
+    Quality     *BlockQuality  // 区块质量评分
     QualityScore uint64
+    Rank        int            // 排名 (1, 2, 3)
+}
+
+// BlockQuality 区块质量详情
+type BlockQuality struct {
+    TxCount          uint64  // 交易数量
+    GasUsed          uint64  // Gas 使用量
+    NewTxCount       uint64  // 新交易数（相对于第一名）
+    RewardMultiplier float64 // 质量奖励倍数
+}
+
+// CandidateReward 候选区块收益
+type CandidateReward struct {
+    Candidate       *BlockCandidate
+    SpeedRatio      float64  // 速度奖励比例
+    QualityMulti    float64  // 质量倍数
+    FinalMultiplier float64  // 最终收益倍数 = SpeedRatio × QualityMulti
+    Reward          *big.Int // 最终收益
 }
 
 // CalculateRewards 计算多生产者奖励分配
+// 
+// 前三名收益分配机制：
+//   第 1 名: 速度基础奖励 100% × 区块质量倍数
+//   第 2 名: 速度基础奖励  60% × 区块质量倍数
+//   第 3 名: 速度基础奖励  30% × 区块质量倍数
+//
+// 重要改进：只有包含新交易的候选区块才能获得收益
 func (c *MultiProducerRewardCalculator) CalculateRewards(
-    totalReward *big.Int,
     candidates []*BlockCandidate,
-) map[common.Address]*big.Int {
-    rewards := make(map[common.Address]*big.Int)
-    
+    totalFees *big.Int,
+) []*CandidateReward {
     if len(candidates) == 0 {
-        return rewards
+        return nil
     }
     
-    if len(candidates) == 1 {
-        // 单一生产者获得全部奖励
-        rewards[candidates[0].Producer] = new(big.Int).Set(totalReward)
-        return rewards
+    // 1. 按收到时间排序（确定速度排名）
+    sort.Slice(candidates, func(i, j int) bool {
+        return candidates[i].ReceivedAt.Before(candidates[j].ReceivedAt)
+    })
+    
+    // 2. 计算每个候选的质量评分，并检查是否有新交易
+    firstCandidateTxSet := make(map[common.Hash]bool)
+    for _, tx := range candidates[0].Block.Transactions() {
+        firstCandidateTxSet[tx.Hash()] = true
     }
     
-    // 计算综合得分
-    scores := c.calculateScores(candidates)
-    totalScore := uint64(0)
-    for _, score := range scores {
-        totalScore += score
-    }
-    
-    // 按得分比例分配奖励
     for i, candidate := range candidates {
-        share := new(big.Int).Mul(totalReward, big.NewInt(int64(scores[i])))
-        share.Div(share, big.NewInt(int64(totalScore)))
-        rewards[candidate.Producer] = share
+        candidate.Rank = i + 1
+        candidate.Quality = c.qualityScorer.CalculateQuality(candidate.Block)
+        
+        // 计算该候选区块包含的新交易数（第一名之外的交易）
+        if i > 0 {
+            newTxCount := 0
+            for _, tx := range candidate.Block.Transactions() {
+                if !firstCandidateTxSet[tx.Hash()] {
+                    newTxCount++
+                }
+            }
+            candidate.Quality.NewTxCount = uint64(newTxCount)
+        } else {
+            // 第一名的所有交易都是"新"交易
+            candidate.Quality.NewTxCount = candidate.Quality.TxCount
+        }
+    }
+    
+    // 3. 计算收益（只有包含新交易的候选才能获得收益）
+    rewards := make([]*CandidateReward, 0, len(candidates))
+    totalMultiplier := 0.0
+    
+    for i, candidate := range candidates {
+        if i >= c.config.MaxCandidates {
+            break
+        }
+        
+        // 关键改进：如果后续候选没有新交易，不分配收益
+        if i > 0 && candidate.Quality.NewTxCount == 0 {
+            // 该候选的所有交易都已被第一名包含，不分配收益
+            continue
+        }
+        
+        speedRatio := c.config.SpeedRewardRatios[i]
+        qualityMulti := candidate.Quality.RewardMultiplier
+        
+        // 对于后续候选，收益按新交易比例调整
+        if i > 0 {
+            newTxRatio := float64(candidate.Quality.NewTxCount) / float64(candidate.Quality.TxCount)
+            qualityMulti *= newTxRatio  // 只有新交易部分才计入收益
+        }
+        
+        finalMulti := speedRatio * qualityMulti
+        
+        rewards = append(rewards, &CandidateReward{
+            Candidate:       candidate,
+            SpeedRatio:      speedRatio,
+            QualityMulti:    qualityMulti,
+            FinalMultiplier: finalMulti,
+        })
+        
+        totalMultiplier += finalMulti
+    }
+    
+    // 4. 按比例分配总交易费
+    for _, reward := range rewards {
+        share := reward.FinalMultiplier / totalMultiplier
+        reward.Reward = new(big.Int).Mul(
+            totalFees,
+            big.NewInt(int64(share * 10000)),
+        )
+        reward.Reward.Div(reward.Reward, big.NewInt(10000))
     }
     
     return rewards
@@ -265,6 +362,13 @@ func NewBlockQualityScorer(config *BlockQualityConfig) *BlockQualityScorer {
 }
 
 // ScoreBlock 评估区块质量
+// 
+// 区块质量评分考虑多个维度：
+// 1. 交易数量：更多交易意味着更高的网络效用
+// 2. Gas 利用率：接近目标利用率（80%）得分最高
+// 3. 交易多样性：不同类型的交易提高得分
+//
+// 返回值范围：0-100
 func (s *BlockQualityScorer) ScoreBlock(block *types.Block, gasLimit uint64) uint64 {
     // 1. 交易数量得分
     txCountScore := s.scoreTxCount(len(block.Transactions()))
@@ -283,23 +387,133 @@ func (s *BlockQualityScorer) ScoreBlock(block *types.Block, gasLimit uint64) uin
     return totalScore
 }
 
+// CalculateQuality 计算区块质量详情（用于多生产者奖励）
+func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality {
+    gasLimit := block.GasLimit()
+    qualityScore := s.ScoreBlock(block, gasLimit)
+    
+    // 质量倍数：质量分数映射到奖励倍数
+    // 质量分数 100 -> 倍数 2.0
+    // 质量分数 50  -> 倍数 1.0
+    // 质量分数 0   -> 倍数 0.5
+    multiplier := 0.5 + (float64(qualityScore) / 100.0 * 1.5)
+    
+    return &BlockQuality{
+        TxCount:          uint64(len(block.Transactions())),
+        GasUsed:          block.GasUsed(),
+        RewardMultiplier: multiplier,
+    }
+}
+
 // scoreTxCount 交易数量得分
+// 
+// 评分策略：
+// - 0 笔交易：0 分
+// - 1-10 笔：线性增长（每笔 10 分）
+// - 11-100 笔：继续增长但速度放缓
+// - 100+ 笔：满分 100
 func (s *BlockQualityScorer) scoreTxCount(txCount int) uint64 {
-    // 交易数越多得分越高，但有上限
     if txCount == 0 {
         return 0
     }
     if txCount >= 100 {
         return 100
     }
-    return uint64(txCount)
+    if txCount <= 10 {
+        return uint64(txCount * 10)
+    }
+    // 10-100 笔之间，得分从 100 线性增加到 100
+    return uint64(10 + (txCount-10)*90/90)
 }
 
 // scoreGasUtilization Gas 利用率得分
+//
+// 评分策略（以目标利用率 80% 为最优）：
+// - 利用率 = 目标（80%）：满分 100
+// - 偏离目标：按偏离程度扣分
+// - 过低或过高利用率都会降低得分
 func (s *BlockQualityScorer) scoreGasUtilization(gasUsed, gasLimit uint64) uint64 {
     if gasLimit == 0 {
         return 0
     }
+    
+    utilization := gasUsed * 100 / gasLimit
+    target := s.config.TargetGasUtilization
+    
+    // 计算偏离度
+    var deviation uint64
+    if utilization >= target {
+        deviation = utilization - target
+    } else {
+        deviation = target - utilization
+    }
+    
+    // 偏离越大，扣分越多
+    // 偏离 20% 以内：扣分较少
+    // 偏离超过 20%：大幅扣分
+    if deviation <= 20 {
+        return 100 - deviation*2
+    }
+    return 100 - 40 - (deviation-20)*3
+}
+
+// scoreTxDiversity 交易多样性得分
+//
+// 评分策略：
+// - 单一类型交易：基础分
+// - 多种类型交易：额外加分
+// - 包含合约交互：额外加分
+func (s *BlockQualityScorer) scoreTxDiversity(txs []*types.Transaction) uint64 {
+    if len(txs) == 0 {
+        return 0
+    }
+    
+    hasTransfer := false
+    hasContractCall := false
+    hasContractCreation := false
+    uniqueContracts := make(map[common.Address]bool)
+    
+    for _, tx := range txs {
+        if tx.To() == nil {
+            hasContractCreation = true
+        } else if len(tx.Data()) > 0 {
+            hasContractCall = true
+            uniqueContracts[*tx.To()] = true
+        } else {
+            hasTransfer = true
+        }
+    }
+    
+    score := uint64(50) // 基础分
+    
+    // 有多种交易类型
+    typeCount := 0
+    if hasTransfer {
+        typeCount++
+    }
+    if hasContractCall {
+        typeCount++
+    }
+    if hasContractCreation {
+        typeCount++
+    }
+    
+    score += uint64(typeCount * 15)
+    
+    // 合约多样性（最多加 20 分）
+    contractDiversity := len(uniqueContracts)
+    if contractDiversity > 10 {
+        score += 20
+    } else {
+        score += uint64(contractDiversity * 2)
+    }
+    
+    if score > 100 {
+        score = 100
+    }
+    
+    return score
+}
     
     utilization := gasUsed * 100 / gasLimit
     target := s.config.TargetGasUtilization
@@ -366,6 +580,15 @@ type ReputationConfig struct {
     // 恶意行为惩罚
     MaliciousPenalty uint64
     
+    // 离线惩罚（每小时）
+    OfflinePenaltyPerHour uint64
+    
+    // 在线恢复奖励（每小时）
+    OnlineRecoveryPerHour uint64
+    
+    // 最大累积惩罚次数（超过后会被排除）
+    MaxPenaltyCount uint64
+    
     // 声誉衰减周期
     DecayPeriod time.Duration
     
@@ -374,16 +597,24 @@ type ReputationConfig struct {
 }
 
 // DefaultReputationConfig 默认配置
+//
+// 基于 ARCHITECTURE.md 第 3.3.8.4 节的声誉系统设计：
+// - 离线惩罚：10 分/小时
+// - 在线恢复：50 分/小时（恢复速度是惩罚的 5 倍）
+// - 最大惩罚次数：10 次（超过后会被排除出网络）
 func DefaultReputationConfig() *ReputationConfig {
     return &ReputationConfig{
-        InitialReputation:   1000,
-        MaxReputation:       10000,
-        MinReputation:       0,
-        BlockSuccessBonus:   10,
-        BlockFailurePenalty: 20,
-        MaliciousPenalty:    500,
-        DecayPeriod:         24 * time.Hour,
-        DecayRate:           1, // 每天衰减 1%
+        InitialReputation:     1000,
+        MaxReputation:         10000,
+        MinReputation:         0,
+        BlockSuccessBonus:     10,
+        BlockFailurePenalty:   20,
+        MaliciousPenalty:      500,
+        OfflinePenaltyPerHour: 10,     // 按 ARCHITECTURE.md 设定
+        OnlineRecoveryPerHour: 50,     // 恢复速度是惩罚的 5 倍
+        MaxPenaltyCount:       10,     // 最大累积惩罚次数
+        DecayPeriod:           24 * time.Hour,
+        DecayRate:             1,      // 每天衰减 1%
     }
 }
 
@@ -402,8 +633,12 @@ type NodeReputation struct {
     SuccessBlocks   uint64
     FailedBlocks    uint64
     MaliciousCount  uint64
+    PenaltyCount    uint64        // 累积惩罚次数
+    OfflineHours    uint64        // 累计离线小时数
+    OnlineHours     uint64        // 累计在线小时数
     LastUpdateTime  time.Time
     LastDecayTime   time.Time
+    LastOnlineCheck time.Time     // 上次在线状态检查时间
 }
 
 // NewReputationManager 创建声誉管理器
@@ -488,18 +723,87 @@ func (rm *ReputationManager) RecordMaliciousBehavior(addr common.Address) {
     }
     
     rep.MaliciousCount++
+    rep.PenaltyCount++
     rep.LastUpdateTime = time.Now()
+}
+
+// RecordOffline 记录节点离线
+// 
+// 基于 ARCHITECTURE.md 的声誉衰减机制：
+// - 每小时离线扣除 10 分声誉
+// - 累积惩罚次数超过 MaxPenaltyCount 将被排除出网络
+func (rm *ReputationManager) RecordOffline(addr common.Address, duration time.Duration) {
+    rm.mu.Lock()
+    defer rm.mu.Unlock()
+    
+    rep := rm.getOrCreateReputation(addr)
+    
+    // 计算离线小时数
+    hours := uint64(duration.Hours())
+    if hours == 0 && duration > 0 {
+        hours = 1 // 至少计为 1 小时
+    }
+    
+    // 应用离线惩罚
+    penalty := hours * rm.config.OfflinePenaltyPerHour
+    if rep.Score >= penalty {
+        rep.Score -= penalty
+    } else {
+        rep.Score = rm.config.MinReputation
+    }
+    
+    rep.OfflineHours += hours
+    rep.PenaltyCount++
+    rep.LastUpdateTime = time.Now()
+    rep.LastOnlineCheck = time.Now()
+}
+
+// RecordOnline 记录节点在线
+// 
+// 基于 ARCHITECTURE.md 的声誉恢复机制：
+// - 每小时在线恢复 50 分声誉（是离线惩罚的 5 倍）
+// - 帮助节点快速恢复声誉，鼓励长期稳定在线
+func (rm *ReputationManager) RecordOnline(addr common.Address, duration time.Duration) {
+    rm.mu.Lock()
+    defer rm.mu.Unlock()
+    
+    rep := rm.getOrCreateReputation(addr)
+    
+    // 计算在线小时数
+    hours := uint64(duration.Hours())
+    if hours == 0 && duration > 0 {
+        hours = 1 // 至少计为 1 小时
+    }
+    
+    // 应用在线恢复奖励
+    recovery := hours * rm.config.OnlineRecoveryPerHour
+    rep.Score += recovery
+    if rep.Score > rm.config.MaxReputation {
+        rep.Score = rm.config.MaxReputation
+    }
+    
+    rep.OnlineHours += hours
+    rep.LastUpdateTime = time.Now()
+    rep.LastOnlineCheck = time.Now()
+}
+
+// IsExcluded 检查节点是否因惩罚过多而被排除
+func (rm *ReputationManager) IsExcluded(addr common.Address) bool {
+    rep := rm.GetReputation(addr)
+    return rep.PenaltyCount >= rm.config.MaxPenaltyCount
 }
 
 // getOrCreateReputation 获取或创建声誉记录
 func (rm *ReputationManager) getOrCreateReputation(addr common.Address) *NodeReputation {
     rep, ok := rm.reputations[addr]
     if !ok {
+        now := time.Now()
         rep = &NodeReputation{
-            Address:        addr,
-            Score:          rm.config.InitialReputation,
-            LastUpdateTime: time.Now(),
-            LastDecayTime:  time.Now(),
+            Address:         addr,
+            Score:           rm.config.InitialReputation,
+            LastUpdateTime:  now,
+            LastDecayTime:   now,
+            LastOnlineCheck: now,
         }
         rm.reputations[addr] = rep
     }
