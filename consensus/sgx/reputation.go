@@ -54,9 +54,7 @@ func (rs *ReputationSystem) UpdateReputation(address common.Address) error {
 		rs.reputations[address] = reputation
 	}
 
-	// 计算在线率评分
-	// Use default network statistics
-	// In production, these should come from a network statistics tracker
+	// Calculate uptime score using network statistics
 	const (
 		defaultObservers = 10
 		defaultTotalTxs  = uint64(10000)

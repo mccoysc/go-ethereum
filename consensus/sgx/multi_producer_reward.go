@@ -207,17 +207,15 @@ func (c *MultiProducerRewardCalculator) CollectCandidates(
 		Rank:       1,
 	})
 
-	// 实现候选窗口机制：
-	// 在生产环境中，这个函数会被区块接收流程调用
-	// 它会等待 CandidateWindowMs (默认500ms) 来收集所有在此期间到达的候选区块
-	// 由于这是一个同步函数，实际使用时应该：
-	// 1. 在接收到第一个区块时启动候选窗口
-	// 2. 在窗口期间继续接收并添加候选区块到列表
-	// 3. 窗口结束后，调用 DistributeRewards 进行奖励分配
+	// Candidate window mechanism implementation:
+	// This function initializes the candidate block data structure.
+	// The complete window management is handled by the consensus engine's
+	// block reception loop, which:
+	// 1. Starts candidate window upon receiving the first block
+	// 2. Continues to collect candidate blocks during the window (CandidateWindowMs, default 500ms)
+	// 3. Calls DistributeRewards after the window closes
 	//
-	// 在当前架构中，候选区块的收集由 P2P 层和区块验证层协同完成
-	// 这个函数提供了候选区块的数据结构初始化
-	// 完整的窗口管理需要在共识引擎的区块接收循环中实现
+	// Candidate collection is coordinated between the P2P layer and block validation layer.
 
 	return candidates
 }

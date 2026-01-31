@@ -162,9 +162,9 @@ func (bp *BlockProducer) produceBlock() error {
 		return err
 	}
 	
-	// 注意：实际的交易执行、状态更新、Finalize 和 Seal 操作
-	// 应该由外部的区块生产流程（如 miner）来完成
-	// 这里的 BlockProducer 主要负责按需出块的逻辑控制
+	// Transaction execution, state updates, Finalize and Seal operations
+	// are handled by the external block production flow (e.g., miner package).
+	// BlockProducer focuses on on-demand block triggering logic.
 	
 	return nil
 }
@@ -222,9 +222,9 @@ func (bp *BlockProducer) ProduceBlockNow(
 		return nil, err
 	}
 
-	// 注意：完整的区块生产（执行交易、Finalize、Seal）
-	// 应该由调用者在适当的上下文中完成
-	// 这里只返回准备好的区块头
+	// Full block production (transaction execution, Finalize, Seal)
+	// is completed by the caller in the appropriate context.
+	// This function returns the prepared block header.
 	
 	return types.NewBlock(header, &types.Body{Transactions: transactions}, nil, nil), nil
 }

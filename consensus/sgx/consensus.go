@@ -321,10 +321,9 @@ func (e *SGXEngine) accumulateRewards(chain consensus.ChainHeaderReader, state *
 		return
 	}
 
-	// 计算交易费总额
-	// Note: We use tx.Gas() (gas limit) here because in the Finalize stage,
-	// receipts haven't been created yet. The actual gas used will be accounted
-	// for when transactions are executed.
+	// Calculate total transaction fees
+	// Using tx.Gas() (gas limit) for fee calculation in the Finalize stage.
+	// Gas used accounting happens during transaction execution.
 	totalFees := new(big.Int)
 	for _, tx := range body.Transactions {
 		gasPrice := tx.GasPrice()

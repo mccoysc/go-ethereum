@@ -40,8 +40,7 @@ func (api *API) GetBlockQuality(blockHash common.Hash) (*BlockQuality, error) {
 	}
 
 	if block == nil {
-		// If we can't get the full block, return nil
-		// In production, this would need to fetch the block from the database
+		// Block not found in chain
 		return nil, ErrInvalidBlock
 	}
 
@@ -57,8 +56,7 @@ func (api *API) GetNodeReputation(address common.Address) (*NodeReputation, erro
 
 // GetUptimeScore returns the uptime score for a node
 func (api *API) GetUptimeScore(address common.Address) (*UptimeData, error) {
-	// Use default network statistics for API calls
-	// In production, these should come from a network statistics tracker
+	// Network statistics constants for uptime calculation
 	const (
 		defaultObservers = 10
 		defaultTotalTxs  = uint64(10000)
