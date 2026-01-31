@@ -38,7 +38,8 @@ type MockAttestor struct {
 
 // NewMockAttestor creates a new mock attestor for testing.
 func NewMockAttestor() (*MockAttestor, error) {
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Use P-384 to match specification requirements
+	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate key: %w", err)
 	}

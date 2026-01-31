@@ -25,12 +25,12 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
-	"os"
 	"time"
 )
 
 // GramineAttestor implements the Attestor interface using Gramine's
-// /dev/attestation interface.
+// /dev/attestation interface for Quote generation.
+// Note: For full RA-TLS support, use GramineRATLSAttestor with CGO.
 type GramineAttestor struct {
 	privateKey *ecdsa.PrivateKey
 	mrenclave  []byte
@@ -40,9 +40,10 @@ type GramineAttestor struct {
 
 // NewGramineAttestor creates a new Gramine-based attestor.
 // It will detect if running in an SGX environment and fall back to mock mode if not.
+// This implementation uses P-384 curve as required by the specification.
 func NewGramineAttestor() (*GramineAttestor, error) {
-	// Generate TLS key pair
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Generate TLS key pair using P-384 (SECP384R1) as required by spec
+	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate key: %w", err)
 	}
@@ -51,21 +52,18 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 		privateKey: privateKey,
 	}
 
-	// Try to detect SGX environment by checking for /dev/attestation
-	if _, err := os.Stat("/dev/attestation/my_target_info"); err == nil {
-		attestor.isSGX = true
-		// Read MRENCLAVE from /dev/attestation/my_target_info
-		targetInfo, err := os.ReadFile("/dev/attestation/my_target_info")
+	// Check if we're in an SGX environment
+	attestor.isSGX = isSGXEnvironment()
+
+	if attestor.isSGX {
+		// Read MRENCLAVE using helper function
+		mrenclave, err := readMREnclave()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read MRENCLAVE: %w", err)
 		}
-		if len(targetInfo) >= 32 {
-			attestor.mrenclave = make([]byte, 32)
-			copy(attestor.mrenclave, targetInfo[:32])
-		}
+		attestor.mrenclave = mrenclave
 	} else {
 		// Not in SGX environment, use mock values
-		attestor.isSGX = false
 		attestor.mrenclave = make([]byte, 32)
 		attestor.mrsigner = make([]byte, 32)
 		// Fill with deterministic test values
@@ -88,32 +86,11 @@ func (a *GramineAttestor) GenerateQuote(reportData []byte) ([]byte, error) {
 
 	if a.isSGX {
 		// Real SGX environment: use Gramine's /dev/attestation interface
-		return a.generateRealQuote(reportData)
+		return generateQuoteViaGramine(reportData)
 	}
 
 	// Mock environment: generate a mock quote
 	return a.generateMockQuote(reportData)
-}
-
-// generateRealQuote generates a real SGX quote using Gramine.
-func (a *GramineAttestor) generateRealQuote(reportData []byte) ([]byte, error) {
-	// Pad report data to 64 bytes
-	paddedData := make([]byte, 64)
-	copy(paddedData, reportData)
-
-	// Write report data to /dev/attestation/user_report_data
-	err := os.WriteFile("/dev/attestation/user_report_data", paddedData, 0600)
-	if err != nil {
-		return nil, fmt.Errorf("failed to write user_report_data: %w", err)
-	}
-
-	// Read the generated quote from /dev/attestation/quote
-	quote, err := os.ReadFile("/dev/attestation/quote")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read quote: %w", err)
-	}
-
-	return quote, nil
 }
 
 // generateMockQuote generates a mock SGX quote for testing.
