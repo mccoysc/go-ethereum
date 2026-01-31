@@ -553,6 +553,326 @@ const (
 ### 下游依赖（被以下模块使用）
 - P2P 网络层（节点准入）
 - 共识引擎模块（验证者集合）
+- 激励机制模块（奖励分配依赖验证者状态）
+
+## 分层验证者治理机制
+
+为解决安全配置管理的单点故障问题，X Chain 采用分层验证者机制，通过 2/3 多数投票来管理安全配置更新（如 MRENCLAVE 白名单）。
+
+### 治理架构
+
+```
++------------------------------------------------------------------+
+|                     白名单治理架构                                 |
++------------------------------------------------------------------+
+|                                                                  |
+|  ┌────────────────────────────────────────────────────────────┐  |
+|  │                    核心验证者层                              │  |
+|  │  (5-7 个固定成员，负责日常升级决策)                          │  |
+|  │                                                            │  |
+|  │  成员构成:                                                  │  |
+|  │  - 项目核心开发者 (2-3 人)                                  │  |
+|  │  - 知名安全审计机构 (1-2 人)                                │  |
+|  │  - 社区选举代表 (1-2 人)                                    │  |
+|  │  - 合作伙伴/生态项目代表 (1 人)                             │  |
+|  │                                                            │  |
+|  │  投票规则: 2/3 多数同意 (如 7 人中需 5 人同意)              │  |
+|  └────────────────────────────────────────────────────────────┘  |
+|                              │                                   |
+|                              │ 提案                              |
+|                              ▼                                   |
+|  ┌────────────────────────────────────────────────────────────┐  |
+|  │                    社区验证者层                              │  |
+|  │  (动态成员，对重大升级有否决权)                              │  |
+|  │                                                            │  |
+|  │  准入条件:                                                  │  |
+|  │  - 节点运行时间 > 30 天                                     │  |
+|  │  - 质押代币 > 10,000 X                                      │  |
+|  │  - SGX 硬件验证通过                                         │  |
+|  │  - 无历史恶意行为记录                                       │  |
+|  │                                                            │  |
+|  │  否决规则: > 1/3 社区验证者反对则否决升级                   │  |
+|  └────────────────────────────────────────────────────────────┘  |
+|                                                                  |
++------------------------------------------------------------------+
+```
+
+### 验证者类型与投票权
+
+```go
+// governance/layered_validators.go
+package governance
+
+import (
+    "crypto/ecdsa"
+    "math/big"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// ValidatorType 验证者类型
+type ValidatorType uint8
+
+const (
+    CoreValidator      ValidatorType = 0x01  // 核心验证者
+    CommunityValidator ValidatorType = 0x02  // 社区验证者
+)
+
+// Validator 验证者信息
+type Validator struct {
+    Address       common.Address     // 验证者地址
+    Type          ValidatorType      // 验证者类型
+    PublicKey     *ecdsa.PublicKey   // 投票公钥
+    JoinedAt      time.Time          // 加入时间
+    StakedAmount  *big.Int           // 质押数量 (仅社区验证者)
+    NodeUptime    time.Duration      // 节点运行时间
+    SGXVerified   bool               // SGX 硬件验证状态
+    VotingPower   uint64             // 投票权重
+    ReputationScore float64          // 信誉分数（与激励机制模块关联）
+}
+
+// CoreValidatorConfig 核心验证者配置
+type CoreValidatorConfig struct {
+    MinMembers       int     // 最小成员数 (默认 5)
+    MaxMembers       int     // 最大成员数 (默认 7)
+    QuorumThreshold  float64 // 法定人数阈值 (默认 2/3)
+}
+
+// CommunityValidatorConfig 社区验证者配置
+type CommunityValidatorConfig struct {
+    MinUptime        time.Duration // 最小运行时间 (默认 30 天)
+    MinStake         *big.Int      // 最小质押量 (默认 10,000 X)
+    VetoThreshold    float64       // 否决阈值 (默认 1/3)
+    MinReputationScore float64     // 最小信誉分数要求
+}
+
+// DefaultCoreValidatorConfig 默认核心验证者配置
+func DefaultCoreValidatorConfig() *CoreValidatorConfig {
+    return &CoreValidatorConfig{
+        MinMembers:      5,
+        MaxMembers:      7,
+        QuorumThreshold: 0.667, // 2/3
+    }
+}
+
+// DefaultCommunityValidatorConfig 默认社区验证者配置
+func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
+    return &CommunityValidatorConfig{
+        MinUptime:          30 * 24 * time.Hour, // 30 天
+        MinStake:           big.NewInt(10000),   // 10,000 X
+        VetoThreshold:      0.334,               // 1/3
+        MinReputationScore: 0.8,                 // 最低信誉分数 80%
+    }
+}
+```
+
+### 白名单更新提案与投票流程
+
+**普通升级流程** (3天核心投票 + 7天社区公示)：
+
+```
+白名单更新流程
+==============
+
+1. 提案阶段
+   ├── 核心验证者提交 MRENCLAVE 更新提案
+   ├── 提案内容: 新 MRENCLAVE、版本说明、审计报告链接
+   └── 提案进入公示期
+
+2. 核心验证者投票阶段 (3 天)
+   ├── 核心验证者审查代码和审计报告
+   ├── 核心验证者投票 (同意/反对/弃权)
+   └── 需要 2/3 多数同意才能进入下一阶段
+
+3. 社区公示与否决阶段 (7 天)
+   ├── 提案向全网公示
+   ├── 社区验证者可以投否决票
+   ├── 如果 > 1/3 社区验证者否决，提案被拒绝
+   └── 公示期结束且未被否决，提案通过
+
+4. 生效阶段
+   ├── 新 MRENCLAVE 加入白名单
+   ├── 节点可以开始升级
+   └── 密钥迁移通道开启
+```
+
+**紧急升级流程** (安全漏洞修复)：
+
+```
+紧急升级流程 (安全漏洞修复)
+===========================
+
+1. 紧急提案
+   ├── 需要 100% 核心验证者同意
+   ├── 必须附带安全漏洞详情和修复说明
+   └── 只能用于安全修复，不能添加新功能
+
+2. 快速公示期 (24 小时)
+   ├── 社区验证者仍有否决权
+   └── 否决阈值提高到 1/2
+
+3. 立即生效
+   └── 公示期结束后立即生效
+```
+
+### 投票提案数据结构
+
+```go
+// governance/proposal.go
+package governance
+
+// ProposalType 提案类型
+type ProposalType uint8
+
+const (
+    NormalUpgrade    ProposalType = 0x01  // 普通升级
+    EmergencyUpgrade ProposalType = 0x02  // 紧急升级
+)
+
+// ProposalStatus 提案状态
+type ProposalStatus uint8
+
+const (
+    ProposalPending      ProposalStatus = 0x00  // 待投票
+    ProposalCoreVoting   ProposalStatus = 0x01  // 核心验证者投票中
+    ProposalPublicReview ProposalStatus = 0x02  // 社区公示中
+    ProposalApproved     ProposalStatus = 0x03  // 已通过
+    ProposalRejected     ProposalStatus = 0x04  // 已拒绝
+    ProposalExpired      ProposalStatus = 0x05  // 已过期
+)
+
+// WhitelistProposal MRENCLAVE 白名单更新提案
+type WhitelistProposal struct {
+    ID              common.Hash     // 提案 ID
+    Proposer        common.Address  // 提案者
+    Type            ProposalType    // 提案类型
+    NewMREnclave    []byte          // 新的 MRENCLAVE
+    VersionInfo     string          // 版本说明
+    AuditReportURL  string          // 审计报告链接
+    CreatedAt       time.Time       // 创建时间
+    Status          ProposalStatus  // 当前状态
+    
+    // 核心验证者投票
+    CoreVotes       map[common.Address]bool  // true=同意, false=反对
+    CoreVoteDeadline time.Time               // 核心投票截止时间
+    
+    // 社区验证者否决
+    CommunityVetos  map[common.Address]bool  // true=否决
+    PublicReviewEnd time.Time                // 公示期结束时间
+    
+    // 与激励机制模块的关联
+    // 投票参与度会影响验证者的信誉分数和奖励
+    ParticipationTracking map[common.Address]bool
+}
+```
+
+### 与激励机制模块的集成
+
+治理模块需要与激励机制模块紧密协作：
+
+**关联点1：验证者准入**
+- 社区验证者需要满足质押要求和信誉分数要求
+- 信誉分数由激励机制模块计算和维护
+- 治理模块读取信誉分数判断验证者资格
+
+**关联点2：投票激励**
+- 参与投票的验证者获得额外奖励
+- 不参与投票会降低信誉分数
+- 激励机制模块根据投票参与度调整奖励
+
+**关联点3：恶意行为惩罚**
+- 治理模块检测恶意投票行为
+- 通知激励机制模块进行惩罚（扣除质押、降低信誉）
+- 严重违规者可被移出验证者列表
+
+```go
+// governance/incentive_integration.go
+package governance
+
+// IncentiveIntegration 激励机制集成接口
+type IncentiveIntegration interface {
+    // 获取验证者信誉分数（用于准入判断）
+    GetReputationScore(validator common.Address) (float64, error)
+    
+    // 记录投票参与（用于奖励计算）
+    RecordVotingParticipation(validator common.Address, proposalID common.Hash) error
+    
+    // 惩罚恶意行为
+    PenalizeMaliciousBehavior(validator common.Address, reason string, severity int) error
+    
+    // 获取验证者质押金额
+    GetStakedAmount(validator common.Address) (*big.Int, error)
+}
+```
+
+### 密钥迁移触发条件
+
+治理模块决定何时触发密钥迁移，支持两种模式：
+
+**模式1：MRENCLAVE 迁移**（代码更新）
+- 触发条件：新 MRENCLAVE 通过投票加入白名单
+- 影响范围：所有现有密钥需要重新封装
+- 迁移复杂度：高（需要 RA-TLS 通道传输）
+- 使用场景：功能升级、安全修复
+
+**模式2：MRSIGNER 迁移**（签名者更新）  
+- 触发条件：需要更换代码签名者
+- 影响范围：密钥封装策略改变
+- 迁移复杂度：中（本地重新封装）
+- 使用场景：简化升级流程、签名者更换
+
+```go
+// governance/migration_trigger.go
+package governance
+
+// MigrationType 迁移类型
+type MigrationType uint8
+
+const (
+    MigrationMREnclave MigrationType = 0x01  // MRENCLAVE 迁移
+    MigrationMRSigner  MigrationType = 0x02  // MRSIGNER 迁移
+)
+
+// MigrationTrigger 迁移触发器
+type MigrationTrigger struct {
+    Type            MigrationType
+    SourceMeasure   []byte  // 源度量值 (MRENCLAVE 或 MRSIGNER)
+    TargetMeasure   []byte  // 目标度量值
+    TriggeredAt     uint64  // 触发区块高度
+    CompleteAt      uint64  // 完成区块高度（由投票设置）
+}
+
+// ShouldTriggerMigration 判断是否应触发迁移
+func (g *Governance) ShouldTriggerMigration(
+    newMREnclave []byte,
+    newMRSigner []byte,
+) (*MigrationTrigger, error) {
+    // 检查 MRENCLAVE 是否改变
+    currentMREnclave := g.getCurrentMREnclave()
+    if !bytes.Equal(currentMREnclave, newMREnclave) {
+        // MRENCLAVE 迁移
+        return &MigrationTrigger{
+            Type:          MigrationMREnclave,
+            SourceMeasure: currentMREnclave,
+            TargetMeasure: newMREnclave,
+        }, nil
+    }
+    
+    // 检查 MRSIGNER 是否改变
+    currentMRSigner := g.getCurrentMRSigner()
+    if !bytes.Equal(currentMRSigner, newMRSigner) {
+        // MRSIGNER 迁移（更轻量级）
+        return &MigrationTrigger{
+            Type:          MigrationMRSigner,
+            SourceMeasure: currentMRSigner,
+            TargetMeasure: newMRSigner,
+        }, nil
+    }
+    
+    return nil, nil // 无需迁移
+}
+```
 
 ## 核心数据结构
 
