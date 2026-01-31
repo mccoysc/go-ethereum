@@ -75,7 +75,7 @@ The workflow is ready for production use. It correctly:
 5. Follows GitHub Actions best practices
 
 ## Recommendations
-- ✅ Workflow can be safely merged
+- ✅ Workflow can be safely merged into master branch
 - ✅ First run will likely show "no update needed" (already at v1.16.8)
 - ✅ Future releases will be automatically detected and merged
 - ✅ Manual trigger is available for testing via Actions tab
