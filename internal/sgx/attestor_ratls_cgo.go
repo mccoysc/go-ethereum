@@ -20,33 +20,64 @@
 package sgx
 
 /*
-// Conditional library linking based on gramine_libs build tag
-#cgo gramine_libs LDFLAGS: -lra_tls_attest -lra_tls_verify -lsgx_dcap_ql -lmbedtls -lmbedx509 -lmbedcrypto
+#cgo LDFLAGS: -ldl
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <dlfcn.h>
+#include <stdio.h>
 
-// Gramine RA-TLS function declarations
-int ra_tls_create_key_and_crt_der(uint8_t** der_key, size_t* der_key_size,
-                                   uint8_t** der_crt, size_t* der_crt_size);
-void ra_tls_free_key_and_crt_der(uint8_t* der_key, uint8_t* der_crt);
+// Function pointers for dynamically loaded Gramine RA-TLS functions
+static void* gramine_attest_handle = NULL;
+static int (*ra_tls_create_key_and_crt_der_ptr)(uint8_t**, size_t*, uint8_t**, size_t*) = NULL;
+static void (*ra_tls_free_key_and_crt_der_ptr)(uint8_t*, uint8_t*) = NULL;
 
-// Stub implementations when Gramine libraries are not available
-// These will cause linker errors to be resolved by defining them inline
-#ifndef GRAMINE_LIBS_AVAILABLE
+// Initialize Gramine RA-TLS attestation library via dlopen
+static int init_gramine_attest_lib() {
+    if (gramine_attest_handle != NULL) {
+        return 0; // Already initialized
+    }
 
-// Weak attribute allows real implementation to override if available
-int __attribute__((weak)) ra_tls_create_key_and_crt_der(uint8_t** der_key, size_t* der_key_size,
-                                                          uint8_t** der_crt, size_t* der_crt_size) {
-    // Return error indicating library not available
-    return -9999; // Special error code for stub
+    // Try to load the Gramine RA-TLS attestation library
+    gramine_attest_handle = dlopen("libra_tls_attest.so", RTLD_LAZY | RTLD_LOCAL);
+    if (!gramine_attest_handle) {
+        // Library not found - this is OK in non-SGX environments
+        return -1;
+    }
+
+    // Load function symbols
+    ra_tls_create_key_and_crt_der_ptr = dlsym(gramine_attest_handle, "ra_tls_create_key_and_crt_der");
+    if (!ra_tls_create_key_and_crt_der_ptr) {
+        dlclose(gramine_attest_handle);
+        gramine_attest_handle = NULL;
+        return -1;
+    }
+
+    ra_tls_free_key_and_crt_der_ptr = dlsym(gramine_attest_handle, "ra_tls_free_key_and_crt_der");
+    if (!ra_tls_free_key_and_crt_der_ptr) {
+        dlclose(gramine_attest_handle);
+        gramine_attest_handle = NULL;
+        return -1;
+    }
+
+    return 0;
 }
 
-void __attribute__((weak)) ra_tls_free_key_and_crt_der(uint8_t* der_key, uint8_t* der_crt) {
-    // No-op
+// Wrapper function that uses dlopen/dlsym to call Gramine function
+static int ra_tls_create_key_and_crt_der_dynamic(uint8_t** der_key, size_t* der_key_size,
+                                                   uint8_t** der_crt, size_t* der_crt_size) {
+    if (init_gramine_attest_lib() != 0) {
+        return -10000; // Library not available
+    }
+    
+    return ra_tls_create_key_and_crt_der_ptr(der_key, der_key_size, der_crt, der_crt_size);
 }
 
-#endif
+static void ra_tls_free_key_and_crt_der_dynamic(uint8_t* der_key, uint8_t* der_crt) {
+    if (gramine_attest_handle != NULL && ra_tls_free_key_and_crt_der_ptr != NULL) {
+        ra_tls_free_key_and_crt_der_ptr(der_key, der_crt);
+    }
+}
 */
 import "C"
 import (
@@ -100,14 +131,14 @@ func (a *GramineRATLSAttestor) GenerateCertificate() (*tls.Certificate, error) {
 	var derCrt *C.uint8_t
 	var derCrtSize C.size_t
 
-	// Call Gramine's RA-TLS function to create key and certificate
-	ret := C.ra_tls_create_key_and_crt_der(
+	// Call Gramine's RA-TLS function to create key and certificate (via dlopen/dlsym)
+	ret := C.ra_tls_create_key_and_crt_der_dynamic(
 		&derKey, &derKeySize,
 		&derCrt, &derCrtSize,
 	)
 
 	if ret != 0 {
-		return nil, fmt.Errorf("ra_tls_create_key_and_crt_der failed with code %d", ret)
+		return nil, fmt.Errorf("ra_tls_create_key_and_crt_der failed with code %d (library may not be available)", ret)
 	}
 
 	// Convert C buffers to Go slices
@@ -115,7 +146,7 @@ func (a *GramineRATLSAttestor) GenerateCertificate() (*tls.Certificate, error) {
 	crtDER := C.GoBytes(unsafe.Pointer(derCrt), C.int(derCrtSize))
 
 	// Free the C-allocated memory
-	C.ra_tls_free_key_and_crt_der(derKey, derCrt)
+	C.ra_tls_free_key_and_crt_der_dynamic(derKey, derCrt)
 
 	// Parse the private key
 	privateKey, err := x509.ParseECPrivateKey(keyDER)

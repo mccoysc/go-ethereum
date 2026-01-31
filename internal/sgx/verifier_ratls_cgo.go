@@ -20,34 +20,68 @@
 package sgx
 
 /*
-// Conditional library linking based on gramine_libs build tag
-#cgo gramine_libs LDFLAGS: -lra_tls_attest -lra_tls_verify -lsgx_dcap_ql -lmbedtls -lmbedx509 -lmbedcrypto
+#cgo LDFLAGS: -ldl
 
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-
-// Gramine RA-TLS function declarations
-int ra_tls_verify_callback_der(uint8_t* der_crt, size_t der_crt_size);
+#include <dlfcn.h>
+#include <stdio.h>
 
 // Callback function type for custom measurement verification
 typedef int (*verify_measurements_cb_t)(const char* mrenclave, const char* mrsigner,
                                          const char* isv_prod_id, const char* isv_svn);
 
-void ra_tls_set_measurement_callback(verify_measurements_cb_t f_cb);
+// Function pointers for dynamically loaded Gramine RA-TLS functions
+static void* gramine_verify_handle = NULL;
+static int (*ra_tls_verify_callback_der_ptr)(uint8_t*, size_t) = NULL;
+static void (*ra_tls_set_measurement_callback_ptr)(verify_measurements_cb_t) = NULL;
 
-// Stub implementations when Gramine libraries are not available
-#ifndef GRAMINE_LIBS_AVAILABLE
+// Initialize Gramine RA-TLS verify library via dlopen
+static int init_gramine_verify_lib() {
+    if (gramine_verify_handle != NULL) {
+        return 0; // Already initialized
+    }
 
-int __attribute__((weak)) ra_tls_verify_callback_der(uint8_t* der_crt, size_t der_crt_size) {
-    return -9999; // Special error code for stub
+    // Try to load the Gramine RA-TLS verify library
+    gramine_verify_handle = dlopen("libra_tls_verify.so", RTLD_LAZY | RTLD_LOCAL);
+    if (!gramine_verify_handle) {
+        // Library not found - this is OK in non-SGX environments
+        return -1;
+    }
+
+    // Load function symbols
+    ra_tls_verify_callback_der_ptr = dlsym(gramine_verify_handle, "ra_tls_verify_callback_der");
+    if (!ra_tls_verify_callback_der_ptr) {
+        dlclose(gramine_verify_handle);
+        gramine_verify_handle = NULL;
+        return -1;
+    }
+
+    ra_tls_set_measurement_callback_ptr = dlsym(gramine_verify_handle, "ra_tls_set_measurement_callback");
+    if (!ra_tls_set_measurement_callback_ptr) {
+        dlclose(gramine_verify_handle);
+        gramine_verify_handle = NULL;
+        return -1;
+    }
+
+    return 0;
 }
 
-void __attribute__((weak)) ra_tls_set_measurement_callback(verify_measurements_cb_t f_cb) {
-    // No-op
+// Wrapper functions that use dlopen/dlsym to call Gramine functions
+static int ra_tls_verify_callback_der_dynamic(uint8_t* der_crt, size_t der_crt_size) {
+    if (init_gramine_verify_lib() != 0) {
+        return -10000; // Library not available
+    }
+    
+    return ra_tls_verify_callback_der_ptr(der_crt, der_crt_size);
 }
 
-#endif
+static void ra_tls_set_measurement_callback_dynamic(verify_measurements_cb_t f_cb) {
+    if (init_gramine_verify_lib() == 0 && ra_tls_set_measurement_callback_ptr != NULL) {
+        ra_tls_set_measurement_callback_ptr(f_cb);
+    }
+}
 
 // Global storage for allowed measurements (accessed by callback)
 static char** g_allowed_mrenclaves = NULL;
@@ -117,8 +151,8 @@ func NewGramineRATLSVerifier(allowOutdatedTCB bool) *GramineRATLSVerifier {
 		allowOutdatedTCB: allowOutdatedTCB,
 	}
 
-	// Register our custom verification callback
-	C.ra_tls_set_measurement_callback(C.verify_measurements_cb_t(C.custom_verify_measurements))
+	// Register our custom verification callback (via dlopen/dlsym)
+	C.ra_tls_set_measurement_callback_dynamic(C.verify_measurements_cb_t(C.custom_verify_measurements))
 
 	return verifier
 }
@@ -190,14 +224,14 @@ func (v *GramineRATLSVerifier) VerifyCertificate(cert *x509.Certificate) error {
 	// Get the DER-encoded certificate
 	certDER := cert.Raw
 
-	// Call Gramine's verification function
-	ret := C.ra_tls_verify_callback_der(
+	// Call Gramine's verification function (via dlopen/dlsym)
+	ret := C.ra_tls_verify_callback_der_dynamic(
 		(*C.uint8_t)(unsafe.Pointer(&certDER[0])),
 		C.size_t(len(certDER)),
 	)
 
 	if ret != 0 {
-		return fmt.Errorf("RA-TLS certificate verification failed with code %d", ret)
+		return fmt.Errorf("RA-TLS certificate verification failed with code %d (library may not be available)", ret)
 	}
 
 	return nil
