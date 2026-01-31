@@ -1,5 +1,3 @@
-# 数据存储与同步模块开发文档
-
 ## 模块概述
 
 数据存储与同步模块负责 X Chain 的数据持久化和节点间秘密数据同步。该模块管理加密分区存储、秘密数据的安全传输、以及节点间的数据一致性。
@@ -85,163 +83,6 @@
    - AutoMigrationManager 根据 `UpgradeCompleteBlock` 调度迁移
    - 新版本节点在该区块高度前必须完成迁移
    - 触发条件：`currentBlock < UpgradeCompleteBlock AND !migrationComplete`
-
-## 核心接口定义
-
-### EncryptedPartition 接口
-
-```go
-// storage/encrypted_partition.go
-package storage
-
-// EncryptedPartition 加密分区管理器接口
-type EncryptedPartition interface {
-    // WriteSecret 写入秘密数据到加密分区
-    // id: 秘密数据的唯一标识符
-    // data: 秘密数据内容（私钥、密封密钥等）
-    // 返回: 写入错误
-    WriteSecret(id string, data []byte) error
-    
-    // ReadSecret 从加密分区读取秘密数据
-    // id: 秘密数据的唯一标识符
-    // 返回: 秘密数据内容和读取错误
-    ReadSecret(id string) ([]byte, error)
-    
-    // DeleteSecret 删除秘密数据
-    // 使用安全删除方式（先覆盖再删除）
-    DeleteSecret(id string) error
-    
-    // ListSecrets 列出所有秘密数据 ID
-    // 返回: 秘密数据 ID 列表
-    ListSecrets() ([]string, error)
-    
-    // SecureDelete 安全删除文件
-    // 用随机数据覆盖后再删除
-    SecureDelete(filePath string) error
-}
-```
-
-### SyncManager 接口
-
-```go
-// storage/sync_manager.go
-package storage
-
-import (
-    "context"
-    "github.com/ethereum/go-ethereum/common"
-)
-
-// SyncManager 秘密数据同步管理器接口
-type SyncManager interface {
-    // RequestSync 向对等节点请求同步秘密数据
-    // peerID: 对等节点 ID
-    // secretTypes: 请求的秘密数据类型列表
-    // 返回: 请求 ID 和错误
-    RequestSync(peerID common.Hash, secretTypes []SecretDataType) (common.Hash, error)
-    
-    // HandleSyncRequest 处理来自对等节点的同步请求
-    // request: 同步请求
-    // 返回: 同步响应和错误
-    HandleSyncRequest(request *SyncRequest) (*SyncResponse, error)
-    
-    // VerifyAndApplySync 验证并应用同步响应
-    // response: 同步响应
-    // 返回: 应用错误
-    VerifyAndApplySync(response *SyncResponse) error
-    
-    // AddPeer 添加对等节点
-    // peerID: 节点 ID
-    // mrenclave: 节点 MRENCLAVE
-    // quote: SGX Quote
-    // 返回: 添加错误
-    AddPeer(peerID common.Hash, mrenclave [32]byte, quote []byte) error
-    
-    // RemovePeer 移除对等节点
-    RemovePeer(peerID common.Hash) error
-    
-    // GetSyncStatus 获取同步状态
-    // 返回: 同步状态
-    GetSyncStatus(peerID common.Hash) (SyncStatus, error)
-    
-    // StartHeartbeat 启动心跳机制
-    // ctx: 上下文
-    StartHeartbeat(ctx context.Context) error
-}
-```
-
-### AutoMigrationManager 接口
-
-```go
-// storage/auto_migration_manager.go
-package storage
-
-import (
-    "context"
-    "github.com/ethereum/go-ethereum/common"
-)
-
-// AutoMigrationManager 自动迁移管理器接口
-type AutoMigrationManager interface {
-    // StartMonitoring 开始监控 MRENCLAVE 白名单变化
-    // ctx: 上下文
-    // 返回: 监控错误
-    StartMonitoring(ctx context.Context) error
-    
-    // CheckAndMigrate 检查并执行秘密数据迁移
-    // 返回: 迁移是否完成和错误
-    CheckAndMigrate() (bool, error)
-    
-    // GetMigrationStatus 获取迁移状态
-    // 返回: 迁移进度和状态
-    GetMigrationStatus() (*MigrationStatus, error)
-    
-    // VerifyPermissionLevel 验证权限级别
-    // mrenclave: 目标 MRENCLAVE
-    // 返回: 权限级别和错误
-    VerifyPermissionLevel(mrenclave [32]byte) (PermissionLevel, error)
-    
-    // EnforceMigrationLimit 强制迁移次数限制
-    // 根据权限级别限制每日迁移次数
-    EnforceMigrationLimit() error
-}
-```
-
-### ParameterValidator 接口
-
-```go
-// storage/parameter_validator.go
-package storage
-
-// ParameterValidator 参数校验器接口
-type ParameterValidator interface {
-    // ValidateManifestParams 验证 Manifest 参数
-    // manifestParams: 从 Manifest 读取的参数
-    // 返回: 验证错误
-    ValidateManifestParams(manifestParams map[string]string) error
-    
-    // ValidateChainParams 验证链上参数
-    // chainParams: 从链上合约读取的参数
-    // 返回: 验证错误
-    ValidateChainParams(chainParams map[string]interface{}) error
-    
-    // MergeAndValidate 合并并验证所有参数
-    // manifestParams: Manifest 参数
-    // chainParams: 链上参数
-    // cmdLineParams: 命令行参数
-    // 返回: 合并后的参数和验证错误
-    MergeAndValidate(
-        manifestParams map[string]string,
-        chainParams map[string]interface{},
-        cmdLineParams map[string]interface{},
-    ) (map[string]interface{}, error)
-    
-    // CheckSecurityParams 检查安全参数一致性
-    // 确保 Manifest 参数未被篡改
-    // 返回: 检查错误
-    CheckSecurityParams() error
-}
-```
 
 ## 参数分类与校验
 
@@ -615,6 +456,163 @@ func main() {
     log.Printf("Block interval: %s seconds", blockInterval)
     
     // 继续正常启动...
+}
+```
+
+## 核心接口定义
+
+### EncryptedPartition 接口
+
+```go
+// storage/encrypted_partition.go
+package storage
+
+// EncryptedPartition 加密分区管理器接口
+type EncryptedPartition interface {
+    // WriteSecret 写入秘密数据到加密分区
+    // id: 秘密数据的唯一标识符
+    // data: 秘密数据内容（私钥、密封密钥等）
+    // 返回: 写入错误
+    WriteSecret(id string, data []byte) error
+    
+    // ReadSecret 从加密分区读取秘密数据
+    // id: 秘密数据的唯一标识符
+    // 返回: 秘密数据内容和读取错误
+    ReadSecret(id string) ([]byte, error)
+    
+    // DeleteSecret 删除秘密数据
+    // 使用安全删除方式（先覆盖再删除）
+    DeleteSecret(id string) error
+    
+    // ListSecrets 列出所有秘密数据 ID
+    // 返回: 秘密数据 ID 列表
+    ListSecrets() ([]string, error)
+    
+    // SecureDelete 安全删除文件
+    // 用随机数据覆盖后再删除
+    SecureDelete(filePath string) error
+}
+```
+
+### SyncManager 接口
+
+```go
+// storage/sync_manager.go
+package storage
+
+import (
+    "context"
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// SyncManager 秘密数据同步管理器接口
+type SyncManager interface {
+    // RequestSync 向对等节点请求同步秘密数据
+    // peerID: 对等节点 ID
+    // secretTypes: 请求的秘密数据类型列表
+    // 返回: 请求 ID 和错误
+    RequestSync(peerID common.Hash, secretTypes []SecretDataType) (common.Hash, error)
+    
+    // HandleSyncRequest 处理来自对等节点的同步请求
+    // request: 同步请求
+    // 返回: 同步响应和错误
+    HandleSyncRequest(request *SyncRequest) (*SyncResponse, error)
+    
+    // VerifyAndApplySync 验证并应用同步响应
+    // response: 同步响应
+    // 返回: 应用错误
+    VerifyAndApplySync(response *SyncResponse) error
+    
+    // AddPeer 添加对等节点
+    // peerID: 节点 ID
+    // mrenclave: 节点 MRENCLAVE
+    // quote: SGX Quote
+    // 返回: 添加错误
+    AddPeer(peerID common.Hash, mrenclave [32]byte, quote []byte) error
+    
+    // RemovePeer 移除对等节点
+    RemovePeer(peerID common.Hash) error
+    
+    // GetSyncStatus 获取同步状态
+    // 返回: 同步状态
+    GetSyncStatus(peerID common.Hash) (SyncStatus, error)
+    
+    // StartHeartbeat 启动心跳机制
+    // ctx: 上下文
+    StartHeartbeat(ctx context.Context) error
+}
+```
+
+### AutoMigrationManager 接口
+
+```go
+// storage/auto_migration_manager.go
+package storage
+
+import (
+    "context"
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// AutoMigrationManager 自动迁移管理器接口
+type AutoMigrationManager interface {
+    // StartMonitoring 开始监控 MRENCLAVE 白名单变化
+    // ctx: 上下文
+    // 返回: 监控错误
+    StartMonitoring(ctx context.Context) error
+    
+    // CheckAndMigrate 检查并执行秘密数据迁移
+    // 返回: 迁移是否完成和错误
+    CheckAndMigrate() (bool, error)
+    
+    // GetMigrationStatus 获取迁移状态
+    // 返回: 迁移进度和状态
+    GetMigrationStatus() (*MigrationStatus, error)
+    
+    // VerifyPermissionLevel 验证权限级别
+    // mrenclave: 目标 MRENCLAVE
+    // 返回: 权限级别和错误
+    VerifyPermissionLevel(mrenclave [32]byte) (PermissionLevel, error)
+    
+    // EnforceMigrationLimit 强制迁移次数限制
+    // 根据权限级别限制每日迁移次数
+    EnforceMigrationLimit() error
+}
+```
+
+### ParameterValidator 接口
+
+```go
+// storage/parameter_validator.go
+package storage
+
+// ParameterValidator 参数校验器接口
+type ParameterValidator interface {
+    // ValidateManifestParams 验证 Manifest 参数
+    // manifestParams: 从 Manifest 读取的参数
+    // 返回: 验证错误
+    ValidateManifestParams(manifestParams map[string]string) error
+    
+    // ValidateChainParams 验证链上参数
+    // chainParams: 从链上合约读取的参数
+    // 返回: 验证错误
+    ValidateChainParams(chainParams map[string]interface{}) error
+    
+    // MergeAndValidate 合并并验证所有参数
+    // manifestParams: Manifest 参数
+    // chainParams: 链上参数
+    // cmdLineParams: 命令行参数
+    // 返回: 合并后的参数和验证错误
+    MergeAndValidate(
+        manifestParams map[string]string,
+        chainParams map[string]interface{},
+        cmdLineParams map[string]interface{},
+    ) (map[string]interface{}, error)
+    
+    // CheckSecurityParams 检查安全参数一致性
+    // 确保 Manifest 参数未被篡改
+    // 返回: 检查错误
+    CheckSecurityParams() error
 }
 ```
 
@@ -1255,6 +1253,300 @@ func (am *AutoMigration) migrateToNewVersion(targetMREnclave [32]byte) error {
 }
 ```
 
+## 侧信道攻击防护
+
+### 常量时间操作
+
+```go
+// storage/constant_time.go
+package storage
+
+import (
+    "crypto/subtle"
+)
+
+// ConstantTimeCompare 常量时间比较
+func ConstantTimeCompare(a, b []byte) bool {
+    return subtle.ConstantTimeCompare(a, b) == 1
+}
+
+// ConstantTimeSelect 常量时间选择
+func ConstantTimeSelect(condition int, a, b []byte) []byte {
+    result := make([]byte, len(a))
+    for i := range result {
+        result[i] = byte(subtle.ConstantTimeSelect(condition, int(a[i]), int(b[i])))
+    }
+    return result
+}
+
+// ConstantTimeCopy 常量时间复制
+func ConstantTimeCopy(condition int, dst, src []byte) {
+    subtle.ConstantTimeCopy(condition, dst, src)
+}
+```
+
+### 内存安全
+
+```go
+// storage/memory_safety.go
+package storage
+
+import (
+    "runtime"
+    "unsafe"
+)
+
+// SecureBuffer 安全缓冲区
+type SecureBuffer struct {
+    data []byte
+}
+
+// NewSecureBuffer 创建安全缓冲区
+func NewSecureBuffer(size int) *SecureBuffer {
+    return &SecureBuffer{
+        data: make([]byte, size),
+    }
+}
+
+// Write 写入数据
+func (sb *SecureBuffer) Write(data []byte) {
+    copy(sb.data, data)
+}
+
+// Read 读取数据
+func (sb *SecureBuffer) Read() []byte {
+    result := make([]byte, len(sb.data))
+    copy(result, sb.data)
+    return result
+}
+
+// Clear 安全清除
+func (sb *SecureBuffer) Clear() {
+    for i := range sb.data {
+        sb.data[i] = 0
+    }
+    runtime.KeepAlive(sb.data)
+}
+
+// Destroy 销毁缓冲区
+func (sb *SecureBuffer) Destroy() {
+    sb.Clear()
+    sb.data = nil
+}
+```
+
+## 文件结构
+
+```
+storage/
+├── config.go                 # 存储配置
+├── param_validator.go        # 参数校验
+├── encrypted_partition.go    # 加密分区管理
+├── sync_protocol.go          # 同步协议
+├── sync_manager.go           # 同步管理器
+├── constant_time.go          # 常量时间操作
+├── memory_safety.go          # 内存安全
+└── storage_test.go           # 测试
+```
+
+## 单元测试指南
+
+### 参数校验测试
+
+```go
+// config/param_validator_test.go
+package config
+
+import (
+    "os"
+    "testing"
+)
+
+func TestSecurityParamValidation(t *testing.T) {
+    // 设置 Manifest 参数
+    os.Setenv("XCHAIN_MRENCLAVE_WHITELIST", `["abc123"]`)
+    os.Setenv("XCHAIN_ENCRYPTED_PATH", "/data/encrypted")
+    os.Setenv("XCHAIN_SECRET_PATH", "/data/secrets")
+    defer func() {
+        os.Unsetenv("XCHAIN_MRENCLAVE_WHITELIST")
+        os.Unsetenv("XCHAIN_ENCRYPTED_PATH")
+        os.Unsetenv("XCHAIN_SECRET_PATH")
+    }()
+    
+    validator := NewParamValidator()
+    
+    // 加载 Manifest 参数
+    if err := validator.LoadManifestParams(); err != nil {
+        t.Fatalf("LoadManifestParams failed: %v", err)
+    }
+    
+    // 测试匹配的参数
+    err := validator.ValidateRuntimeParam("encrypted_path", "/data/encrypted")
+    if err != nil {
+        t.Errorf("Should accept matching parameter: %v", err)
+    }
+    
+    // 测试不匹配的参数（应该失败）
+    err = validator.ValidateRuntimeParam("encrypted_path", "/other/path")
+    if err == nil {
+        t.Error("Should reject mismatched security parameter")
+    }
+}
+
+func TestRuntimeParamAllowed(t *testing.T) {
+    validator := NewParamValidator()
+    
+    // 非安全参数应该允许
+    err := validator.ValidateRuntimeParam("block_interval", "15")
+    if err != nil {
+        t.Errorf("Should allow runtime parameter: %v", err)
+    }
+}
+```
+
+### 加密分区测试
+
+```go
+// storage/encrypted_partition_test.go
+package storage
+
+import (
+    "bytes"
+    "os"
+    "testing"
+)
+
+func TestEncryptedPartition(t *testing.T) {
+    // 创建临时目录
+    tmpDir, err := os.MkdirTemp("", "encrypted_test")
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer os.RemoveAll(tmpDir)
+    
+    // 创建加密分区
+    key := make([]byte, 32)
+    partition, err := NewEncryptedPartition(tmpDir, key)
+    if err != nil {
+        t.Fatalf("NewEncryptedPartition failed: %v", err)
+    }
+    
+    // 写入秘密
+    secretID := "test_secret"
+    secretData := []byte("sensitive data")
+    
+    if err := partition.WriteSecret(secretID, secretData); err != nil {
+        t.Fatalf("WriteSecret failed: %v", err)
+    }
+    
+    // 读取秘密
+    readData, err := partition.ReadSecret(secretID)
+    if err != nil {
+        t.Fatalf("ReadSecret failed: %v", err)
+    }
+    
+    if !bytes.Equal(readData, secretData) {
+        t.Error("Read data does not match written data")
+    }
+    
+    // 删除秘密
+    if err := partition.DeleteSecret(secretID); err != nil {
+        t.Fatalf("DeleteSecret failed: %v", err)
+    }
+    
+    // 确认已删除
+    _, err = partition.ReadSecret(secretID)
+    if err == nil {
+        t.Error("Secret should be deleted")
+    }
+}
+```
+
+### 同步测试
+
+```go
+// storage/sync_manager_test.go
+package storage
+
+import (
+    "testing"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+func TestSyncMREnclaveValidation(t *testing.T) {
+    allowedMREnclave := [32]byte{1, 2, 3}
+    notAllowedMREnclave := [32]byte{4, 5, 6}
+    
+    config := &SyncConfig{
+        VerifyMREnclave:   true,
+        AllowedMREnclaves: [][32]byte{allowedMREnclave},
+    }
+    
+    manager := &SyncManager{config: config}
+    
+    // 测试允许的 MRENCLAVE
+    if !manager.isAllowedMREnclave(allowedMREnclave) {
+        t.Error("Should allow whitelisted MRENCLAVE")
+    }
+    
+    // 测试不允许的 MRENCLAVE
+    if manager.isAllowedMREnclave(notAllowedMREnclave) {
+        t.Error("Should reject non-whitelisted MRENCLAVE")
+    }
+}
+```
+
+## 配置参数
+
+### 安全参数（Manifest 控制）
+
+```toml
+# gramine manifest
+[loader.env]
+XCHAIN_MRENCLAVE_WHITELIST = '["abc123...", "def456..."]'
+XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
+XCHAIN_SECRET_PATH = "/data/secrets"
+XCHAIN_KEY_MIGRATION_ENABLED = "true"
+XCHAIN_KEY_MIGRATION_THRESHOLD = "2"
+XCHAIN_ADMISSION_STRICT = "true"
+```
+
+### 运行时参数（命令行控制）
+
+```toml
+# config.toml
+[storage]
+# 缓存大小（MB）
+cache_size = 256
+
+# 同步间隔（秒）
+sync_interval = 60
+
+# 心跳间隔（秒）
+heartbeat_interval = 30
+
+# 同步超时（秒）
+sync_timeout = 300
+
+# 最大重试次数
+max_retries = 3
+```
+
+## 实现优先级
+
+| 优先级 | 功能 | 预计工时 |
+|--------|------|----------|
+| P0 | 参数校验机制 | 2 天 |
+| P0 | 加密分区管理 | 3 天 |
+| P0 | 秘密数据存储 | 2 天 |
+| P1 | 同步协议 | 3 天 |
+| P1 | 同步管理器 | 4 天 |
+| P2 | 侧信道防护 | 2 天 |
+| P2 | 内存安全 | 2 天 |
+
+**总计：约 2.5 周**
+
 ## 秘密数据同步
 
 ### 同步协议
@@ -1596,300 +1888,6 @@ func (sm *SyncManager) decryptWithSharedSecret(sharedSecret []byte, encrypted *E
     return gcm.Open(nil, encrypted.Nonce, ciphertext, nil)
 }
 ```
-
-## 侧信道攻击防护
-
-### 常量时间操作
-
-```go
-// storage/constant_time.go
-package storage
-
-import (
-    "crypto/subtle"
-)
-
-// ConstantTimeCompare 常量时间比较
-func ConstantTimeCompare(a, b []byte) bool {
-    return subtle.ConstantTimeCompare(a, b) == 1
-}
-
-// ConstantTimeSelect 常量时间选择
-func ConstantTimeSelect(condition int, a, b []byte) []byte {
-    result := make([]byte, len(a))
-    for i := range result {
-        result[i] = byte(subtle.ConstantTimeSelect(condition, int(a[i]), int(b[i])))
-    }
-    return result
-}
-
-// ConstantTimeCopy 常量时间复制
-func ConstantTimeCopy(condition int, dst, src []byte) {
-    subtle.ConstantTimeCopy(condition, dst, src)
-}
-```
-
-### 内存安全
-
-```go
-// storage/memory_safety.go
-package storage
-
-import (
-    "runtime"
-    "unsafe"
-)
-
-// SecureBuffer 安全缓冲区
-type SecureBuffer struct {
-    data []byte
-}
-
-// NewSecureBuffer 创建安全缓冲区
-func NewSecureBuffer(size int) *SecureBuffer {
-    return &SecureBuffer{
-        data: make([]byte, size),
-    }
-}
-
-// Write 写入数据
-func (sb *SecureBuffer) Write(data []byte) {
-    copy(sb.data, data)
-}
-
-// Read 读取数据
-func (sb *SecureBuffer) Read() []byte {
-    result := make([]byte, len(sb.data))
-    copy(result, sb.data)
-    return result
-}
-
-// Clear 安全清除
-func (sb *SecureBuffer) Clear() {
-    for i := range sb.data {
-        sb.data[i] = 0
-    }
-    runtime.KeepAlive(sb.data)
-}
-
-// Destroy 销毁缓冲区
-func (sb *SecureBuffer) Destroy() {
-    sb.Clear()
-    sb.data = nil
-}
-```
-
-## 文件结构
-
-```
-storage/
-├── config.go                 # 存储配置
-├── param_validator.go        # 参数校验
-├── encrypted_partition.go    # 加密分区管理
-├── sync_protocol.go          # 同步协议
-├── sync_manager.go           # 同步管理器
-├── constant_time.go          # 常量时间操作
-├── memory_safety.go          # 内存安全
-└── storage_test.go           # 测试
-```
-
-## 单元测试指南
-
-### 参数校验测试
-
-```go
-// config/param_validator_test.go
-package config
-
-import (
-    "os"
-    "testing"
-)
-
-func TestSecurityParamValidation(t *testing.T) {
-    // 设置 Manifest 参数
-    os.Setenv("XCHAIN_MRENCLAVE_WHITELIST", `["abc123"]`)
-    os.Setenv("XCHAIN_ENCRYPTED_PATH", "/data/encrypted")
-    os.Setenv("XCHAIN_SECRET_PATH", "/data/secrets")
-    defer func() {
-        os.Unsetenv("XCHAIN_MRENCLAVE_WHITELIST")
-        os.Unsetenv("XCHAIN_ENCRYPTED_PATH")
-        os.Unsetenv("XCHAIN_SECRET_PATH")
-    }()
-    
-    validator := NewParamValidator()
-    
-    // 加载 Manifest 参数
-    if err := validator.LoadManifestParams(); err != nil {
-        t.Fatalf("LoadManifestParams failed: %v", err)
-    }
-    
-    // 测试匹配的参数
-    err := validator.ValidateRuntimeParam("encrypted_path", "/data/encrypted")
-    if err != nil {
-        t.Errorf("Should accept matching parameter: %v", err)
-    }
-    
-    // 测试不匹配的参数（应该失败）
-    err = validator.ValidateRuntimeParam("encrypted_path", "/other/path")
-    if err == nil {
-        t.Error("Should reject mismatched security parameter")
-    }
-}
-
-func TestRuntimeParamAllowed(t *testing.T) {
-    validator := NewParamValidator()
-    
-    // 非安全参数应该允许
-    err := validator.ValidateRuntimeParam("block_interval", "15")
-    if err != nil {
-        t.Errorf("Should allow runtime parameter: %v", err)
-    }
-}
-```
-
-### 加密分区测试
-
-```go
-// storage/encrypted_partition_test.go
-package storage
-
-import (
-    "bytes"
-    "os"
-    "testing"
-)
-
-func TestEncryptedPartition(t *testing.T) {
-    // 创建临时目录
-    tmpDir, err := os.MkdirTemp("", "encrypted_test")
-    if err != nil {
-        t.Fatal(err)
-    }
-    defer os.RemoveAll(tmpDir)
-    
-    // 创建加密分区
-    key := make([]byte, 32)
-    partition, err := NewEncryptedPartition(tmpDir, key)
-    if err != nil {
-        t.Fatalf("NewEncryptedPartition failed: %v", err)
-    }
-    
-    // 写入秘密
-    secretID := "test_secret"
-    secretData := []byte("sensitive data")
-    
-    if err := partition.WriteSecret(secretID, secretData); err != nil {
-        t.Fatalf("WriteSecret failed: %v", err)
-    }
-    
-    // 读取秘密
-    readData, err := partition.ReadSecret(secretID)
-    if err != nil {
-        t.Fatalf("ReadSecret failed: %v", err)
-    }
-    
-    if !bytes.Equal(readData, secretData) {
-        t.Error("Read data does not match written data")
-    }
-    
-    // 删除秘密
-    if err := partition.DeleteSecret(secretID); err != nil {
-        t.Fatalf("DeleteSecret failed: %v", err)
-    }
-    
-    // 确认已删除
-    _, err = partition.ReadSecret(secretID)
-    if err == nil {
-        t.Error("Secret should be deleted")
-    }
-}
-```
-
-### 同步测试
-
-```go
-// storage/sync_manager_test.go
-package storage
-
-import (
-    "testing"
-    
-    "github.com/ethereum/go-ethereum/common"
-)
-
-func TestSyncMREnclaveValidation(t *testing.T) {
-    allowedMREnclave := [32]byte{1, 2, 3}
-    notAllowedMREnclave := [32]byte{4, 5, 6}
-    
-    config := &SyncConfig{
-        VerifyMREnclave:   true,
-        AllowedMREnclaves: [][32]byte{allowedMREnclave},
-    }
-    
-    manager := &SyncManager{config: config}
-    
-    // 测试允许的 MRENCLAVE
-    if !manager.isAllowedMREnclave(allowedMREnclave) {
-        t.Error("Should allow whitelisted MRENCLAVE")
-    }
-    
-    // 测试不允许的 MRENCLAVE
-    if manager.isAllowedMREnclave(notAllowedMREnclave) {
-        t.Error("Should reject non-whitelisted MRENCLAVE")
-    }
-}
-```
-
-## 配置参数
-
-### 安全参数（Manifest 控制）
-
-```toml
-# gramine manifest
-[loader.env]
-XCHAIN_MRENCLAVE_WHITELIST = '["abc123...", "def456..."]'
-XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
-XCHAIN_SECRET_PATH = "/data/secrets"
-XCHAIN_KEY_MIGRATION_ENABLED = "true"
-XCHAIN_KEY_MIGRATION_THRESHOLD = "2"
-XCHAIN_ADMISSION_STRICT = "true"
-```
-
-### 运行时参数（命令行控制）
-
-```toml
-# config.toml
-[storage]
-# 缓存大小（MB）
-cache_size = 256
-
-# 同步间隔（秒）
-sync_interval = 60
-
-# 心跳间隔（秒）
-heartbeat_interval = 30
-
-# 同步超时（秒）
-sync_timeout = 300
-
-# 最大重试次数
-max_retries = 3
-```
-
-## 实现优先级
-
-| 优先级 | 功能 | 预计工时 |
-|--------|------|----------|
-| P0 | 参数校验机制 | 2 天 |
-| P0 | 加密分区管理 | 3 天 |
-| P0 | 秘密数据存储 | 2 天 |
-| P1 | 同步协议 | 3 天 |
-| P1 | 同步管理器 | 4 天 |
-| P2 | 侧信道防护 | 2 天 |
-| P2 | 内存安全 | 2 天 |
-
-**总计：约 2.5 周**
 
 ## 硬分叉数据迁移
 
