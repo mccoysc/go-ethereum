@@ -22,6 +22,7 @@ jobs:
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
+          # GitHub Actions bot user ID
           BOT_EMAIL="41898282+github-actions[bot]"
           BOT_EMAIL="${BOT_EMAIL}@users.noreply.github.com"
           git config user.email "$BOT_EMAIL"
@@ -90,23 +91,28 @@ jobs:
               `Merge conflict with upstream release ${latestTag}`;
             const upstreamUrl =
               'https://github.com/ethereum/go-ethereum';
-            const body = `A new release \`${latestTag}\` was detected \
-            from the upstream repository (ethereum/go-ethereum), but \
-            automatic merging failed due to conflicts.
+            
+            // Construct issue body without line continuation
+            const bodyParts = [
+              `A new release \`${latestTag}\` was detected`,
+              `from the upstream repository (ethereum/go-ethereum),`,
+              `but automatic merging failed due to conflicts.`,
+              ``,
+              `Please manually merge the upstream changes:`,
+              `\`\`\`bash`,
+              `git remote add upstream ${upstreamUrl}.git`,
+              `git fetch upstream --tags`,
+              `git merge ${latestTag}`,
+              `# Resolve conflicts`,
+              `git commit`,
+              `git push`,
+              `\`\`\``,
+              ``,
+              `Upstream release: ${upstreamUrl}/releases/tag/${latestTag}`
+            ];
+            const body = bodyParts.join('\n');
 
-            Please manually merge the upstream changes:
-            \`\`\`bash
-            git remote add upstream ${upstreamUrl}.git
-            git fetch upstream --tags
-            git merge ${latestTag}
-            # Resolve conflicts
-            git commit
-            git push
-            \`\`\`
-
-            Upstream release: ${upstreamUrl}/releases/tag/${latestTag}`;
-
-            // Check if an issue already exists
+            // Check if an issue already exists with matching tag
             const issues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -115,7 +121,7 @@ jobs:
             });
 
             const existingIssue = issues.data.find(issue =>
-              issue.title === title);
+              issue.title.includes(latestTag));
 
             if (!existingIssue) {
               await github.rest.issues.create({
