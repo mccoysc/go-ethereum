@@ -3989,13 +3989,17 @@ func TestConstantTimeCompare(t *testing.T) {
 - **允许的操作**：同步区块、验证区块、读取状态
 - **禁止的操作**：处理交易、出块、任何会导致状态修改的操作
 
-**升级完成区块高度：**
+**升级完成区块高度与秘密数据同步：**
 
 为了提供明确的升级截止时间，引入 `UpgradeCompleteBlock` 参数。该参数是安全参数，存储在 **SecurityConfigContract** 中，由 **GovernanceContract** 通过投票机制管理。
 
+由于秘密数据（私钥等）与区块高度关联，新节点需要通过 RA-TLS 安全通道自动从旧节点同步秘密数据。同步过程记录当前已同步到的区块高度（`secretDataSyncedBlock`）。
+
 升级完成条件（满足任一即可）：
 1. 白名单中只剩下一个 MRENCLAVE（通过投票移除旧版本）
-2. 当前区块高度 >= `UpgradeCompleteBlock`（达到预设的升级截止高度）
+2. 秘密数据已同步到 `UpgradeCompleteBlock` 高度（`secretDataSyncedBlock >= UpgradeCompleteBlock`）
+
+注意：不需要单独检查当前区块高度，因为非秘密数据是直接复用的，秘密数据同步到指定高度本身就意味着节点已准备好处理该高度的数据。
 
 当升级完成后，即使合约还没把度量值改成一个，新节点也只接受与自己一致度量值的节点，旧版本节点将被隔离。
 
