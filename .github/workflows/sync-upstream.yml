@@ -11,6 +11,9 @@ jobs:
   sync:
     name: Sync with ethereum/go-ethereum
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required to push merged changes
+      issues: write    # Required to create issues for conflicts
 
     steps:
       - name: Checkout repository
