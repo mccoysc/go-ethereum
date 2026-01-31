@@ -1,64 +1,120 @@
 package sgx
 
 import (
+	"crypto/ecdsa"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
+	internalsgx "github.com/ethereum/go-ethereum/internal/sgx"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
-// MockAttestor 模拟 SGX 证明器
-type MockAttestor struct {
-	quote      []byte
-	producerID []byte
+// createTestAttestorVerifier creates real Module 01 attestor and verifier for testing
+// These will use mock implementations when not in SGX environment
+func createTestAttestorVerifier(t *testing.T) (Attestor, Verifier) {
+	// Use Module 01's real implementations which auto-detect SGX environment
+	// and fall back to mock mode if not available
+	m01Attestor, err := internalsgx.NewGramineAttestor()
+	if err != nil {
+		t.Fatalf("Failed to create Module 01 attestor: %v", err)
+	}
+
+	m01Verifier := internalsgx.NewDCAPVerifier(false)
+
+	// Wrap in adapters that add consensus-specific methods
+	attestor := newTestAttestorAdapter(m01Attestor)
+	verifier := newTestVerifierAdapter(m01Verifier)
+
+	return attestor, verifier
 }
 
-func NewMockAttestor() *MockAttestor {
-	return &MockAttestor{
-		quote:      []byte("mock-sgx-quote"),
-		producerID: []byte("mock-producer-id"),
+// testAttestorAdapter wraps Module 01 Attestor and adds consensus-specific methods
+type testAttestorAdapter struct {
+	internalsgx.Attestor
+	privateKey *ecdsa.PrivateKey
+}
+
+func newTestAttestorAdapter(m01Attestor internalsgx.Attestor) *testAttestorAdapter {
+	// Generate a private key for signing
+	privateKey, _ := crypto.GenerateKey()
+	return &testAttestorAdapter{
+		Attestor:   m01Attestor,
+		privateKey: privateKey,
 	}
 }
 
-func (m *MockAttestor) GenerateQuote(data []byte) ([]byte, error) {
-	return m.quote, nil
+func (a *testAttestorAdapter) SignInEnclave(data []byte) ([]byte, error) {
+	// In tests, use standard ECDSA signing
+	hash := crypto.Keccak256Hash(data)
+	return crypto.Sign(hash.Bytes(), a.privateKey)
 }
 
-func (m *MockAttestor) SignInEnclave(data []byte) ([]byte, error) {
-	return []byte("mock-signature"), nil
+func (a *testAttestorAdapter) GetProducerID() ([]byte, error) {
+	// Return address derived from public key
+	address := crypto.PubkeyToAddress(a.privateKey.PublicKey)
+	return address.Bytes(), nil
 }
 
-func (m *MockAttestor) GetProducerID() ([]byte, error) {
-	return m.producerID, nil
+// testVerifierAdapter wraps Module 01 Verifier and adds consensus-specific methods
+type testVerifierAdapter struct {
+	internalsgx.Verifier
 }
 
-// MockVerifier 模拟 SGX 验证器
-type MockVerifier struct{}
-
-func NewMockVerifier() *MockVerifier {
-	return &MockVerifier{}
+func newTestVerifierAdapter(m01Verifier internalsgx.Verifier) *testVerifierAdapter {
+	return &testVerifierAdapter{
+		Verifier: m01Verifier,
+	}
 }
 
-func (m *MockVerifier) VerifyQuote(quote []byte) error {
+func (v *testVerifierAdapter) VerifySignature(data, signature, producerID []byte) error {
+	if len(signature) != 65 {
+		return ErrInvalidSignature
+	}
+	if len(producerID) != 20 {
+		return ErrInvalidProducerID
+	}
+
+	hash := crypto.Keccak256Hash(data)
+	pubKey, err := crypto.SigToPub(hash.Bytes(), signature)
+	if err != nil {
+		return err
+	}
+
+	recoveredAddress := crypto.PubkeyToAddress(*pubKey)
+	expectedAddress := common.BytesToAddress(producerID)
+	if recoveredAddress != expectedAddress {
+		return ErrInvalidSignature
+	}
+
 	return nil
 }
 
-func (m *MockVerifier) VerifySignature(data, signature, producerID []byte) error {
-	return nil
-}
+func (v *testVerifierAdapter) ExtractProducerID(quote []byte) ([]byte, error) {
+	// Extract report data from quote (simplified for testing)
+	// In a real implementation, this would parse the SGX quote structure
+	reportData, err := internalsgx.ExtractReportData(quote)
+	if err != nil {
+		// Fall back to a deterministic producer ID for testing
+		producerID := make([]byte, 20)
+		for i := range producerID {
+			producerID[i] = byte(i)
+		}
+		return producerID, nil
+	}
 
-func (m *MockVerifier) ExtractProducerID(quote []byte) ([]byte, error) {
-	return []byte("mock-producer-id"), nil
+	// Use first 20 bytes of report data hash as producer ID
+	hash := crypto.Keccak256Hash(reportData)
+	return hash[:20], nil
 }
 
 // TestNewEngine tests engine creation
 func TestNewEngine(t *testing.T) {
 	config := DefaultConfig()
-	attestor := NewMockAttestor()
-	verifier := NewMockVerifier()
+	attestor, verifier := createTestAttestorVerifier(t)
 
 	engine := New(config, attestor, verifier)
 	if engine == nil {
