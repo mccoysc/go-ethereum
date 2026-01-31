@@ -315,7 +315,65 @@ func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
     // 调用合约读取安全配置
     // ...
 }
+
+// StartPeriodicRefresh 启动定时刷新安全配置
+// refreshInterval 由命令行参数 --security-config-refresh-interval 指定
+func (m *RATLSEnvManager) StartPeriodicRefresh(refreshInterval time.Duration) {
+    go func() {
+        ticker := time.NewTicker(refreshInterval)
+        defer ticker.Stop()
+        
+        for range ticker.C {
+            if err := m.InitFromContract(); err != nil {
+                log.Error("Failed to refresh security config from contract", "error", err)
+            } else {
+                log.Info("Security config refreshed from contract")
+            }
+        }
+    }()
+}
 ```
+
+#### 命令行参数
+
+安全配置的更新间隔通过命令行参数指定（非安全参数，可由用户控制）：
+
+```go
+// cmd/geth/flags.go
+var (
+    SecurityConfigRefreshIntervalFlag = cli.DurationFlag{
+        Name:  "security-config-refresh-interval",
+        Usage: "Interval for refreshing security config from contract (e.g., 5m, 1h)",
+        Value: 5 * time.Minute, // 默认 5 分钟
+    }
+)
+```
+
+```go
+// cmd/geth/main.go
+func geth(ctx *cli.Context) error {
+    // ... 其他初始化 ...
+    
+    // 初始化安全配置管理器
+    envManager := sgx.NewRATLSEnvManager(securityConfigContract, client)
+    
+    // 首次从合约读取安全配置
+    if err := envManager.InitFromContract(); err != nil {
+        return fmt.Errorf("failed to init security config: %w", err)
+    }
+    
+    // 启动定时刷新（间隔由命令行参数指定）
+    refreshInterval := ctx.Duration(SecurityConfigRefreshIntervalFlag.Name)
+    envManager.StartPeriodicRefresh(refreshInterval)
+    
+    // ...
+}
+```
+
+**说明**：
+- `--security-config-refresh-interval` 是非安全参数，允许用户通过命令行指定
+- 默认值为 5 分钟，可根据需要调整
+- 定时刷新确保节点能及时获取链上最新的安全配置（如新增的 MRENCLAVE 白名单）
 
 #### 多值白名单支持（使用回调函数）
 
