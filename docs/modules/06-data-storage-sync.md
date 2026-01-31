@@ -56,8 +56,8 @@ X Chain 的配置参数分为两类：
 ```toml
 # gramine manifest 中的安全参数
 [loader.env]
-# 度量值白名单（JSON 格式）
-XCHAIN_MRENCLAVE_WHITELIST = '["abc123...", "def456..."]'
+# 注意：度量值白名单不应放在环境变量中，应从链上动态读取
+# 以下是本节点自身的安全配置
 
 # 加密分区路径
 XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
@@ -73,6 +73,8 @@ XCHAIN_KEY_MIGRATION_THRESHOLD = "2"
 XCHAIN_ADMISSION_STRICT = "true"
 XCHAIN_ADMISSION_VERIFY_QUOTE = "true"
 ```
+
+**重要说明**：度量值白名单（MRENCLAVE 白名单）不应存储在 Manifest 环境变量中。白名单应从链上动态读取，这样投票添加/移除白名单的结果可以实时生效，无需重新部署节点。详见 SGX 证明模块文档中的"白名单配置（链上动态读取）"章节。
 
 ### 非安全参数（命令行控制）
 
@@ -131,26 +133,8 @@ type ParamDefinition struct {
 }
 
 // SecurityParams 安全相关参数定义
+// 注意：白名单不在此列表中，因为白名单应从链上动态读取，而不是从环境变量
 var SecurityParams = []ParamDefinition{
-    {
-        Name:     "mrenclave_whitelist",
-        Category: ParamCategorySecurity,
-        EnvKey:   "XCHAIN_MRENCLAVE_WHITELIST",
-        CliFlag:  "xchain.whitelist",
-        Required: true,
-        Validator: func(v string) error {
-            // 白名单使用 Base64 编码的 CSV 格式
-            decoded, err := base64.StdEncoding.DecodeString(v)
-            if err != nil {
-                return fmt.Errorf("invalid Base64 encoding: %w", err)
-            }
-            lines := strings.Split(string(decoded), "\n")
-            if len(lines) == 0 {
-                return errors.New("whitelist cannot be empty")
-            }
-            return nil
-        },
-    },
     {
         Name:     "encrypted_path",
         Category: ParamCategorySecurity,
