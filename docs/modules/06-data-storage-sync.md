@@ -24,21 +24,67 @@
 |  数据存储与同步模块  |
 +----------------------+
         |
-        +---> SGX 证明模块（RA-TLS 传输）
+        +---> SGX 证明模块（RA-TLS 传输、度量值验证）
         |
-        +---> 治理模块（度量值验证）
+        +---> 治理模块（MRENCLAVE 白名单、权限级别、升级协调）
         |
         +---> Gramine 运行时（加密文件系统）
+        |
+        +---> 共识引擎模块（UpgradeCompleteBlock 同步）
 ```
 
 ### 上游依赖
-- SGX 证明模块（RA-TLS 安全通道）
-- 治理模块（度量值白名单）
-- Gramine LibOS（加密文件系统）
+- SGX 证明模块（RA-TLS 安全通道、双向度量值验证）
+- 治理模块（通过 SecurityConfigContract 获取 MRENCLAVE 白名单、PermissionLevel、迁移策略）
+- Gramine LibOS（加密文件系统、密钥封装/解封）
+- 共识引擎（读取当前区块高度、UpgradeCompleteBlock 参数）
 
 ### 下游依赖（被以下模块使用）
-- 预编译合约模块（密钥存储）
-- 共识引擎模块（状态持久化）
+- 预编译合约模块（密钥存储、ECDH 秘密存储）
+- 共识引擎模块（状态持久化、区块数据存储）
+- 治理模块（通过加密分区存储投票记录）
+
+### 与治理模块的交互
+
+数据存储模块通过以下方式与治理模块交互：
+
+1. **MRENCLAVE 白名单验证**：
+   - 秘密数据同步前，必须验证对端节点的 MRENCLAVE 在白名单中
+   - 白名单从 SecurityConfigContract 动态读取
+   - 治理投票可以添加或移除 MRENCLAVE
+
+2. **权限级别检查**：
+   - 新添加的 MRENCLAVE 具有渐进式权限：
+     - Basic (7 天)：每日最多 10 次迁移
+     - Standard (30 天)：每日最多 100 次迁移
+     - Full (永久)：无限制迁移
+   - AutoMigrationManager 根据 PermissionLevel 限制迁移频率
+
+3. **升级协调**：
+   - 治理设置 `UpgradeCompleteBlock` 参数在 SecurityConfigContract 中
+   - AutoMigrationManager 确保在该区块高度前完成秘密数据迁移
+   - 迁移完成条件：`secretDataSyncedBlock >= UpgradeCompleteBlock`
+
+### 秘密数据同步触发机制
+
+秘密数据同步由以下事件触发：
+
+1. **新节点加入**：
+   - 新节点首次启动时，检测到本地加密分区为空
+   - 从现有节点请求秘密数据同步
+   - 触发条件：`localSecretDataVersion == 0`
+
+2. **MRENCLAVE 白名单更新**（自动触发）：
+   - 治理投票添加新 MRENCLAVE 到白名单后
+   - AutoMigrationManager 自动检测白名单变化
+   - 新版本节点开始同步秘密数据
+   - 触发条件：`newMREnclave ∈ whitelist AND permissionLevel >= Basic`
+
+3. **升级期间协调**：
+   - 升级进行中（白名单包含多个 MRENCLAVE）
+   - AutoMigrationManager 根据 `UpgradeCompleteBlock` 调度迁移
+   - 新版本节点在该区块高度前必须完成迁移
+   - 触发条件：`currentBlock < UpgradeCompleteBlock AND !migrationComplete`
 
 ## 参数分类与校验
 
@@ -1475,6 +1521,371 @@ key_name = "_sgx_mrsigner"  # 使用 MRSIGNER 而非 MRENCLAVE
 1. **生产环境**：使用 MRENCLAVE sealing + 数据迁移机制
 2. **测试环境**：使用 MRSIGNER sealing 简化升级流程
 3. **混合策略**：核心私钥使用 MRENCLAVE，临时数据使用 MRSIGNER
+
+## 自动迁移管理器（AutoMigrationManager）
+
+### 概述
+
+AutoMigrationManager 负责在硬分叉升级期间自动触发和管理秘密数据迁移。它监听治理模块的白名单变化，并根据权限级别和升级进度调度迁移任务。
+
+### 核心功能
+
+1. **白名单变化监听**：实时监控 SecurityConfigContract 的 MRENCLAVE 白名单
+2. **权限级别检查**：根据 PermissionLevel 限制迁移频率
+3. **升级协调**：确保在 UpgradeCompleteBlock 前完成迁移
+4. **自动重试**：迁移失败时自动重试
+5. **进度跟踪**：记录迁移进度，支持断点续传
+
+### 数据结构
+
+```go
+// internal/sgx/auto_migration.go
+package sgx
+
+import (
+    "context"
+    "sync"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+    "github.com/ethereum/go-ethereum/governance"
+)
+
+// AutoMigrationManager 自动迁移管理器
+type AutoMigrationManager struct {
+    // 配置
+    config        *AutoMigrationConfig
+    
+    // 治理接口
+    securityConfig governance.SecurityConfigReader
+    
+    // 本地 MRENCLAVE
+    localMREnclave [32]byte
+    
+    // 迁移器
+    migrator       *DataMigrator
+    
+    // 状态跟踪
+    mu                sync.RWMutex
+    migrationStatus   MigrationStatus
+    lastCheckTime     time.Time
+    dailyMigrations   int
+    lastMigrationDate time.Time
+    
+    // 取消函数
+    cancel context.CancelFunc
+}
+
+// AutoMigrationConfig 自动迁移配置
+type AutoMigrationConfig struct {
+    // 白名单检查间隔
+    WhitelistCheckInterval time.Duration
+    
+    // 升级区块检查间隔
+    UpgradeBlockCheckInterval time.Duration
+    
+    // 迁移重试次数
+    MaxRetries int
+    
+    // 重试间隔
+    RetryInterval time.Duration
+}
+
+// DefaultAutoMigrationConfig 默认配置
+func DefaultAutoMigrationConfig() *AutoMigrationConfig {
+    return &AutoMigrationConfig{
+        WhitelistCheckInterval:    60 * time.Second,  // 每分钟检查一次
+        UpgradeBlockCheckInterval: 30 * time.Second,  // 每 30 秒检查升级区块
+        MaxRetries:                3,
+        RetryInterval:             5 * time.Minute,
+    }
+}
+
+// MigrationStatus 迁移状态
+type MigrationStatus struct {
+    InProgress       bool
+    Completed        bool
+    LastMigrationAt  time.Time
+    TotalMigrations  int
+    FailedAttempts   int
+    CompletedBlock   uint64       // 完成迁移时的区块高度
+}
+
+// NewAutoMigrationManager 创建自动迁移管理器
+func NewAutoMigrationManager(
+    config *AutoMigrationConfig,
+    securityConfig governance.SecurityConfigReader,
+    localMREnclave [32]byte,
+    migrator *DataMigrator,
+) *AutoMigrationManager {
+    return &AutoMigrationManager{
+        config:         config,
+        securityConfig: securityConfig,
+        localMREnclave: localMREnclave,
+        migrator:       migrator,
+        migrationStatus: MigrationStatus{},
+    }
+}
+
+// Start 启动自动迁移管理器
+func (amm *AutoMigrationManager) Start(ctx context.Context) error {
+    ctx, cancel := context.WithCancel(ctx)
+    amm.cancel = cancel
+    
+    // 启动白名单监听
+    go amm.whitelistWatcher(ctx)
+    
+    // 启动升级协调器
+    go amm.upgradeCoordinator(ctx)
+    
+    return nil
+}
+
+// Stop 停止自动迁移管理器
+func (amm *AutoMigrationManager) Stop() {
+    if amm.cancel != nil {
+        amm.cancel()
+    }
+}
+
+// whitelistWatcher 监听白名单变化
+func (amm *AutoMigrationManager) whitelistWatcher(ctx context.Context) {
+    ticker := time.NewTicker(amm.config.WhitelistCheckInterval)
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            amm.checkWhitelistChange()
+        }
+    }
+}
+
+// checkWhitelistChange 检查白名单是否变化
+func (amm *AutoMigrationManager) checkWhitelistChange() {
+    // 获取当前白名单
+    whitelist := amm.securityConfig.GetMREnclaveWhitelist()
+    
+    // 检查本地 MRENCLAVE 是否在白名单中
+    isInWhitelist := false
+    var permissionLevel governance.PermissionLevel
+    
+    for _, entry := range whitelist {
+        if entry.MRENCLAVE == amm.localMREnclave {
+            isInWhitelist = true
+            permissionLevel = entry.PermissionLevel
+            break
+        }
+    }
+    
+    // 如果本地 MRENCLAVE 是新添加的，且还未完成迁移
+    if isInWhitelist && !amm.isMigrationComplete() {
+        // 检查是否允许迁移（基于权限级别和每日限制）
+        if amm.canMigrate(permissionLevel) {
+            log.Info("Whitelist changed, triggering automatic migration")
+            amm.triggerMigration()
+        }
+    }
+}
+
+// upgradeCoordinator 升级协调器
+func (amm *AutoMigrationManager) upgradeCoordinator(ctx context.Context) {
+    ticker := time.NewTicker(amm.config.UpgradeBlockCheckInterval)
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            amm.checkUpgradeProgress()
+        }
+    }
+}
+
+// checkUpgradeProgress 检查升级进度
+func (amm *AutoMigrationManager) checkUpgradeProgress() {
+    upgradeConfig := amm.securityConfig.GetUpgradeConfig()
+    if upgradeConfig == nil || upgradeConfig.UpgradeCompleteBlock == 0 {
+        return
+    }
+    
+    // 获取当前区块高度
+    currentBlock := amm.getCurrentBlockHeight()
+    
+    // 如果接近升级完成区块，且迁移未完成，加速迁移
+    if !amm.isMigrationComplete() {
+        blocksRemaining := upgradeConfig.UpgradeCompleteBlock - currentBlock
+        
+        if blocksRemaining < 100 {
+            // 距离升级完成不足 100 个区块，立即触发迁移
+            log.Warn("Approaching upgrade complete block, triggering urgent migration", 
+                "remaining", blocksRemaining)
+            amm.triggerMigration()
+        }
+    }
+}
+
+// canMigrate 检查是否允许迁移
+func (amm *AutoMigrationManager) canMigrate(permissionLevel governance.PermissionLevel) bool {
+    amm.mu.Lock()
+    defer amm.mu.Unlock()
+    
+    // 如果已经在迁移中，不允许新的迁移
+    if amm.migrationStatus.InProgress {
+        return false
+    }
+    
+    // 检查每日迁移限制
+    today := time.Now().Truncate(24 * time.Hour)
+    if amm.lastMigrationDate.Before(today) {
+        // 新的一天，重置计数器
+        amm.dailyMigrations = 0
+        amm.lastMigrationDate = today
+    }
+    
+    // 根据权限级别检查限制
+    var dailyLimit int
+    switch permissionLevel {
+    case governance.PermissionBasic:
+        dailyLimit = 10
+    case governance.PermissionStandard:
+        dailyLimit = 100
+    case governance.PermissionFull:
+        dailyLimit = -1 // 无限制
+    default:
+        return false // 无权限
+    }
+    
+    if dailyLimit == -1 {
+        return true // 无限制
+    }
+    
+    return amm.dailyMigrations < dailyLimit
+}
+
+// triggerMigration 触发迁移
+func (amm *AutoMigrationManager) triggerMigration() {
+    amm.mu.Lock()
+    amm.migrationStatus.InProgress = true
+    amm.mu.Unlock()
+    
+    go func() {
+        defer func() {
+            amm.mu.Lock()
+            amm.migrationStatus.InProgress = false
+            amm.mu.Unlock()
+        }()
+        
+        // 执行迁移（带重试）
+        ctx := context.Background()
+        var err error
+        
+        for i := 0; i < amm.config.MaxRetries; i++ {
+            err = amm.migrator.MigrateEncryptedData(ctx)
+            if err == nil {
+                // 迁移成功
+                amm.mu.Lock()
+                amm.migrationStatus.Completed = true
+                amm.migrationStatus.LastMigrationAt = time.Now()
+                amm.migrationStatus.TotalMigrations++
+                amm.migrationStatus.CompletedBlock = amm.getCurrentBlockHeight()
+                amm.dailyMigrations++
+                amm.mu.Unlock()
+                
+                log.Info("Secret data migration completed successfully")
+                return
+            }
+            
+            // 迁移失败，记录并重试
+            log.Error("Migration attempt failed", "attempt", i+1, "error", err)
+            amm.mu.Lock()
+            amm.migrationStatus.FailedAttempts++
+            amm.mu.Unlock()
+            
+            if i < amm.config.MaxRetries-1 {
+                time.Sleep(amm.config.RetryInterval)
+            }
+        }
+        
+        log.Error("Migration failed after all retries", "error", err)
+    }()
+}
+
+// isMigrationComplete 检查迁移是否完成
+func (amm *AutoMigrationManager) isMigrationComplete() bool {
+    amm.mu.RLock()
+    defer amm.mu.RUnlock()
+    return amm.migrationStatus.Completed
+}
+
+// getCurrentBlockHeight 获取当前区块高度
+func (amm *AutoMigrationManager) getCurrentBlockHeight() uint64 {
+    // 实际实现需要注入区块链接口，例如：
+    // type BlockchainReader interface {
+    //     CurrentBlock() *types.Block
+    // }
+    // 然后在 AutoMigrationManager 中添加该接口字段：
+    // blockchain BlockchainReader
+    // 
+    // 实现示例：
+    // if amm.blockchain != nil {
+    //     return amm.blockchain.CurrentBlock().NumberU64()
+    // }
+    return 0 // 占位实现，需在实际使用时注入区块链接口
+}
+
+// GetMigrationStatus 获取迁移状态
+func (amm *AutoMigrationManager) GetMigrationStatus() MigrationStatus {
+    amm.mu.RLock()
+    defer amm.mu.RUnlock()
+    return amm.migrationStatus
+}
+```
+
+### 集成示例
+
+```go
+// cmd/geth/main.go
+package main
+
+import (
+    "context"
+    
+    "github.com/ethereum/go-ethereum/internal/sgx"
+    "github.com/ethereum/go-ethereum/governance"
+)
+
+func startNode() {
+    // 创建治理接口
+    securityConfig := governance.NewSecurityConfigReader(...)
+    
+    // 获取本地 MRENCLAVE
+    localMREnclave := sgx.GetLocalMREnclave()
+    
+    // 创建数据迁移器
+    migrator := sgx.NewDataMigrator(...)
+    
+    // 创建自动迁移管理器
+    autoMigrationConfig := sgx.DefaultAutoMigrationConfig()
+    autoMigrationMgr := sgx.NewAutoMigrationManager(
+        autoMigrationConfig,
+        securityConfig,
+        localMREnclave,
+        migrator,
+    )
+    
+    // 启动自动迁移管理器
+    ctx := context.Background()
+    if err := autoMigrationMgr.Start(ctx); err != nil {
+        log.Fatal("Failed to start auto migration manager", "err", err)
+    }
+    
+    // ... 其他节点初始化逻辑
+}
+```
 
 ### 迁移单元测试
 
