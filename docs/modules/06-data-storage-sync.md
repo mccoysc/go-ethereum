@@ -84,7 +84,9 @@ XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
 | 投票阈值 | GovernanceContract | 提案通过所需的投票比例 |
 | 投票期限 | GovernanceContract | 提案投票的区块数 |
 
-**注意**：所有安全、准入、秘密数据管理策略等相关配置都存储在安全配置合约中，但对安全配置合约的管理（修改配置）由治理合约通过投票实现。
+**合约职责划分**：
+- **安全配置合约（SecurityConfigContract）**：存储所有安全配置，被其他模块读取
+- **治理合约（GovernanceContract）**：负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约
 
 ```go
 // 从链上读取安全参数
