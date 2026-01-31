@@ -3333,8 +3333,8 @@ type SGXNodeRecord struct {
         |  (确认双方都运行相同的可信代码)       |
         |<------------------------------------->|
         |                                       |
-        |  4. A 解封本地加密分区数据            |
-        |  (在 enclave 内部解密)                |
+        |  4. A 读取本地加密分区数据            |
+        |  (Gramine 自动解封，应用获得明文)     |
         |                                       |
         |  5. 通过 RA-TLS 通道传输秘密数据      |
         |  (传输过程中 TLS 加密保护)            |
@@ -3343,9 +3343,9 @@ type SGXNodeRecord struct {
         |                    6. B 接收秘密数据  |
         |                    在 enclave 内部    |
         |                                       |
-        |                    7. B 重新封装数据  |
-        |                    用 B 的 seal key   |
-        |                    存入加密分区       |
+        |                    7. B 写入加密分区  |
+        |                    (Gramine 自动加密) |
+        |                                       |
         |                                       |
 ```
 
@@ -3406,7 +3406,7 @@ func (m *SecretSyncManager) SyncSecretsFromPeer(ctx context.Context, peer *Peer)
             return fmt.Errorf("failed to sync key %s: %w", keyId.Hex(), err)
         }
         
-        // 存储到本地加密分区（自动用本地 seal key 重新封装）
+        // 存储到本地加密分区（应用只需普通文件写入，Gramine 自动加密）
         if err := m.keyStore.Store(keyId, keyData); err != nil {
             return fmt.Errorf("failed to store key %s: %w", keyId.Hex(), err)
         }
@@ -3456,18 +3456,24 @@ func (m *SecretSyncManager) ServeSecretSync(conn *RATLSConn) error {
 
 1. **度量值验证是前提**：在传输任何秘密数据之前，必须先通过 RA-TLS 验证对方的 MRENCLAVE/MRSIGNER
 2. **只信任相同代码**：只有运行完全相同代码（相同 MRENCLAVE）的节点才能接收秘密数据
-3. **端到端加密**：秘密数据在 enclave 内解密，通过 TLS 传输，在目标 enclave 内重新封装
+3. **端到端加密**：秘密数据由 Gramine 自动解密，通过 TLS 传输，目标节点 Gramine 自动加密存储
 4. **无明文暴露**：秘密数据在整个同步过程中从不以明文形式暴露给主机操作系统
 
+**注意**：Gramine 透明处理加密分区的加解密，应用只需进行标准文件 I/O 操作。
+
 ```
-秘密数据生命周期：
+秘密数据生命周期（Gramine 透明加密）：
 
 源节点 enclave          RA-TLS 通道           目标节点 enclave
-[seal key A 加密] --解密--> [明文] --TLS加密--> [明文] --加密--> [seal key B 加密]
+[Gramine 加密] --自动解密--> [明文] --TLS加密--> [明文] --自动加密--> [Gramine 加密]
      |                        |                   |                    |
      |                        |                   |                    |
   存储在磁盘              仅在 enclave 内       仅在 enclave 内      存储在磁盘
   (加密状态)              (受 SGX 保护)        (受 SGX 保护)        (加密状态)
+  
+应用代码只需：
+  读取: data := os.ReadFile("/encrypted/key.bin")  // Gramine 自动解密
+  写入: os.WriteFile("/encrypted/key.bin", data, 0600)  // Gramine 自动加密
 ```
 
 ### 5.3 数据一致性验证
@@ -5953,17 +5959,18 @@ func (h *ValidatorHealthCheck) ProcessMaliciousReport(
 | 账户余额 | StateDB | **直接复用**，无需迁移 |
 | 合约存储 | StateDB | **直接复用**，无需迁移 |
 | 交易历史 | LevelDB | **直接复用**，无需迁移 |
-| 私钥数据 | 加密分区 | **需要迁移** (Re-sealing) |
+| 私钥数据 | 加密分区 | **需要迁移** (Gramine 重新加密) |
 | 密钥元数据 | 加密分区 | **需要迁移** |
 | 派生秘密 | 加密分区 | **需要迁移** |
 
 **重要说明**：
 - 非加密分区的数据（区块链状态、账户余额、合约存储等）是公开的，新节点可以直接读取旧节点的数据目录
 - 只有加密分区中的秘密数据需要通过 RA-TLS 安全通道从旧节点迁移到新节点
+- **Gramine 透明处理加密**：应用代码只需在旧节点读取文件、在新节点写入文件，Gramine 自动处理加解密
 
 **秘密数据迁移机制：**
 
-由于 SGX sealing 使用 MRENCLAVE 作为密钥派生因子，新版本代码的 MRENCLAVE 不同，无法直接解密旧版本封装的秘密数据。因此需要通过 RA-TLS 安全通道迁移：
+由于 Gramine 的 SGX sealing 使用 MRENCLAVE 作为密钥派生因子，新版本代码的 MRENCLAVE 不同，Gramine 无法直接解密旧版本的加密文件。因此需要通过 RA-TLS 安全通道迁移：
 
 ```
 硬分叉升级流程：
@@ -5980,14 +5987,14 @@ func (h *ValidatorHealthCheck) ProcessMaliciousReport(
    │  旧版本节点                       新版本节点                 │
    │  MRENCLAVE: ABC                   MRENCLAVE: DEF            │
    │       │                                 │                    │
-   │       │  1. 解封秘密数据                │                    │
-   │       │  (使用 MRENCLAVE=ABC)           │                    │
+   │       │  1. 应用读取文件                │                    │
+   │       │  (Gramine 自动解密)             │                    │
    │       │                                 │                    │
    │       │  2. RA-TLS 安全通道传输         │                    │
    │       │────────────────────────────────>│                    │
    │       │                                 │                    │
-   │       │                   3. 重新封装   │                    │
-   │       │                   (MRENCLAVE=DEF)                    │
+   │       │                   3. 应用写入文件                    │
+   │       │                   (Gramine 自动加密)                 │
    └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -6005,6 +6012,7 @@ type DataMigrator struct {
 }
 
 // MigrateEncryptedData 迁移加密分区数据
+// 注意：应用只需读写文件，Gramine 自动处理加解密
 func (m *DataMigrator) MigrateEncryptedData(ctx context.Context) error {
     // 1. 建立 RA-TLS 连接到旧版本节点
     conn, err := m.ratls.Connect(m.oldEnclave.Address)
@@ -6013,17 +6021,18 @@ func (m *DataMigrator) MigrateEncryptedData(ctx context.Context) error {
     }
     defer conn.Close()
     
-    // 2. 请求旧版本节点解封并传输数据
-    // 数据在 RA-TLS 通道中传输，保证安全性
+    // 2. 请求旧版本节点读取文件并传输数据
+    // 旧节点应用读取文件 -> Gramine 自动解密 -> RA-TLS 传输
     keys, err := m.requestKeyMigration(conn)
     if err != nil {
         return fmt.Errorf("failed to migrate keys: %w", err)
     }
     
-    // 3. 在新版本 enclave 中重新封装
+    // 3. 新节点应用写入文件，Gramine 自动加密
     for _, key := range keys {
-        if err := m.newEnclave.SealKey(key); err != nil {
-            return fmt.Errorf("failed to seal key %s: %w", key.ID, err)
+        // 应用只需普通文件写入，Gramine 透明处理加密
+        if err := m.newEnclave.keyStore.Store(key.ID, key.Data); err != nil {
+            return fmt.Errorf("failed to store key %s: %w", key.ID, err)
         }
     }
     
@@ -6039,7 +6048,7 @@ type KeyMigrationRequest struct {
 
 // KeyMigrationResponse 密钥迁移响应
 type KeyMigrationResponse struct {
-    Keys []MigrationKeyData  // 解封后的密钥数据
+    Keys []MigrationKeyData  // 密钥数据（明文，在 enclave 内）
 }
 
 type MigrationKeyData struct {
@@ -6538,8 +6547,7 @@ go-ethereum/
 │           └── peer.go
 ├── internal/
 │   └── sgx/                          # 新增：SGX 内部工具
-│       ├── keystore.go               # 加密分区密钥存储
-│       ├── sealing.go                # SGX sealing
+│       ├── keystore.go               # 加密分区密钥存储（Gramine 透明加解密）
 │       └── rdrand.go                 # 硬件随机数
 └── params/
     └── config.go                     # 修改：添加 SGX 配置
@@ -6624,10 +6632,10 @@ type KeyStore interface {
 
 ### 9.2 密钥安全
 
-1. **私钥隔离**：私钥永不离开 SGX enclave
-2. **Sealing 保护**：使用 MRENCLAVE-based sealing 保护持久化密钥
+1. **私钥隔离**：私钥永不离开 SGX enclave，应用在 enclave 内处理
+2. **Gramine 透明加密**：Gramine 自动加密加密分区中的所有文件，应用无需处理加密
 3. **权限控制**：只有密钥所有者可以使用私钥
-4. **派生秘密保护**：ECDH 等派生秘密同样存储在加密分区
+4. **派生秘密保护**：ECDH 等派生秘密同样存储在加密分区，由 Gramine 自动保护
 
 ### 9.3 网络安全
 

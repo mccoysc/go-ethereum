@@ -670,10 +670,8 @@ type SecretData struct {
 package storage
 
 import (
-    "crypto/aes"
-    "crypto/cipher"
     "crypto/rand"
-    "errors"
+    "fmt"
     "io"
     "os"
     "path/filepath"
@@ -681,15 +679,17 @@ import (
 )
 
 // EncryptedPartition 加密分区管理器
+// 注意：Gramine 透明加密，应用无需处理加解密
 type EncryptedPartition struct {
     mu       sync.RWMutex
     basePath string
-    key      []byte // Gramine 提供的密封密钥
+    // 不需要 key 字段 - Gramine 自动处理加密
 }
 
 // NewEncryptedPartition 创建加密分区管理器
-// 注意：basePath 必须是 Manifest 中配置的加密分区路径
-func NewEncryptedPartition(basePath string, sealingKey []byte) (*EncryptedPartition, error) {
+// basePath 必须是 Manifest 中配置的加密分区路径
+// Gramine 会对该路径下的所有文件自动进行透明加解密
+func NewEncryptedPartition(basePath string) (*EncryptedPartition, error) {
     // 验证路径存在
     if _, err := os.Stat(basePath); os.IsNotExist(err) {
         return nil, fmt.Errorf("encrypted partition path does not exist: %s", basePath)
@@ -697,27 +697,26 @@ func NewEncryptedPartition(basePath string, sealingKey []byte) (*EncryptedPartit
     
     return &EncryptedPartition{
         basePath: basePath,
-        key:      sealingKey,
     }, nil
 }
 
 // WriteSecret 写入秘密数据
-// 私钥必须存储在加密分区
+// 应用只需调用标准文件写入，Gramine 会透明地自动加密数据
 func (ep *EncryptedPartition) WriteSecret(id string, data []byte) error {
     ep.mu.Lock()
     defer ep.mu.Unlock()
     
     filePath := filepath.Join(ep.basePath, id)
     
-    // 使用 O_CREAT | O_TRUNC 标志
-    // 文件不存在则创建，存在则覆盖
+    // 标准的文件写入操作
+    // Gramine 在底层透明地加密数据，应用无感知
     file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
     if err != nil {
         return fmt.Errorf("failed to open file: %w", err)
     }
     defer file.Close()
     
-    // Gramine 会自动加密写入加密分区的数据
+    // 应用写入明文，Gramine 自动加密后存储到磁盘
     if _, err := file.Write(data); err != nil {
         return fmt.Errorf("failed to write data: %w", err)
     }
@@ -726,13 +725,15 @@ func (ep *EncryptedPartition) WriteSecret(id string, data []byte) error {
 }
 
 // ReadSecret 读取秘密数据
+// 应用只需调用标准文件读取，Gramine 会透明地自动解密数据
 func (ep *EncryptedPartition) ReadSecret(id string) ([]byte, error) {
     ep.mu.RLock()
     defer ep.mu.RUnlock()
     
     filePath := filepath.Join(ep.basePath, id)
     
-    // Gramine 会自动解密从加密分区读取的数据
+    // 标准的文件读取操作
+    // Gramine 在底层透明地解密数据，应用直接获得明文
     data, err := os.ReadFile(filePath)
     if err != nil {
         return nil, fmt.Errorf("failed to read secret: %w", err)
@@ -811,16 +812,20 @@ func (ep *EncryptedPartition) ListSecrets() ([]string, error) {
 
 ### 1. 加密分区初始化
 
-加密分区由 Gramine 提供自动加密功能。实现时需要：
+加密分区由 Gramine 提供**透明加密**功能，应用无需处理加解密操作。
+
+**关键点：**
+- Gramine 在 manifest 中配置加密分区路径
+- 应用只需使用标准文件 I/O（os.ReadFile, os.WriteFile 等）
+- Gramine 在底层自动加密/解密，对应用完全透明
+- 应用无需管理密钥、无需调用加密 API
 
 ```go
 // storage/encrypted_partition_impl.go
 package storage
 
 import (
-    "crypto/rand"
     "fmt"
-    "io"
     "os"
     "path/filepath"
     "sync"
@@ -829,41 +834,43 @@ import (
 type GramineEncryptedPartition struct {
     mu       sync.RWMutex
     basePath string
-    key      []byte // Gramine 提供的密封密钥
+    // 无需 key 字段 - Gramine 透明处理所有加密
 }
 
 // NewEncryptedPartition 创建加密分区管理器
 // basePath 必须是 Manifest 中配置的加密分区路径
-func NewEncryptedPartition(basePath string, sealingKey []byte) (*GramineEncryptedPartition, error) {
+func NewEncryptedPartition(basePath string) (*GramineEncryptedPartition, error) {
     // 1. 验证路径存在
     if _, err := os.Stat(basePath); os.IsNotExist(err) {
         return nil, fmt.Errorf("encrypted partition path does not exist: %s", basePath)
     }
     
-    // 2. 验证路径在 Gramine 加密分区挂载点下
-    // Gramine 会自动加密写入此路径的数据
+    // 2. 验证路径在 Gramine manifest 中配置为加密分区
+    // Gramine 会对此路径下的所有文件自动透明加解密
     
     return &GramineEncryptedPartition{
         basePath: basePath,
-        key:      sealingKey,
     }, nil
 }
 
 // WriteSecret 实现秘密数据写入
+// 注意：应用只做普通文件写入，Gramine 自动加密
 func (ep *GramineEncryptedPartition) WriteSecret(id string, data []byte) error {
     ep.mu.Lock()
     defer ep.mu.Unlock()
     
     filePath := filepath.Join(ep.basePath, id)
     
-    // Gramine 会自动加密写入加密分区的数据
-    // 使用 O_CREAT | O_TRUNC 标志
+    // 标准的 Go 文件写入 - 无任何加密代码
+    // Gramine 在底层透明地将数据加密后写入磁盘
     file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
     if err != nil {
         return fmt.Errorf("failed to open file: %w", err)
     }
     defer file.Close()
     
+    // 应用写入的是明文数据
+    // Gramine 自动加密，应用对加密过程完全无感知
     if _, err := file.Write(data); err != nil {
         return fmt.Errorf("failed to write data: %w", err)
     }
@@ -872,20 +879,45 @@ func (ep *GramineEncryptedPartition) WriteSecret(id string, data []byte) error {
 }
 
 // ReadSecret 实现秘密数据读取
+// 注意：应用只做普通文件读取，Gramine 自动解密
 func (ep *GramineEncryptedPartition) ReadSecret(id string) ([]byte, error) {
     ep.mu.RLock()
     defer ep.mu.RUnlock()
     
     filePath := filepath.Join(ep.basePath, id)
     
-    // Gramine 会自动解密从加密分区读取的数据
+    // 标准的 Go 文件读取 - 无任何解密代码
+    // Gramine 在底层透明地解密数据并返回明文
     data, err := os.ReadFile(filePath)
     if err != nil {
         return nil, fmt.Errorf("failed to read secret: %w", err)
     }
     
+    // 应用直接获得明文数据，无需任何解密操作
     return data, nil
 }
+```
+
+**Gramine manifest 配置示例：**
+
+```toml
+# geth.manifest.template
+
+[sgx]
+# 配置加密分区路径
+enclave_size = "1G"
+thread_num = 16
+
+# 将 /data/encrypted 目录配置为加密分区
+[[fs.mounts]]
+type = "encrypted"
+path = "/data/encrypted"
+uri = "file:/host/encrypted"
+key_name = "_sgx_mrenclave"  # 使用 MRENCLAVE 派生密钥
+
+# 应用代码中只需：
+# os.WriteFile("/data/encrypted/mykey.bin", keyData, 0600)
+# Gramine 自动加密存储
 ```
 
 ### 2. 秘密数据同步实现
