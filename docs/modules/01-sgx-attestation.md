@@ -271,7 +271,7 @@ var dynamicEnvVars = []string{
     "RA_TLS_CERT_TIMESTAMP_NOT_AFTER",
 }
 
-// InitFromContract 从合约读取安全参数并设置环境变量
+// InitFromContract 从合约读取安全参数并设置环境变量或回调函数
 func (m *RATLSEnvManager) InitFromContract() error {
     // 1. 清除动态环境变量（防止外部注入）
     for _, envVar := range dynamicEnvVars {
@@ -284,18 +284,22 @@ func (m *RATLSEnvManager) InitFromContract() error {
         return fmt.Errorf("failed to fetch security config from contract: %w", err)
     }
     
-    // 3. 设置动态环境变量
-    for _, mrenclave := range config.AllowedMREnclave {
-        // RA_TLS_MRENCLAVE 环境变量支持单个值
-        // 多个 MRENCLAVE 通过 ra_tls_set_measurement_callback 回调验证
-        os.Setenv("RA_TLS_MRENCLAVE", mrenclave)
-        break // 只设置第一个，其余通过回调验证
+    // 3. 处理 MRENCLAVE 白名单
+    // 环境变量只支持单个值，多个值时使用回调函数
+    if len(config.AllowedMREnclave) == 1 {
+        os.Setenv("RA_TLS_MRENCLAVE", config.AllowedMREnclave[0])
+    } else if len(config.AllowedMREnclave) > 1 {
+        // 多个值时不设置环境变量，使用回调函数
+        m.setupMeasurementCallback(config.AllowedMREnclave, config.AllowedMRSigner)
     }
     
-    if len(config.AllowedMRSigner) > 0 {
+    // 4. 处理 MRSIGNER 白名单（同样逻辑）
+    if len(config.AllowedMRSigner) == 1 {
         os.Setenv("RA_TLS_MRSIGNER", config.AllowedMRSigner[0])
     }
+    // 多个 MRSIGNER 时在回调函数中处理
     
+    // 5. 设置其他环境变量（单值参数）
     os.Setenv("RA_TLS_ISV_PROD_ID", fmt.Sprintf("%d", config.ISVProdID))
     os.Setenv("RA_TLS_ISV_SVN", fmt.Sprintf("%d", config.ISVSVN))
     
@@ -313,25 +317,69 @@ func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
 }
 ```
 
-#### 多 MRENCLAVE 白名单支持
+#### 多值白名单支持（使用回调函数）
 
-`RA_TLS_MRENCLAVE` 环境变量支持单个值，X Chain 使用 `ra_tls_set_measurement_callback` 回调函数支持多个 MRENCLAVE：
+环境变量（`RA_TLS_MRENCLAVE`、`RA_TLS_MRSIGNER`）只支持单个值。当白名单有多个值时，**不设置环境变量**，而是使用 `ra_tls_set_measurement_callback` 回调函数进行自定义匹配：
 
 ```go
-// 使用 ra_tls_set_measurement_callback 支持多 MRENCLAVE 白名单
-func setupMeasurementCallback(allowedMREnclaves []string) {
+// setupMeasurementCallback 设置自定义度量值验证回调
+// 当白名单有多个值时调用此函数，不设置环境变量
+func (m *RATLSEnvManager) setupMeasurementCallback(
+    allowedMREnclaves []string, 
+    allowedMRSigners []string,
+) {
+    // 保存白名单到全局变量供回调函数使用
+    globalAllowedMREnclaves = allowedMREnclaves
+    globalAllowedMRSigners = allowedMRSigners
+    
     // 注册自定义验证回调
     // 回调函数签名（定义在 ra_tls.h）：
     // int (*verify_measurements_cb_t)(const char* mrenclave, const char* mrsigner,
     //                                  const char* isv_prod_id, const char* isv_svn);
+    C.ra_tls_set_measurement_callback(C.verify_measurements_cb_t(C.custom_verify_callback))
+}
+
+// custom_verify_callback 自定义验证回调（C 函数）
+// 返回 0 表示验证通过，非 0 表示验证失败
+//export custom_verify_callback
+func custom_verify_callback(
+    mrenclave *C.char, 
+    mrsigner *C.char,
+    isv_prod_id *C.char, 
+    isv_svn *C.char,
+) C.int {
+    goMREnclave := C.GoString(mrenclave)
+    goMRSigner := C.GoString(mrsigner)
     
-    // 在回调中检查 mrenclave 是否在白名单中
-    // 白名单数据来自 SecurityConfigContract
+    // 检查 MRENCLAVE 是否在白名单中
+    mrenclaveValid := false
+    for _, allowed := range globalAllowedMREnclaves {
+        if goMREnclave == allowed {
+            mrenclaveValid = true
+            break
+        }
+    }
+    
+    // 检查 MRSIGNER 是否在白名单中
+    mrsignerValid := false
+    for _, allowed := range globalAllowedMRSigners {
+        if goMRSigner == allowed {
+            mrsignerValid = true
+            break
+        }
+    }
+    
+    if mrenclaveValid && mrsignerValid {
+        return 0 // 验证通过
+    }
+    return -1 // 验证失败
 }
 ```
 
-**重要说明**：
-- 所有安全参数必须从链上合约动态读取，禁止静态配置
+**白名单处理逻辑**：
+- 单个值：设置对应环境变量（`RA_TLS_MRENCLAVE` 或 `RA_TLS_MRSIGNER`）
+- 多个值：不设置环境变量，使用 `ra_tls_set_measurement_callback` 注册回调函数
+- 回调函数中遍历白名单进行匹配验证
 
 ### 证书和私钥存储
 
