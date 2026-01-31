@@ -271,7 +271,7 @@ var dynamicEnvVars = []string{
     "RA_TLS_CERT_TIMESTAMP_NOT_AFTER",
 }
 
-// InitFromContract 从合约读取安全参数并设置环境变量
+// InitFromContract 从合约读取安全参数并设置环境变量或回调函数
 func (m *RATLSEnvManager) InitFromContract() error {
     // 1. 清除动态环境变量（防止外部注入）
     for _, envVar := range dynamicEnvVars {
@@ -284,18 +284,22 @@ func (m *RATLSEnvManager) InitFromContract() error {
         return fmt.Errorf("failed to fetch security config from contract: %w", err)
     }
     
-    // 3. 设置动态环境变量
-    for _, mrenclave := range config.AllowedMREnclave {
-        // RA_TLS_MRENCLAVE 环境变量支持单个值
-        // 多个 MRENCLAVE 通过 ra_tls_set_measurement_callback 回调验证
-        os.Setenv("RA_TLS_MRENCLAVE", mrenclave)
-        break // 只设置第一个，其余通过回调验证
+    // 3. 处理 MRENCLAVE 白名单
+    // 环境变量只支持单个值，多个值时使用回调函数
+    if len(config.AllowedMREnclave) == 1 {
+        os.Setenv("RA_TLS_MRENCLAVE", config.AllowedMREnclave[0])
+    } else if len(config.AllowedMREnclave) > 1 {
+        // 多个值时不设置环境变量，使用回调函数
+        m.setupMeasurementCallback(config.AllowedMREnclave, config.AllowedMRSigner)
     }
     
-    if len(config.AllowedMRSigner) > 0 {
+    // 4. 处理 MRSIGNER 白名单（同样逻辑）
+    if len(config.AllowedMRSigner) == 1 {
         os.Setenv("RA_TLS_MRSIGNER", config.AllowedMRSigner[0])
     }
+    // 多个 MRSIGNER 时在回调函数中处理
     
+    // 5. 设置其他环境变量（单值参数）
     os.Setenv("RA_TLS_ISV_PROD_ID", fmt.Sprintf("%d", config.ISVProdID))
     os.Setenv("RA_TLS_ISV_SVN", fmt.Sprintf("%d", config.ISVSVN))
     
@@ -311,27 +315,129 @@ func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
     // 调用合约读取安全配置
     // ...
 }
+
+// StartPeriodicRefresh 启动定时刷新安全配置
+// refreshInterval 由命令行参数 --security-config-refresh-interval 指定
+func (m *RATLSEnvManager) StartPeriodicRefresh(refreshInterval time.Duration) {
+    go func() {
+        ticker := time.NewTicker(refreshInterval)
+        defer ticker.Stop()
+        
+        for range ticker.C {
+            if err := m.InitFromContract(); err != nil {
+                log.Error("Failed to refresh security config from contract", "error", err)
+            } else {
+                log.Info("Security config refreshed from contract")
+            }
+        }
+    }()
+}
 ```
 
-#### 多 MRENCLAVE 白名单支持
+#### 命令行参数
 
-`RA_TLS_MRENCLAVE` 环境变量支持单个值，X Chain 使用 `ra_tls_set_measurement_callback` 回调函数支持多个 MRENCLAVE：
+安全配置的更新间隔通过命令行参数指定（非安全参数，可由用户控制）：
 
 ```go
-// 使用 ra_tls_set_measurement_callback 支持多 MRENCLAVE 白名单
-func setupMeasurementCallback(allowedMREnclaves []string) {
+// cmd/geth/flags.go
+var (
+    SecurityConfigRefreshIntervalFlag = cli.DurationFlag{
+        Name:  "security-config-refresh-interval",
+        Usage: "Interval for refreshing security config from contract (e.g., 5m, 1h)",
+        Value: 5 * time.Minute, // 默认 5 分钟
+    }
+)
+```
+
+```go
+// cmd/geth/main.go
+func geth(ctx *cli.Context) error {
+    // ... 其他初始化 ...
+    
+    // 初始化安全配置管理器
+    envManager := sgx.NewRATLSEnvManager(securityConfigContract, client)
+    
+    // 首次从合约读取安全配置
+    if err := envManager.InitFromContract(); err != nil {
+        return fmt.Errorf("failed to init security config: %w", err)
+    }
+    
+    // 启动定时刷新（间隔由命令行参数指定）
+    refreshInterval := ctx.Duration(SecurityConfigRefreshIntervalFlag.Name)
+    envManager.StartPeriodicRefresh(refreshInterval)
+    
+    // ...
+}
+```
+
+**说明**：
+- `--security-config-refresh-interval` 是非安全参数，允许用户通过命令行指定
+- 默认值为 5 分钟，可根据需要调整
+- 定时刷新确保节点能及时获取链上最新的安全配置（如新增的 MRENCLAVE 白名单）
+
+#### 多值白名单支持（使用回调函数）
+
+环境变量（`RA_TLS_MRENCLAVE`、`RA_TLS_MRSIGNER`）只支持单个值。当白名单有多个值时，**不设置环境变量**，而是使用 `ra_tls_set_measurement_callback` 回调函数进行自定义匹配：
+
+```go
+// setupMeasurementCallback 设置自定义度量值验证回调
+// 当白名单有多个值时调用此函数，不设置环境变量
+func (m *RATLSEnvManager) setupMeasurementCallback(
+    allowedMREnclaves []string, 
+    allowedMRSigners []string,
+) {
+    // 保存白名单到全局变量供回调函数使用
+    globalAllowedMREnclaves = allowedMREnclaves
+    globalAllowedMRSigners = allowedMRSigners
+    
     // 注册自定义验证回调
     // 回调函数签名（定义在 ra_tls.h）：
     // int (*verify_measurements_cb_t)(const char* mrenclave, const char* mrsigner,
     //                                  const char* isv_prod_id, const char* isv_svn);
+    C.ra_tls_set_measurement_callback(C.verify_measurements_cb_t(C.custom_verify_callback))
+}
+
+// custom_verify_callback 自定义验证回调（C 函数）
+// 返回 0 表示验证通过，非 0 表示验证失败
+//export custom_verify_callback
+func custom_verify_callback(
+    mrenclave *C.char, 
+    mrsigner *C.char,
+    isv_prod_id *C.char, 
+    isv_svn *C.char,
+) C.int {
+    goMREnclave := C.GoString(mrenclave)
+    goMRSigner := C.GoString(mrsigner)
     
-    // 在回调中检查 mrenclave 是否在白名单中
-    // 白名单数据来自 SecurityConfigContract
+    // 检查 MRENCLAVE 是否在白名单中
+    mrenclaveValid := false
+    for _, allowed := range globalAllowedMREnclaves {
+        if goMREnclave == allowed {
+            mrenclaveValid = true
+            break
+        }
+    }
+    
+    // 检查 MRSIGNER 是否在白名单中
+    mrsignerValid := false
+    for _, allowed := range globalAllowedMRSigners {
+        if goMRSigner == allowed {
+            mrsignerValid = true
+            break
+        }
+    }
+    
+    if mrenclaveValid && mrsignerValid {
+        return 0 // 验证通过
+    }
+    return -1 // 验证失败
 }
 ```
 
-**重要说明**：
-- 所有安全参数必须从链上合约动态读取，禁止静态配置
+**白名单处理逻辑**：
+- 单个值：设置对应环境变量（`RA_TLS_MRENCLAVE` 或 `RA_TLS_MRSIGNER`）
+- 多个值：不设置环境变量，使用 `ra_tls_set_measurement_callback` 注册回调函数
+- 回调函数中遍历白名单进行匹配验证
 
 ### 证书和私钥存储
 
