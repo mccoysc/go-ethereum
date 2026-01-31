@@ -3,6 +3,7 @@ package sgx
 import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 // API RPC API for SGX consensus
@@ -20,15 +21,33 @@ func NewAPI(engine *SGXEngine, chain consensus.ChainHeaderReader) *API {
 }
 
 // GetBlockQuality returns the quality score for a block
+// Note: This function requires access to full block data.
+// If the chain only provides headers, quality calculation will be limited.
 func (api *API) GetBlockQuality(blockHash common.Hash) (*BlockQuality, error) {
 	header := api.chain.GetHeaderByHash(blockHash)
 	if header == nil {
 		return nil, ErrInvalidBlock
 	}
 
-	// Note: In a real implementation, we would need to get the full block
-	// This is a simplified version
-	return nil, nil
+	// Try to get full block if chain supports it
+	// The ChainHeaderReader interface doesn't include GetBlock,
+	// so we need to type assert if we want the full block
+	var block *types.Block
+	if chainWithBlocks, ok := api.chain.(interface {
+		GetBlock(hash common.Hash, number uint64) *types.Block
+	}); ok {
+		block = chainWithBlocks.GetBlock(blockHash, header.Number.Uint64())
+	}
+
+	if block == nil {
+		// If we can't get the full block, return nil
+		// In production, this would need to fetch the block from the database
+		return nil, ErrInvalidBlock
+	}
+
+	// Calculate block quality using the quality scorer
+	quality := api.engine.blockQualityScorer.CalculateQuality(block)
+	return quality, nil
 }
 
 // GetNodeReputation returns the reputation data for a node

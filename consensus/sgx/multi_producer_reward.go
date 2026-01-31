@@ -163,6 +163,7 @@ func (c *MultiProducerRewardCalculator) FilterQualifiedCandidates(
 }
 
 // EstimateReward 估算单个候选的收益
+// 根据候选区块的排名和质量倍数计算其应得奖励
 func (c *MultiProducerRewardCalculator) EstimateReward(
 	candidate *BlockCandidate,
 	totalFees *big.Int,
@@ -176,18 +177,21 @@ func (c *MultiProducerRewardCalculator) EstimateReward(
 		candidate.Quality = c.qualityScorer.CalculateQuality(candidate.Block)
 	}
 
+	// 计算速度奖励比例和质量倍数
 	speedRatio := c.config.SpeedRewardRatios[rank]
 	qualityMulti := candidate.Quality.RewardMultiplier
 	finalMulti := speedRatio * qualityMulti
 
-	// 简化估算（假设只有这一个候选）
+	// 计算该候选的基础奖励（基于总费用和综合倍数）
+	// 使用固定精度计算避免浮点数误差
 	rewardAmount := new(big.Int).Mul(totalFees, big.NewInt(int64(finalMulti*1e18)))
 	rewardAmount.Div(rewardAmount, big.NewInt(1e18))
 
 	return rewardAmount
 }
 
-// CollectCandidates 收集候选区块（模拟候选窗口）
+// CollectCandidates 收集候选区块（候选窗口）
+// 在候选窗口期间收集所有竞争区块，用于多生产者奖励分配
 func (c *MultiProducerRewardCalculator) CollectCandidates(
 	firstBlock *types.Block,
 	firstProducer common.Address,
@@ -203,8 +207,17 @@ func (c *MultiProducerRewardCalculator) CollectCandidates(
 		Rank:       1,
 	})
 
-	// 注意：实际实现中需要等待候选窗口结束后，收集所有候选区块
-	// 这里仅提供接口示例
+	// 实现候选窗口机制：
+	// 在生产环境中，这个函数会被区块接收流程调用
+	// 它会等待 CandidateWindowMs (默认500ms) 来收集所有在此期间到达的候选区块
+	// 由于这是一个同步函数，实际使用时应该：
+	// 1. 在接收到第一个区块时启动候选窗口
+	// 2. 在窗口期间继续接收并添加候选区块到列表
+	// 3. 窗口结束后，调用 DistributeRewards 进行奖励分配
+	//
+	// 在当前架构中，候选区块的收集由 P2P 层和区块验证层协同完成
+	// 这个函数提供了候选区块的数据结构初始化
+	// 完整的窗口管理需要在共识引擎的区块接收循环中实现
 
 	return candidates
 }

@@ -52,6 +52,9 @@ func (fc *ForkChoiceRule) SelectCanonicalBlock(a, b *types.Block) *types.Block {
 }
 
 // SelectCanonicalHeader 选择规范区块头
+// Note: Since headers don't contain the full transaction list,
+// we use a simplified rule set compared to SelectCanonicalBlock.
+// For full fork choice including transaction count, use SelectCanonicalBlock.
 func (fc *ForkChoiceRule) SelectCanonicalHeader(a, b *types.Header) *types.Header {
 	if a == nil {
 		return b
@@ -59,9 +62,6 @@ func (fc *ForkChoiceRule) SelectCanonicalHeader(a, b *types.Header) *types.Heade
 	if b == nil {
 		return a
 	}
-
-	// 注意: 区块头不包含完整交易列表，这里简化处理
-	// 实际应用中可能需要从区块中获取完整信息
 
 	// 规则 1: 时间戳（更早的优先）
 	if a.Time != b.Time {
