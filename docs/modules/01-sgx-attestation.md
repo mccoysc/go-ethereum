@@ -194,6 +194,31 @@ func (c *OnChainSecurityConfig) IsAllowedMREnclave(mrenclave []byte) bool {
 - 本节点的 MRENCLAVE 由代码决定，无法伪造
 - 其他节点的 MRENCLAVE 通过 SGX Quote 验证，由 Intel 签名保证真实性
 
+### 节点身份与 Instance ID
+
+**重要说明**：除了升级硬分叉期间，所有节点的 MRENCLAVE 都是完全相同的（因为运行相同版本的代码）。区分不同节点的是 **Instance ID**（SGX 硬件唯一标识），而不是 MRENCLAVE。
+
+| 标识 | 作用 | 特点 |
+|------|------|------|
+| **MRENCLAVE** | 验证代码完整性 | 所有运行相同代码的节点值相同 |
+| **Instance ID** | 区分不同物理节点 | 每个 SGX CPU 唯一，无法伪造 |
+
+**Instance ID 的作用**：
+- 确保每个物理 CPU 只能注册一个验证者节点
+- 防止同一硬件运行多个节点进行女巫攻击
+- 在引导阶段用于区分不同的创始管理者
+
+```go
+// 从 SGX Quote 中提取 Instance ID（硬件唯一标识）
+func extractInstanceID(quote []byte) (string, error) {
+    // 从 Quote 中提取 EPID 或 DCAP 硬件标识
+    // 该标识对于每个物理 SGX CPU 是唯一的
+    // ...
+}
+```
+
+详见 [治理模块](05-governance.md) 中的硬件唯一性验证说明。
+
 ### RA-TLS 环境变量管理
 
 RA-TLS 环境变量分为两类：Manifest 固定配置（影响 MRENCLAVE）和动态从合约读取。
