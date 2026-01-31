@@ -202,42 +202,127 @@ func (c *OnChainSecurityConfig) IsAllowedMREnclave(mrenclave []byte) bool {
 - 本节点的 MRENCLAVE 由代码决定，无法伪造
 - 其他节点的 MRENCLAVE 通过 SGX Quote 验证，由 Intel 签名保证真实性
 
-### RA-TLS 环境变量（官方 Gramine 支持）
+### RA-TLS 环境变量管理（动态从合约读取）
 
-以下是官方 Gramine RA-TLS 支持的环境变量：
+**重要安全原则**：所有 RA-TLS 安全相关环境变量**禁止**从静态配置读取，必须在 geth 启动时从链上合约读取，然后动态设置/覆盖进程的环境变量。
 
-**验证相关环境变量**（用于 `ra_tls_verify_callback_der`）：
+#### Manifest 中禁止配置的环境变量
 
-| 环境变量 | 描述 | 示例值 |
-|----------|------|--------|
-| `RA_TLS_MRENCLAVE` | 期望的 MRENCLAVE 值（十六进制） | `abc123...` |
-| `RA_TLS_MRSIGNER` | 期望的 MRSIGNER 值（十六进制） | `def456...` |
-| `RA_TLS_ISV_PROD_ID` | 期望的 ISV 产品 ID | `1` |
-| `RA_TLS_ISV_SVN` | 期望的 ISV 安全版本号 | `1` |
-| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB（不安全，仅测试用） | `1` |
-| `RA_TLS_ALLOW_HW_CONFIG_NEEDED` | 允许硬件配置需要更新的状态 | `1` |
-| `RA_TLS_ALLOW_SW_HARDENING_NEEDED` | 允许软件加固需要的状态 | `1` |
-| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave（不安全，仅测试用） | `1` |
+以下环境变量属于安全相关配置，**禁止**在 Manifest 中静态配置：
 
-**证书生成相关环境变量**（用于 `ra_tls_create_key_and_crt_der`）：
+| 环境变量 | 说明 | 来源 |
+|----------|------|------|
+| `RA_TLS_MRENCLAVE` | 期望的 MRENCLAVE 值 | 从 SecurityConfigContract 读取 |
+| `RA_TLS_MRSIGNER` | 期望的 MRSIGNER 值 | 从 SecurityConfigContract 读取 |
+| `RA_TLS_ISV_PROD_ID` | 期望的 ISV 产品 ID | 从 SecurityConfigContract 读取 |
+| `RA_TLS_ISV_SVN` | 期望的 ISV 安全版本号 | 从 SecurityConfigContract 读取 |
+| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB | 从 SecurityConfigContract 读取 |
+| `RA_TLS_ALLOW_HW_CONFIG_NEEDED` | 允许硬件配置需要更新 | 从 SecurityConfigContract 读取 |
+| `RA_TLS_ALLOW_SW_HARDENING_NEEDED` | 允许软件加固需要 | 从 SecurityConfigContract 读取 |
+| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave | 从 SecurityConfigContract 读取 |
+| `RA_TLS_CERT_TIMESTAMP_NOT_BEFORE` | 证书有效期开始 | 从 SecurityConfigContract 读取 |
+| `RA_TLS_CERT_TIMESTAMP_NOT_AFTER` | 证书有效期结束 | 从 SecurityConfigContract 读取 |
 
-| 环境变量 | 描述 | 示例值 |
-|----------|------|--------|
-| `RA_TLS_CERT_TIMESTAMP_NOT_BEFORE` | 证书有效期开始时间 | `20240101000000` |
-| `RA_TLS_CERT_TIMESTAMP_NOT_AFTER` | 证书有效期结束时间 | `20341231235959` |
+#### Manifest 中允许配置的环境变量
 
-**X Chain 应用层环境变量**（非 Gramine RA-TLS，由 X Chain 应用读取）：
+只有合约地址可以写死在 Manifest 中（作为安全锚点，影响 MRENCLAVE）：
 
-| 环境变量 | 描述 | 示例值 |
-|----------|------|--------|
-| `XCHAIN_SECURITY_CONFIG_CONTRACT` | 安全配置合约地址（写死，由治理合约管理） | `0xabcdef...` |
-| `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址（写死） | `0x123456...` |
+| 环境变量 | 说明 |
+|----------|------|
+| `XCHAIN_SECURITY_CONFIG_CONTRACT` | 安全配置合约地址（写死） |
+| `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址（写死） |
+
+#### 启动时环境变量动态设置流程
+
+geth 启动时必须执行以下流程：
+
+```go
+// internal/sgx/env_manager.go
+package sgx
+
+import (
+    "os"
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// RATLSEnvManager 管理 RA-TLS 环境变量
+type RATLSEnvManager struct {
+    securityConfigContract common.Address
+    client                 *ethclient.Client
+}
+
+// 需要从合约读取并设置的环境变量列表
+var securityEnvVars = []string{
+    "RA_TLS_MRENCLAVE",
+    "RA_TLS_MRSIGNER",
+    "RA_TLS_ISV_PROD_ID",
+    "RA_TLS_ISV_SVN",
+    "RA_TLS_ALLOW_OUTDATED_TCB_INSECURE",
+    "RA_TLS_ALLOW_HW_CONFIG_NEEDED",
+    "RA_TLS_ALLOW_SW_HARDENING_NEEDED",
+    "RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE",
+    "RA_TLS_CERT_TIMESTAMP_NOT_BEFORE",
+    "RA_TLS_CERT_TIMESTAMP_NOT_AFTER",
+}
+
+// InitFromContract 从合约读取安全参数并设置环境变量
+func (m *RATLSEnvManager) InitFromContract() error {
+    // 1. 先清除所有安全相关环境变量（防止静态配置被使用）
+    for _, envVar := range securityEnvVars {
+        os.Unsetenv(envVar)
+    }
+    
+    // 2. 从链上合约读取安全参数
+    config, err := m.fetchSecurityConfig()
+    if err != nil {
+        return fmt.Errorf("failed to fetch security config from contract: %w", err)
+    }
+    
+    // 3. 设置环境变量（覆盖任何可能的静态配置）
+    for _, mrenclave := range config.AllowedMREnclave {
+        // 注意：官方 Gramine 只支持单个 MRENCLAVE 值
+        // 如需支持多个，需要使用 ra_tls_set_measurement_callback
+        os.Setenv("RA_TLS_MRENCLAVE", mrenclave)
+        break // 只设置第一个，其余通过回调验证
+    }
+    
+    if config.AllowOutdatedTCB {
+        os.Setenv("RA_TLS_ALLOW_OUTDATED_TCB_INSECURE", "1")
+    }
+    
+    // ... 设置其他环境变量
+    
+    return nil
+}
+
+// fetchSecurityConfig 从 SecurityConfigContract 读取配置
+func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
+    // 调用合约读取安全配置
+    // ...
+}
+```
+
+#### 多 MRENCLAVE 白名单支持
+
+由于官方 Gramine 的 `RA_TLS_MRENCLAVE` 环境变量只支持单个值，X Chain 需要使用自定义回调函数支持多个 MRENCLAVE：
+
+```go
+// 使用 ra_tls_set_measurement_callback 支持多 MRENCLAVE 白名单
+func setupMeasurementCallback(allowedMREnclaves []string) {
+    // 注册自定义验证回调
+    // 回调函数签名（官方 Gramine）：
+    // int (*verify_measurements_cb_t)(const char* mrenclave, const char* mrsigner,
+    //                                  const char* isv_prod_id, const char* isv_svn);
+    
+    // 在回调中检查 mrenclave 是否在白名单中
+    // 白名单数据来自 SecurityConfigContract
+}
+```
 
 **重要说明**：
 - 官方 Gramine 不支持 `RA_TLS_CERT_ALGORITHM` 或 `RA_TLS_CERT_CONFIG_B64` 环境变量
 - 证书算法固定为 SECP384R1，无法通过环境变量配置
-- 白名单数据不应存储在环境变量中，应从链上合约动态读取
-- 如需自定义度量值验证逻辑，应使用 `ra_tls_set_measurement_callback()` 注册回调函数
+- 所有安全参数必须从链上合约动态读取，禁止静态配置
 
 ### 证书和私钥存储
 
