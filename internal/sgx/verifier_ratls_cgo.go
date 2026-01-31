@@ -130,6 +130,7 @@ func (v *GramineRATLSVerifier) VerifyQuote(quote []byte) error {
 // VerifyCertificate verifies an RA-TLS certificate using Gramine's native library.
 // This performs full cryptographic verification including SGX quote signature.
 func (v *GramineRATLSVerifier) VerifyCertificate(cert *x509.Certificate) error {
+	// Prepare whitelist arrays while holding the lock
 	v.mu.RLock()
 	
 	// Convert whitelist to C arrays for the callback
@@ -137,17 +138,20 @@ func (v *GramineRATLSVerifier) VerifyCertificate(cert *x509.Certificate) error {
 	for mrenclave := range v.allowedMREnclave {
 		mrenclaveList = append(mrenclaveList, C.CString(mrenclave))
 	}
-	defer func() {
-		for _, s := range mrenclaveList {
-			C.free(unsafe.Pointer(s))
-		}
-	}()
 
 	mrsignerList := make([]*C.char, 0, len(v.allowedMRSigner))
 	for mrsigner := range v.allowedMRSigner {
 		mrsignerList = append(mrsignerList, C.CString(mrsigner))
 	}
+	
+	// Release the lock before calling C functions
+	v.mu.RUnlock()
+	
+	// Defer cleanup of C strings
 	defer func() {
+		for _, s := range mrenclaveList {
+			C.free(unsafe.Pointer(s))
+		}
 		for _, s := range mrsignerList {
 			C.free(unsafe.Pointer(s))
 		}
@@ -167,8 +171,6 @@ func (v *GramineRATLSVerifier) VerifyCertificate(cert *x509.Certificate) error {
 		mrenclavePtr, C.int(len(mrenclaveList)),
 		mrsignerPtr, C.int(len(mrsignerList)),
 	)
-
-	v.mu.RUnlock()
 
 	// Get the DER-encoded certificate
 	certDER := cert.Raw

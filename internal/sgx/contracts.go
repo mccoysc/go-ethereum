@@ -146,12 +146,12 @@ func (c *securityConfigContractCaller) getAllowedMREnclaves(ctx context.Context)
 	}
 
 	// Convert to hex strings
-	result_str := make([]string, len(mrenclaves))
+	resultStr := make([]string, len(mrenclaves))
 	for i, mr := range mrenclaves {
-		result_str[i] = fmt.Sprintf("%x", mr)
+		resultStr[i] = fmt.Sprintf("%x", mr)
 	}
 
-	return result_str, nil
+	return resultStr, nil
 }
 
 // getAllowedMRSigners fetches the MRSIGNER whitelist from the contract
@@ -185,12 +185,12 @@ func (c *securityConfigContractCaller) getAllowedMRSigners(ctx context.Context) 
 		return nil, fmt.Errorf("failed to unpack result: %w", err)
 	}
 
-	result_str := make([]string, len(mrsigners))
+	resultStr := make([]string, len(mrsigners))
 	for i, mr := range mrsigners {
-		result_str[i] = fmt.Sprintf("%x", mr)
+		resultStr[i] = fmt.Sprintf("%x", mr)
 	}
 
-	return result_str, nil
+	return resultStr, nil
 }
 
 // getISVProdID fetches the ISV Product ID from the contract
