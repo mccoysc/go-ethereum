@@ -3991,7 +3991,9 @@ func TestConstantTimeCompare(t *testing.T) {
 
 **升级完成区块高度：**
 
-为了提供明确的升级截止时间，引入 `UpgradeCompleteBlock` 参数。升级完成条件（满足任一即可）：
+为了提供明确的升级截止时间，引入 `UpgradeCompleteBlock` 参数。该参数是安全参数，存储在 **SecurityConfigContract** 中，由 **GovernanceContract** 通过投票机制管理。
+
+升级完成条件（满足任一即可）：
 1. 白名单中只剩下一个 MRENCLAVE（通过投票移除旧版本）
 2. 当前区块高度 >= `UpgradeCompleteBlock`（达到预设的升级截止高度）
 

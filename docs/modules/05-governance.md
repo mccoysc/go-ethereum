@@ -213,27 +213,40 @@ func (bc *BootstrapContract) IsBootstrapPhase() bool {
 
 为了提供明确的升级截止时间，避免升级过程无限期拖延，引入"升级完成区块高度"参数。当区块高度达到这个值时，即使合约还没把度量值改成一个，新节点也只接受与自己一致度量值的节点。
 
+**存储位置**：
+- `UpgradeCompleteBlock` 是安全参数，存储在 **SecurityConfigContract** 中
+- 由 **GovernanceContract** 通过投票机制管理和修改
+- 在添加新 MRENCLAVE 到白名单时，同时通过投票设置 `UpgradeCompleteBlock` 参数
+
 **设计原理**：
-- 在添加新 MRENCLAVE 到白名单时，同时设置 `upgradeCompleteBlock` 参数
-- 新节点检查：如果当前区块高度 >= `upgradeCompleteBlock`，则认为升级完成
+- 新节点检查：如果当前区块高度 >= `UpgradeCompleteBlock`，则认为升级完成
 - 升级完成后，新节点只接受与自己相同 MRENCLAVE 的节点，拒绝旧版本节点的连接
 
 ```go
-// governance/upgrade_config.go
-package governance
+// security/upgrade_config.go
+package security
 
-// UpgradeConfig 升级配置（存储在 SecurityConfigContract 中）
+// UpgradeConfig 升级配置（存储在 SecurityConfigContract 中，由 GovernanceContract 管理）
 type UpgradeConfig struct {
     // 新版本 MRENCLAVE
     NewMREnclave [32]byte
     
-    // 升级完成区块高度
+    // 升级完成区块高度（安全参数，由投票设置）
     // 当区块高度达到此值时，即使白名单中还有多个 MRENCLAVE，
     // 新节点也认为升级完成，只接受与自己一致度量值的节点
     UpgradeCompleteBlock uint64
     
     // 升级开始区块高度（添加新 MRENCLAVE 时的区块高度）
     UpgradeStartBlock uint64
+}
+
+// SecurityConfigContract 安全配置合约接口
+type SecurityConfigContract interface {
+    // GetUpgradeConfig 获取升级配置
+    GetUpgradeConfig() *UpgradeConfig
+    
+    // SetUpgradeConfig 设置升级配置（只能由 GovernanceContract 调用）
+    SetUpgradeConfig(config *UpgradeConfig) error
 }
 ```
 
