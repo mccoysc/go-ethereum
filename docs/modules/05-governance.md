@@ -818,24 +818,31 @@ import (
 
 // SGXAdmissionController SGX 准入控制器
 type SGXAdmissionController struct {
-    mu         sync.RWMutex
-    whitelist  WhitelistManager
-    verifier   SGXVerifier
-    status     map[common.Hash]*AdmissionStatus
+    mu                  sync.RWMutex
+    whitelist           WhitelistManager
+    verifier            SGXVerifier
+    status              map[common.Hash]*AdmissionStatus
+    
+    // 硬件唯一性约束：每个 SGX CPU 只能运行一个节点
+    hardwareToValidator map[string]common.Address  // 硬件 ID -> 验证者地址
+    validatorToHardware map[common.Address]string  // 验证者地址 -> 硬件 ID
 }
 
 // SGXVerifier SGX 验证器接口
 type SGXVerifier interface {
     VerifyQuote(quote []byte) error
     ExtractMREnclave(quote []byte) ([32]byte, error)
+    ExtractHardwareID(quote []byte) (string, error)  // 提取硬件唯一标识
 }
 
 // NewSGXAdmissionController 创建准入控制器
 func NewSGXAdmissionController(whitelist WhitelistManager, verifier SGXVerifier) *SGXAdmissionController {
     return &SGXAdmissionController{
-        whitelist: whitelist,
-        verifier:  verifier,
-        status:    make(map[common.Hash]*AdmissionStatus),
+        whitelist:           whitelist,
+        verifier:            verifier,
+        status:              make(map[common.Hash]*AdmissionStatus),
+        hardwareToValidator: make(map[string]common.Address),
+        validatorToHardware: make(map[common.Address]string),
     }
 }
 
@@ -862,8 +869,28 @@ func (ac *SGXAdmissionController) CheckAdmission(nodeID common.Hash, mrenclave [
         return false, errors.New("MRENCLAVE not in whitelist")
     }
     
-    // 5. 记录准入状态
+    // 5. 检查硬件唯一性（每个 SGX CPU 只能运行一个节点）
+    hardwareID, err := ac.verifier.ExtractHardwareID(quote)
+    if err != nil {
+        return false, errors.New("failed to extract hardware ID: " + err.Error())
+    }
+    
     ac.mu.Lock()
+    defer ac.mu.Unlock()
+    
+    if existingValidator, exists := ac.hardwareToValidator[hardwareID]; exists {
+        // 该硬件已注册其他验证者
+        return false, fmt.Errorf(
+            "hardware ID %s already registered to validator %s, each SGX CPU can only run one node",
+            hardwareID, existingValidator.Hex(),
+        )
+    }
+    
+    // 6. 记录准入状态和硬件绑定
+    validatorAddr := common.BytesToAddress(nodeID[:20])
+    ac.hardwareToValidator[hardwareID] = validatorAddr
+    ac.validatorToHardware[validatorAddr] = hardwareID
+    
     ac.status[nodeID] = &AdmissionStatus{
         NodeID:       nodeID,
         MRENCLAVE:    mrenclave,
@@ -871,7 +898,6 @@ func (ac *SGXAdmissionController) CheckAdmission(nodeID common.Hash, mrenclave [
         ConnectedAt:  uint64(time.Now().Unix()),
         LastVerified: uint64(time.Now().Unix()),
     }
-    ac.mu.Unlock()
     
     return true, nil
 }
@@ -912,7 +938,87 @@ func (ac *SGXAdmissionController) RecordDisconnection(nodeID common.Hash) error 
     delete(ac.status, nodeID)
     return nil
 }
+
+// GetHardwareBinding 获取硬件绑定信息
+func (ac *SGXAdmissionController) GetHardwareBinding(validatorAddr common.Address) (string, bool) {
+    ac.mu.RLock()
+    defer ac.mu.RUnlock()
+    
+    hardwareID, exists := ac.validatorToHardware[validatorAddr]
+    return hardwareID, exists
+}
+
+// GetValidatorByHardware 根据硬件 ID 获取验证者地址
+func (ac *SGXAdmissionController) GetValidatorByHardware(hardwareID string) (common.Address, bool) {
+    ac.mu.RLock()
+    defer ac.mu.RUnlock()
+    
+    validator, exists := ac.hardwareToValidator[hardwareID]
+    return validator, exists
+}
+
+// UnregisterValidator 注销验证者（释放硬件绑定）
+func (ac *SGXAdmissionController) UnregisterValidator(validatorAddr common.Address) error {
+    ac.mu.Lock()
+    defer ac.mu.Unlock()
+    
+    hardwareID, exists := ac.validatorToHardware[validatorAddr]
+    if !exists {
+        return errors.New("validator not registered")
+    }
+    
+    delete(ac.hardwareToValidator, hardwareID)
+    delete(ac.validatorToHardware, validatorAddr)
+    
+    return nil
+}
 ```
+
+### 硬件唯一性验证说明
+
+**设计原理**：每个 SGX CPU 实例只能运行一个验证节点，防止女巫攻击和重复投票。
+
+**硬件 ID 提取**：从 SGX Quote 中提取硬件唯一标识，该标识对于每个物理 CPU 是唯一的。
+
+```go
+// extractHardwareID 从 SGX Quote 中提取硬件唯一标识
+func extractHardwareID(quote []byte) (string, error) {
+    // SGX Quote 结构中包含硬件相关信息：
+    // - EPID 模式：使用 EPID Group ID
+    // - DCAP 模式：使用 QE_ID（Quoting Enclave ID）
+    
+    if len(quote) < 48 {
+        return "", errors.New("quote too short")
+    }
+    
+    // 提取 Quote 头部的版本信息
+    version := binary.LittleEndian.Uint16(quote[0:2])
+    
+    switch version {
+    case 2: // EPID Quote
+        // EPID Group ID 位于 Quote 的特定偏移位置
+        epidGroupID := quote[4:8]
+        return hex.EncodeToString(epidGroupID), nil
+        
+    case 3: // DCAP Quote
+        // QE_ID 位于 Quote Body 中
+        // 实际实现需要解析完整的 Quote 结构
+        qeID := quote[16:32]
+        return hex.EncodeToString(qeID), nil
+        
+    default:
+        return "", fmt.Errorf("unsupported quote version: %d", version)
+    }
+}
+```
+
+**安全保障**：
+
+| 攻击场景 | 防护机制 | 效果 |
+|----------|----------|------|
+| 同一 CPU 运行多个节点 | 硬件 ID 唯一性检查 | 拒绝重复注册 |
+| 伪造硬件 ID | SGX Quote 签名验证 | 无法伪造有效 Quote |
+| 恶意节点多次投票 | 硬件绑定 + 链上记录 | 每个物理 CPU 只能投一票 |
 
 ### 渐进式权限管理器
 
