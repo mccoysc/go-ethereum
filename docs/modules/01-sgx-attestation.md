@@ -104,35 +104,62 @@ export RA_TLS_CERT_ALGORITHM="secp256k1"
 export RA_TLS_CERT_CONFIG_B64="eyJhbGdvcml0aG0iOiJzZWNwMjU2azEiLC..."
 ```
 
-### 白名单配置
+### 白名单配置（链上动态读取）
 
-白名单使用 Base64 编码的 CSV 格式（不是 JSON）：
+**重要**：白名单不应该存储在环境变量中，而应该从链上动态读取。这样投票添加/移除白名单的结果可以实时生效，无需重新部署节点。
 
-```bash
-# RATLS_WHITELIST_CONFIG 格式：Base64 编码的 CSV
-# 每行一个条目，逗号分隔的度量值
-# 格式：MRENCLAVE,MRSIGNER,ISV_PROD_ID,ISV_SVN
+白名单数据存储在链上的治理合约中，节点通过以下机制同步：
 
-# 示例 CSV 内容：
-# abc123...,def456...,1,1
-# xyz789...,def456...,1,2
+```go
+// 从链上读取白名单
+type OnChainWhitelistSync struct {
+    contract     *WhitelistContract  // 链上白名单合约
+    localCache   map[string]bool     // 本地缓存
+    syncInterval time.Duration       // 同步间隔
+}
 
-# Base64 编码后设置
-export RATLS_WHITELIST_CONFIG="YWJjMTIzLi4uLGRlZjQ1Ni4uLiwxLDEKeHl6Nzg5Li4uLGRlZjQ1Ni4uLiwxLDI="
+func (s *OnChainWhitelistSync) SyncWhitelist() error {
+    // 1. 从链上读取最新白名单
+    entries, err := s.contract.GetAllWhitelistEntries()
+    if err != nil {
+        return err
+    }
+    
+    // 2. 更新本地缓存
+    s.localCache = make(map[string]bool)
+    for _, entry := range entries {
+        key := fmt.Sprintf("%x", entry.MRENCLAVE)
+        s.localCache[key] = true
+    }
+    
+    return nil
+}
+
+// 验证时使用本地缓存（从链上同步的数据）
+func (s *OnChainWhitelistSync) IsAllowed(mrenclave []byte) bool {
+    key := fmt.Sprintf("%x", mrenclave)
+    return s.localCache[key]
+}
 ```
+
+**安全保证**：
+- 白名单存储在链上，通过共识机制保证一致性
+- 投票结果记录在链上，不可篡改
+- 节点定期从链上同步白名单，确保使用最新的治理决策
+- 本节点的 MRENCLAVE 由代码决定，无法伪造
+- 其他节点的 MRENCLAVE 通过 SGX Quote 验证，由 Intel 签名保证真实性
 
 ### RA-TLS 环境变量
 
+以下环境变量用于本节点自身的配置（不包含白名单）：
+
 | 环境变量 | 描述 | 示例值 |
 |----------|------|--------|
-| `RA_TLS_MRENCLAVE` | 允许的 MRENCLAVE 列表 | `abc123...,def456...` |
-| `RA_TLS_MRSIGNER` | 允许的 MRSIGNER 列表 | `789abc...` |
-| `RA_TLS_ISV_PROD_ID` | 允许的产品 ID | `1` |
-| `RA_TLS_ISV_SVN` | 允许的安全版本号 | `1` |
 | `RA_TLS_CERT_ALGORITHM` | 证书算法 | `secp256k1` |
-| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB（不安全） | `1` |
-| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave（不安全） | `1` |
-| `RATLS_WHITELIST_CONFIG` | Base64 编码的 CSV 白名单 | `YWJjMTIz...` |
+| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB（不安全，仅测试用） | `1` |
+| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave（不安全，仅测试用） | `1` |
+
+**注意**：白名单相关的环境变量（如 `RA_TLS_MRENCLAVE`、`RATLS_WHITELIST_CONFIG`）不应使用，白名单应从链上动态读取。
 
 ### 证书和私钥存储
 
