@@ -38,7 +38,20 @@ func (api *API) GetNodeReputation(address common.Address) (*NodeReputation, erro
 
 // GetUptimeScore returns the uptime score for a node
 func (api *API) GetUptimeScore(address common.Address) (*UptimeData, error) {
-	uptimeData := api.engine.uptimeCalculator.CalculateUptimeScore(address)
+	// Use default network statistics for API calls
+	// In production, these should come from a network statistics tracker
+	const (
+		defaultObservers = 10
+		defaultTotalTxs  = uint64(10000)
+		defaultTotalGas  = uint64(300000000)
+	)
+	
+	uptimeData := api.engine.uptimeCalculator.CalculateUptimeScore(
+		address,
+		defaultObservers,
+		defaultTotalTxs,
+		defaultTotalGas,
+	)
 	return uptimeData, nil
 }
 

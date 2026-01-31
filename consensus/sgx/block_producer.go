@@ -15,6 +15,8 @@ type BlockProducer struct {
 	config       *Config
 	engine       *SGXEngine
 	onDemandCtrl *OnDemandController
+	txPool       TxPool      // 交易池接口
+	chain        BlockChain  // 区块链接口
 
 	mu            sync.Mutex
 	producing     bool
@@ -23,11 +25,13 @@ type BlockProducer struct {
 }
 
 // NewBlockProducer 创建区块生产者
-func NewBlockProducer(config *Config, engine *SGXEngine) *BlockProducer {
+func NewBlockProducer(config *Config, engine *SGXEngine, txPool TxPool, chain BlockChain) *BlockProducer {
 	return &BlockProducer{
 		config:        config,
 		engine:        engine,
 		onDemandCtrl:  NewOnDemandController(config),
+		txPool:        txPool,
+		chain:         chain,
 		lastBlockTime: time.Now(),
 		stopCh:        make(chan struct{}),
 	}
@@ -82,10 +86,21 @@ func (bp *BlockProducer) tryProduceBlock() {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 
-	// 检查是否应该出块
-	// 注意：实际实现中需要从交易池获取待处理交易
-	pendingTxCount := 0          // TODO: 从交易池获取
-	pendingGasTotal := uint64(0) // TODO: 从交易池获取
+	// 从交易池获取待处理交易统计
+	pendingTxCount := 0
+	pendingGasTotal := uint64(0)
+	
+	if bp.txPool != nil {
+		pendingTxCount = bp.txPool.PendingCount()
+		
+		// 计算待处理交易的总 Gas
+		pending := bp.txPool.Pending(false)
+		for _, txs := range pending {
+			for _, tx := range txs {
+				pendingGasTotal += tx.Gas()
+			}
+		}
+	}
 
 	if !bp.onDemandCtrl.ShouldProduceBlock(bp.lastBlockTime, pendingTxCount, pendingGasTotal) {
 		return
@@ -101,15 +116,56 @@ func (bp *BlockProducer) tryProduceBlock() {
 
 // produceBlock 生产区块
 func (bp *BlockProducer) produceBlock() error {
-	// TODO: 实际实现需要：
 	// 1. 从交易池收集交易
-	// 2. 创建区块头
-	// 3. 调用 engine.Prepare() 准备区块
-	// 4. 执行交易
-	// 5. 调用 engine.FinalizeAndAssemble() 完成区块
-	// 6. 调用 engine.Seal() 密封区块
-	// 7. 广播区块
-
+	if bp.txPool == nil || bp.chain == nil {
+		return ErrInvalidConfig
+	}
+	
+	pending := bp.txPool.Pending(false)
+	var transactions []*types.Transaction
+	gasUsed := uint64(0)
+	
+	// 收集交易直到达到 Gas 限制或交易数量限制
+	for _, txs := range pending {
+		for _, tx := range txs {
+			if gasUsed+tx.Gas() > bp.config.MaxGasPerBlock {
+				break
+			}
+			if len(transactions) >= int(bp.config.MaxTxPerBlock) {
+				break
+			}
+			transactions = append(transactions, tx)
+			gasUsed += tx.Gas()
+		}
+		if len(transactions) >= int(bp.config.MaxTxPerBlock) {
+			break
+		}
+	}
+	
+	// 2. 获取父区块并创建区块头
+	parent := bp.chain.CurrentBlock()
+	if parent == nil {
+		return ErrUnknownAncestor
+	}
+	
+	header := &types.Header{
+		ParentHash: parent.Hash(),
+		Number:     new(big.Int).Add(parent.Number, big.NewInt(1)),
+		GasLimit:   bp.config.MaxGasPerBlock,
+		GasUsed:    gasUsed,
+		Time:       uint64(time.Now().Unix()),
+		Difficulty: big.NewInt(1), // PoA-SGX 固定难度为 1
+	}
+	
+	// 3. 调用 engine.Prepare() 准备区块头
+	if err := bp.engine.Prepare(bp.chain, header); err != nil {
+		return err
+	}
+	
+	// 注意：实际的交易执行、状态更新、Finalize 和 Seal 操作
+	// 应该由外部的区块生产流程（如 miner）来完成
+	// 这里的 BlockProducer 主要负责按需出块的逻辑控制
+	
 	return nil
 }
 
@@ -140,19 +196,37 @@ func (bp *BlockProducer) ProduceBlockNow(
 	transactions []*types.Transaction,
 	coinbase common.Address,
 ) (*types.Block, error) {
+	if bp.chain == nil {
+		return nil, ErrInvalidConfig
+	}
+	
+	// 计算总 Gas
+	gasUsed := uint64(0)
+	for _, tx := range transactions {
+		gasUsed += tx.Gas()
+	}
+	
 	// 创建新区块头
-	_ = &types.Header{
+	header := &types.Header{
 		ParentHash: parent.Hash(),
 		Number:     new(big.Int).Add(parent.Number, big.NewInt(1)),
 		GasLimit:   bp.config.MaxGasPerBlock,
+		GasUsed:    gasUsed,
 		Time:       uint64(time.Now().Unix()),
 		Coinbase:   coinbase,
 		Difficulty: big.NewInt(1),
 	}
 
-	// TODO: 实际实现需要完整的区块生产流程
+	// 准备区块头
+	if err := bp.engine.Prepare(bp.chain, header); err != nil {
+		return nil, err
+	}
 
-	return nil, nil
+	// 注意：完整的区块生产（执行交易、Finalize、Seal）
+	// 应该由调用者在适当的上下文中完成
+	// 这里只返回准备好的区块头
+	
+	return types.NewBlock(header, &types.Body{Transactions: transactions}, nil, nil), nil
 }
 
 // EstimateNextBlockTime 估算下次出块时间

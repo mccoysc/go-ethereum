@@ -55,7 +55,20 @@ func (rs *ReputationSystem) UpdateReputation(address common.Address) error {
 	}
 
 	// 计算在线率评分
-	uptimeData := rs.uptimeCalculator.CalculateUptimeScore(address)
+	// Use default network statistics
+	// In production, these should come from a network statistics tracker
+	const (
+		defaultObservers = 10
+		defaultTotalTxs  = uint64(10000)
+		defaultTotalGas  = uint64(300000000)
+	)
+	
+	uptimeData := rs.uptimeCalculator.CalculateUptimeScore(
+		address,
+		defaultObservers,
+		defaultTotalTxs,
+		defaultTotalGas,
+	)
 	reputation.UptimeScore = uptimeData.ComprehensiveScore
 
 	// 获取惩罚次数

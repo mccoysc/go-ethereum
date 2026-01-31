@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // Attestor SGX 证明接口
@@ -57,11 +58,23 @@ type TxPool interface {
 
 // BlockChain 区块链接口
 type BlockChain interface {
+	// Config 获取区块链配置
+	Config() *params.ChainConfig
+
 	// CurrentBlock 获取当前区块
 	CurrentBlock() *types.Header
 
+	// CurrentHeader 获取当前区块头（与 CurrentBlock 相同）
+	CurrentHeader() *types.Header
+
 	// GetHeader 获取区块头
 	GetHeader(hash common.Hash, number uint64) *types.Header
+
+	// GetHeaderByNumber 根据区块号获取区块头
+	GetHeaderByNumber(number uint64) *types.Header
+
+	// GetHeaderByHash 根据哈希获取区块头
+	GetHeaderByHash(hash common.Hash) *types.Header
 
 	// GetBlock 获取完整区块
 	GetBlock(hash common.Hash, number uint64) *types.Block
@@ -121,7 +134,10 @@ type UptimeTracker interface {
 	RecordResponseTime(address common.Address, responseMs uint64) error
 
 	// CalculateUptimeScore 计算在线率评分
-	CalculateUptimeScore(address common.Address) (*UptimeData, error)
+	// networkObservers: 网络中的总观测者数量
+	// networkTotalTxs: 网络总交易数
+	// networkTotalGas: 网络总 Gas 使用量
+	CalculateUptimeScore(address common.Address, networkObservers int, networkTotalTxs, networkTotalGas uint64) (*UptimeData, error)
 }
 
 // PenaltyManager 惩罚管理接口

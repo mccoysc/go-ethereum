@@ -301,8 +301,13 @@ func TestUptimeCalculator(t *testing.T) {
 		uptimeCalc.RecordHeartbeat(msg)
 	}
 
-	// Calculate uptime score
-	uptimeData := uptimeCalc.CalculateUptimeScore(address)
+	// Calculate uptime score with network statistics
+	// For testing, use sample network stats
+	networkObservers := 10
+	networkTotalTxs := uint64(1000)
+	networkTotalGas := uint64(30000000)
+	
+	uptimeData := uptimeCalc.CalculateUptimeScore(address, networkObservers, networkTotalTxs, networkTotalGas)
 
 	if uptimeData.HeartbeatScore == 0 {
 		t.Error("Heartbeat score should not be zero after recording heartbeats")

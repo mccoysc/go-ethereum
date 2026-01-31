@@ -25,15 +25,23 @@ func NewUptimeCalculator(config *UptimeConfig) *UptimeCalculator {
 }
 
 // CalculateUptimeScore 计算综合在线率评分
-func (uc *UptimeCalculator) CalculateUptimeScore(address common.Address) *UptimeData {
+// networkObservers: 网络中的总观测者数量
+// networkTotalTxs: 网络总交易数
+// networkTotalGas: 网络总 Gas 使用量
+func (uc *UptimeCalculator) CalculateUptimeScore(
+	address common.Address,
+	networkObservers int,
+	networkTotalTxs uint64,
+	networkTotalGas uint64,
+) *UptimeData {
 	// 1. SGX 心跳评分（40%）
 	heartbeatScore := uc.heartbeatTracker.CalculateHeartbeatScore(address, uc.config.HeartbeatInterval)
 
 	// 2. 多节点共识评分（30%）
-	consensusScore := uc.uptimeObserver.CalculateConsensusScore(address, 10) // TODO: 获取实际观测者数量
+	consensusScore := uc.uptimeObserver.CalculateConsensusScore(address, networkObservers)
 
 	// 3. 交易参与度评分（20%）
-	txParticipationScore := uc.txParticipationTracker.CalculateParticipationScore(address, 1000, 30000000) // TODO: 获取实际总量
+	txParticipationScore := uc.txParticipationTracker.CalculateParticipationScore(address, networkTotalTxs, networkTotalGas)
 
 	// 4. 响应时间评分（10%）
 	responseScore := uc.responseTracker.CalculateResponseScore(address, uc.config.ResponseTimeTarget)
