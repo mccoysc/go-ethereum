@@ -148,41 +148,61 @@ XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
 - **治理合约（GovernanceContract）**：负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约
 
 ```go
-// 从链上读取安全参数
-type OnChainSecurityConfig struct {
-    whitelistContract  common.Address  // 从 Manifest 读取
-    governanceContract common.Address  // 从 Manifest 读取
-    client             *ethclient.Client
-    localCache         *SecurityCache
+// 从链上读取安全参数（实际实现参考 internal/sgx/env_manager.go）
+type RATLSEnvManager struct {
+    securityConfigContract common.Address  // 从 Manifest 读取
+    governanceContract     common.Address  // 从 Manifest 读取
+    client                 *ethclient.Client
+    cachedConfig           *SecurityConfig
 }
 
-func NewOnChainSecurityConfig() (*OnChainSecurityConfig, error) {
+func NewRATLSEnvManager(client *ethclient.Client) (*RATLSEnvManager, error) {
     // 从 Manifest 环境变量读取合约地址（写死的安全锚点）
     scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
     govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
     
-    return &OnChainSecurityConfig{
+    return &RATLSEnvManager{
         securityConfigContract: common.HexToAddress(scAddr), // 安全配置合约，由治理合约管理
         governanceContract:     common.HexToAddress(govAddr),
+        client:                 client,
     }, nil
 }
 
-// SyncFromChain 从链上同步所有安全参数
-func (c *OnChainSecurityConfig) SyncFromChain() error {
-    // 从安全配置合约读取（由治理合约管理）
-    c.localCache.AllowedMREnclave = c.fetchWhitelist()
+// fetchSecurityConfig 从链上同步所有安全参数（实际使用合约 ABI 调用）
+func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
+    ctx := context.Background()
+    
+    // 创建合约调用器
+    securityCaller, _ := newSecurityConfigContractCaller(m.client, m.securityConfigContract, testMode)
+    governanceCaller, _ := newGovernanceContractCaller(m.client, m.governanceContract, testMode)
+    
+    // 从安全配置合约读取（使用实际 ABI 方法名）
+    allowedMREnclaves, _ := securityCaller.getAllowedMREnclaves(ctx)
+    allowedMRSigners, _ := securityCaller.getAllowedMRSigners(ctx)
+    isvProdID, _ := securityCaller.getISVProdID(ctx)
+    isvSVN, _ := securityCaller.getISVSVN(ctx)
+    certNotBefore, certNotAfter, _ := securityCaller.getCertValidityPeriod(ctx)
+    admissionStrict, _ := securityCaller.getAdmissionPolicy(ctx)
     
     // 从治理合约读取
-    c.localCache.KeyMigrationThreshold = c.fetchKeyMigrationThreshold()
-    c.localCache.AdmissionStrict = c.fetchAdmissionPolicy()
+    keyMigrationThreshold, _ := governanceCaller.getKeyMigrationThreshold(ctx)
     
-    return nil
+    return &SecurityConfig{
+        AllowedMREnclave:      allowedMREnclaves,
+        AllowedMRSigner:       allowedMRSigners,
+        ISVProdID:             isvProdID,
+        ISVSVN:                isvSVN,
+        CertNotBefore:         certNotBefore,
+        CertNotAfter:          certNotAfter,
+        KeyMigrationThreshold: keyMigrationThreshold,
+        AdmissionStrict:       admissionStrict,
+    }, nil
 }
 
 // IsAllowedMREnclave 验证时使用本地缓存
-func (c *OnChainSecurityConfig) IsAllowedMREnclave(mrenclave []byte) bool {
+func (m *RATLSEnvManager) IsAllowedMREnclave(mrenclave []byte) bool {
     key := fmt.Sprintf("%x", mrenclave)
-    return c.localCache.AllowedMREnclave[key]
+    return m.cachedConfig.AllowedMREnclave[key]
 }
 ```
 
@@ -606,8 +626,8 @@ type GramineAttestor struct {
 }
 
 func NewGramineAttestor() (*GramineAttestor, error) {
-    // 生成 TLS 密钥对
-    privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+    // 生成 TLS 密钥对（使用 P-384 曲线符合 Gramine RA-TLS 规范）
+    privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
     if err != nil {
         return nil, fmt.Errorf("failed to generate key: %w", err)
     }
@@ -1025,7 +1045,8 @@ type MockAttestor struct {
 }
 
 func NewMockAttestor() *MockAttestor {
-    privateKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+    // 使用 P-384 曲线符合规范要求
+    privateKey, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
     return &MockAttestor{
         privateKey: privateKey,
         mrenclave:  make([]byte, 32),

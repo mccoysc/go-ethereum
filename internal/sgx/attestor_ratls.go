@@ -21,7 +21,6 @@ package sgx
 
 import (
 	"crypto/tls"
-	"crypto/x509"
 	"fmt"
 )
 
@@ -50,25 +49,3 @@ func (a *GramineRATLSAttestor) GetMRSigner() []byte {
 	return nil
 }
 
-// GramineRATLSVerifier stub for non-CGO builds.
-type GramineRATLSVerifier struct{}
-
-func NewGramineRATLSVerifier(allowOutdatedTCB bool) *GramineRATLSVerifier {
-	return &GramineRATLSVerifier{}
-}
-
-func (v *GramineRATLSVerifier) VerifyQuote(quote []byte) error {
-	return fmt.Errorf("Gramine RA-TLS requires CGO support")
-}
-
-func (v *GramineRATLSVerifier) VerifyCertificate(cert *x509.Certificate) error {
-	return fmt.Errorf("Gramine RA-TLS requires CGO support")
-}
-
-func (v *GramineRATLSVerifier) IsAllowedMREnclave(mrenclave []byte) bool {
-	return false
-}
-
-func (v *GramineRATLSVerifier) AddAllowedMREnclave(mrenclave []byte) {}
-
-func (v *GramineRATLSVerifier) RemoveAllowedMREnclave(mrenclave []byte) {}
