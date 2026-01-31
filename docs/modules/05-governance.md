@@ -199,6 +199,264 @@ func (bc *BootstrapContract) IsBootstrapPhase() bool {
 }
 ```
 
+### 升级期间只读模式
+
+在硬分叉升级期间（当白名单中存在多个 MRENCLAVE 时），新版本节点只允许读取类操作，所有会导致修改的操作（签名的交易）都被拒绝。这确保了升级过程中数据的一致性和安全性。
+
+**判断条件**：
+- 当 `SecurityConfigContract` 中的 MRENCLAVE 白名单包含多个值时，表示正在进行升级
+- 新节点（运行新 MRENCLAVE 的节点）进入只读模式
+- 旧节点继续正常处理交易，直到升级完成
+- **升级完成区块高度**：当区块高度达到指定值时，即使白名单中还有多个 MRENCLAVE，新节点也认为升级完成
+
+### 升级完成区块高度
+
+为了提供明确的升级截止时间，避免升级过程无限期拖延，引入"升级完成区块高度"参数。当区块高度达到这个值时，即使合约还没把度量值改成一个，新节点也只接受与自己一致度量值的节点。
+
+**存储位置**：
+- `UpgradeCompleteBlock` 是安全参数，存储在 **SecurityConfigContract** 中
+- 由 **GovernanceContract** 通过投票机制管理和修改
+- 在添加新 MRENCLAVE 到白名单时，同时通过投票设置 `UpgradeCompleteBlock` 参数
+
+**设计原理**：
+- 新节点检查：如果当前区块高度 >= `UpgradeCompleteBlock`，则认为升级完成
+- 升级完成后，新节点只接受与自己相同 MRENCLAVE 的节点，拒绝旧版本节点的连接
+
+```go
+// security/upgrade_config.go
+package security
+
+// UpgradeConfig 升级配置（存储在 SecurityConfigContract 中，由 GovernanceContract 管理）
+type UpgradeConfig struct {
+    // 新版本 MRENCLAVE
+    NewMREnclave [32]byte
+    
+    // 升级完成区块高度（安全参数，由投票设置）
+    // 当区块高度达到此值时，即使白名单中还有多个 MRENCLAVE，
+    // 新节点也认为升级完成，只接受与自己一致度量值的节点
+    UpgradeCompleteBlock uint64
+    
+    // 升级开始区块高度（添加新 MRENCLAVE 时的区块高度）
+    UpgradeStartBlock uint64
+}
+
+// SecurityConfigContract 安全配置合约接口
+type SecurityConfigContract interface {
+    // GetUpgradeConfig 获取升级配置
+    GetUpgradeConfig() *UpgradeConfig
+    
+    // SetUpgradeConfig 设置升级配置（只能由 GovernanceContract 调用）
+    SetUpgradeConfig(config *UpgradeConfig) error
+}
+```
+
+```go
+// governance/upgrade_mode.go
+package governance
+
+import (
+    "errors"
+    
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+var (
+    ErrUpgradeReadOnlyMode = errors.New("node is in upgrade read-only mode, write operations are rejected")
+)
+
+// UpgradeModeChecker 升级模式检查器
+type UpgradeModeChecker struct {
+    securityConfig   SecurityConfigReader
+    localMREnclave   [32]byte
+    currentBlockFunc func() uint64 // 获取当前区块高度的函数
+}
+
+// NewUpgradeModeChecker 创建升级模式检查器
+func NewUpgradeModeChecker(config SecurityConfigReader, localMR [32]byte, blockFunc func() uint64) *UpgradeModeChecker {
+    return &UpgradeModeChecker{
+        securityConfig:   config,
+        localMREnclave:   localMR,
+        currentBlockFunc: blockFunc,
+    }
+}
+
+// IsUpgradeInProgress 检查是否正在进行升级
+// 当白名单中存在多个 MRENCLAVE 时，表示正在进行升级
+func (c *UpgradeModeChecker) IsUpgradeInProgress() bool {
+    whitelist := c.securityConfig.GetMREnclaveWhitelist()
+    return len(whitelist) > 1
+}
+
+// IsUpgradeComplete 检查升级是否已完成
+// 升级完成条件：
+// 1. 白名单中只有一个 MRENCLAVE，或
+// 2. 当前区块高度 >= 升级完成区块高度
+func (c *UpgradeModeChecker) IsUpgradeComplete() bool {
+    whitelist := c.securityConfig.GetMREnclaveWhitelist()
+    
+    // 条件 1: 白名单中只有一个 MRENCLAVE
+    if len(whitelist) <= 1 {
+        return true
+    }
+    
+    // 条件 2: 当前区块高度 >= 升级完成区块高度
+    upgradeConfig := c.securityConfig.GetUpgradeConfig()
+    if upgradeConfig != nil && upgradeConfig.UpgradeCompleteBlock > 0 {
+        currentBlock := c.currentBlockFunc()
+        if currentBlock >= upgradeConfig.UpgradeCompleteBlock {
+            return true
+        }
+    }
+    
+    return false
+}
+
+// IsNewVersionNode 检查本节点是否是新版本节点
+// 新版本节点的 MRENCLAVE 与白名单中最新添加的 MRENCLAVE 匹配
+func (c *UpgradeModeChecker) IsNewVersionNode() bool {
+    whitelist := c.securityConfig.GetMREnclaveWhitelist()
+    if len(whitelist) <= 1 {
+        return false
+    }
+    
+    // 最新添加的 MRENCLAVE 是新版本
+    latestMR := whitelist[len(whitelist)-1]
+    return c.localMREnclave == latestMR.MRENCLAVE
+}
+
+// ShouldRejectWriteOperation 检查是否应该拒绝写操作
+// 升级期间（未完成），新版本节点拒绝所有写操作
+func (c *UpgradeModeChecker) ShouldRejectWriteOperation() bool {
+    // 如果升级已完成，不拒绝写操作
+    if c.IsUpgradeComplete() {
+        return false
+    }
+    
+    return c.IsUpgradeInProgress() && c.IsNewVersionNode()
+}
+
+// ShouldRejectOldVersionPeer 检查是否应该拒绝旧版本节点的连接
+// 升级完成后，新节点只接受与自己一致度量值的节点
+func (c *UpgradeModeChecker) ShouldRejectOldVersionPeer(peerMREnclave [32]byte) bool {
+    // 如果升级已完成，只接受与自己一致度量值的节点
+    if c.IsUpgradeComplete() && c.IsNewVersionNode() {
+        return peerMREnclave != c.localMREnclave
+    }
+    return false
+}
+
+// ValidateTransaction 验证交易是否可以被处理
+// 在升级期间（未完成），新版本节点拒绝所有签名的交易
+func (c *UpgradeModeChecker) ValidateTransaction(tx *types.Transaction) error {
+    if c.ShouldRejectWriteOperation() {
+        // 升级期间，新版本节点只允许读取操作
+        // 所有签名的交易（会导致状态修改）都被拒绝
+        return ErrUpgradeReadOnlyMode
+    }
+    return nil
+}
+```
+
+**升级期间只读模式流程**：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     升级期间只读模式                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  阶段 1: 升级进行中（区块高度 < UpgradeCompleteBlock）           │
+│  白名单状态：[MRENCLAVE_OLD, MRENCLAVE_NEW]                      │
+│                                                                  │
+│  ┌─────────────────────┐      ┌─────────────────────┐           │
+│  │  旧版本节点          │      │  新版本节点          │           │
+│  │  MRENCLAVE_OLD      │      │  MRENCLAVE_NEW      │           │
+│  ├─────────────────────┤      ├─────────────────────┤           │
+│  │  正常模式            │      │  只读模式            │           │
+│  │  - 处理交易 ✓        │      │  - 处理交易 ✗        │           │
+│  │  - 出块 ✓            │      │  - 出块 ✗            │           │
+│  │  - 读取状态 ✓        │      │  - 读取状态 ✓        │           │
+│  │  - 同步区块 ✓        │      │  - 同步区块 ✓        │           │
+│  │  - 接受新旧节点 ✓    │      │  - 接受新旧节点 ✓    │           │
+│  └─────────────────────┘      └─────────────────────┘           │
+│                                                                  │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  阶段 2: 升级完成（区块高度 >= UpgradeCompleteBlock）            │
+│  白名单状态：可能仍为 [MRENCLAVE_OLD, MRENCLAVE_NEW]             │
+│                                                                  │
+│  ┌─────────────────────┐      ┌─────────────────────┐           │
+│  │  旧版本节点          │      │  新版本节点          │           │
+│  │  MRENCLAVE_OLD      │      │  MRENCLAVE_NEW      │           │
+│  ├─────────────────────┤      ├─────────────────────┤           │
+│  │  被隔离              │      │  正常模式            │           │
+│  │  - 无法连接新节点    │      │  - 处理交易 ✓        │           │
+│  │                      │      │  - 出块 ✓            │           │
+│  │                      │      │  - 读取状态 ✓        │           │
+│  │                      │      │  - 同步区块 ✓        │           │
+│  │                      │      │  - 只接受新节点 ✓    │           │
+│  └─────────────────────┘      └─────────────────────┘           │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**升级完成条件**（满足任一即可）：
+1. 白名单中只剩下一个 MRENCLAVE（通过投票移除旧版本）
+2. 当前区块高度 >= `UpgradeCompleteBlock`（达到预设的升级截止高度）
+
+**交易池集成**：
+
+```go
+// core/txpool/upgrade_filter.go
+package txpool
+
+import (
+    "github.com/ethereum/go-ethereum/core/types"
+    "github.com/ethereum/go-ethereum/governance"
+)
+
+// UpgradeFilter 升级期间的交易过滤器
+type UpgradeFilter struct {
+    checker *governance.UpgradeModeChecker
+}
+
+// NewUpgradeFilter 创建升级过滤器
+func NewUpgradeFilter(checker *governance.UpgradeModeChecker) *UpgradeFilter {
+    return &UpgradeFilter{checker: checker}
+}
+
+// Filter 过滤交易
+// 升级期间，新版本节点拒绝所有交易
+func (f *UpgradeFilter) Filter(tx *types.Transaction) error {
+    return f.checker.ValidateTransaction(tx)
+}
+```
+
+**共识引擎集成**：
+
+```go
+// consensus/poa_sgx/upgrade_check.go
+package poa_sgx
+
+import (
+    "github.com/ethereum/go-ethereum/governance"
+)
+
+// CanProduceBlock 检查是否可以出块
+// 升级期间，新版本节点不能出块
+func (e *Engine) CanProduceBlock() bool {
+    if e.upgradeChecker.ShouldRejectWriteOperation() {
+        return false
+    }
+    return true
+}
+```
+
+**安全保证**：
+- 升级期间，新版本节点只能同步和验证区块，不能产生新区块或处理交易
+- 这确保了升级过程中不会出现分叉或数据不一致
+- 只有当旧版本 MRENCLAVE 从白名单中移除后，新版本节点才能正常工作
+- 升级完成的标志是白名单中只剩下一个 MRENCLAVE
+
 ### 创世配置示例
 
 ```json

@@ -419,7 +419,14 @@ func (c *OnDemandConfig) ShouldProduceBlock(
     lastBlockTime time.Time,
     pendingTxCount int,
     pendingGasTotal uint64,
+    upgradeChecker *UpgradeModeChecker,
 ) bool {
+    // 条件 0: 升级期间，新版本节点不参与出块
+    // 当白名单中存在多个 MRENCLAVE 时，新版本节点进入只读模式
+    if upgradeChecker != nil && upgradeChecker.ShouldRejectWriteOperation() {
+        return false
+    }
+    
     elapsed := time.Since(lastBlockTime)
     
     // 条件 1: 达到最大间隔，强制出块（心跳）
@@ -453,6 +460,11 @@ func (c *OnDemandConfig) ShouldProduceBlock(
 |   检查出块条件   |
 +------------------+
         |
+        v
++------------------+     是
+| 升级期间只读模式?|---------> 不出块
++------------------+
+        | 否
         v
 +------------------+     否
 | 距上次出块 > 1s? |--------+
