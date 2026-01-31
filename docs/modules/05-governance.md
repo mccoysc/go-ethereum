@@ -209,18 +209,25 @@ func (bc *BootstrapContract) IsBootstrapPhase() bool {
 - 旧节点继续正常处理交易，直到升级完成
 - **升级完成区块高度**：当区块高度达到指定值时，即使白名单中还有多个 MRENCLAVE，新节点也认为升级完成
 
-### 升级完成区块高度
+### 升级完成区块高度与秘密数据同步
 
-为了提供明确的升级截止时间，避免升级过程无限期拖延，引入"升级完成区块高度"参数。当区块高度达到这个值时，即使合约还没把度量值改成一个，新节点也只接受与自己一致度量值的节点。
+为了提供明确的升级截止时间，避免升级过程无限期拖延，引入"升级完成区块高度"参数。同时，由于秘密数据（私钥等）与区块高度关联，新节点需要同步秘密数据到指定高度后才能认为升级完成。
 
 **存储位置**：
 - `UpgradeCompleteBlock` 是安全参数，存储在 **SecurityConfigContract** 中
 - 由 **GovernanceContract** 通过投票机制管理和修改
 - 在添加新 MRENCLAVE 到白名单时，同时通过投票设置 `UpgradeCompleteBlock` 参数
 
-**设计原理**：
-- 新节点检查：如果当前区块高度 >= `UpgradeCompleteBlock`，则认为升级完成
-- 升级完成后，新节点只接受与自己相同 MRENCLAVE 的节点，拒绝旧版本节点的连接
+**升级完成条件**：
+- 秘密数据已同步到 `UpgradeCompleteBlock` 高度（`secretDataSyncedBlock >= UpgradeCompleteBlock`）
+
+注意：不需要单独检查当前区块高度，因为非秘密数据是直接复用的，秘密数据同步到指定高度本身就意味着节点已准备好处理该高度的数据。
+
+**秘密数据同步机制**：
+- 秘密数据与区块高度关联，每个区块可能有对应的秘密数据
+- 新节点通过 RA-TLS 安全通道自动从旧节点同步秘密数据
+- 同步过程记录当前已同步到的区块高度（`secretDataSyncedBlock`）
+- 当 `secretDataSyncedBlock >= UpgradeCompleteBlock` 时，停止同步
 
 ```go
 // security/upgrade_config.go
@@ -238,6 +245,18 @@ type UpgradeConfig struct {
     
     // 升级开始区块高度（添加新 MRENCLAVE 时的区块高度）
     UpgradeStartBlock uint64
+}
+
+// SecretDataSyncState 秘密数据同步状态（本地存储）
+type SecretDataSyncState struct {
+    // 已同步到的区块高度
+    SyncedBlock uint64
+    
+    // 同步是否完成
+    SyncComplete bool
+    
+    // 最后同步时间
+    LastSyncTime int64
 }
 
 // SecurityConfigContract 安全配置合约接口
@@ -266,18 +285,23 @@ var (
 
 // UpgradeModeChecker 升级模式检查器
 type UpgradeModeChecker struct {
-    securityConfig   SecurityConfigReader
-    localMREnclave   [32]byte
-    currentBlockFunc func() uint64 // 获取当前区块高度的函数
+    securityConfig SecurityConfigReader
+    localMREnclave [32]byte
 }
 
 // NewUpgradeModeChecker 创建升级模式检查器
-func NewUpgradeModeChecker(config SecurityConfigReader, localMR [32]byte, blockFunc func() uint64) *UpgradeModeChecker {
+func NewUpgradeModeChecker(config SecurityConfigReader, localMR [32]byte) *UpgradeModeChecker {
     return &UpgradeModeChecker{
-        securityConfig:   config,
-        localMREnclave:   localMR,
-        currentBlockFunc: blockFunc,
+        securityConfig: config,
+        localMREnclave: localMR,
     }
+}
+
+// SecurityConfigReader 安全配置读取接口
+type SecurityConfigReader interface {
+    GetMREnclaveWhitelist() []MREnclaveEntry
+    GetUpgradeConfig() *UpgradeConfig
+    GetSecretDataSyncState() *SecretDataSyncState
 }
 
 // IsUpgradeInProgress 检查是否正在进行升级
@@ -290,7 +314,7 @@ func (c *UpgradeModeChecker) IsUpgradeInProgress() bool {
 // IsUpgradeComplete 检查升级是否已完成
 // 升级完成条件：
 // 1. 白名单中只有一个 MRENCLAVE，或
-// 2. 当前区块高度 >= 升级完成区块高度
+// 2. 秘密数据已同步到升级完成区块高度
 func (c *UpgradeModeChecker) IsUpgradeComplete() bool {
     whitelist := c.securityConfig.GetMREnclaveWhitelist()
     
@@ -299,11 +323,11 @@ func (c *UpgradeModeChecker) IsUpgradeComplete() bool {
         return true
     }
     
-    // 条件 2: 当前区块高度 >= 升级完成区块高度
+    // 条件 2: 秘密数据已同步到升级完成区块高度
     upgradeConfig := c.securityConfig.GetUpgradeConfig()
-    if upgradeConfig != nil && upgradeConfig.UpgradeCompleteBlock > 0 {
-        currentBlock := c.currentBlockFunc()
-        if currentBlock >= upgradeConfig.UpgradeCompleteBlock {
+    syncState := c.securityConfig.GetSecretDataSyncState()
+    if upgradeConfig != nil && upgradeConfig.UpgradeCompleteBlock > 0 && syncState != nil {
+        if syncState.SyncedBlock >= upgradeConfig.UpgradeCompleteBlock {
             return true
         }
     }
