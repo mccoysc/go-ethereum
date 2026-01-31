@@ -285,33 +285,30 @@ import (
     "github.com/ethereum/go-ethereum/common"
 )
 
-// ExtraData 区块头扩展数据结构
+// SGXExtra 区块头扩展数据结构
 // 存储在 header.Extra 字段中
-type ExtraData struct {
-    // 生产者 SGX Quote（远程证明）
-    ProducerQuote []byte
+type SGXExtra struct {
+    // 出块节点的 SGX Quote（证明代码完整性）
+    SGXQuote      []byte  `json:"sgxQuote"`
     
-    // 生产者签名
-    ProducerSignature []byte
+    // 出块节点标识（从 SGX Quote 中提取的公钥哈希）
+    ProducerID    []byte  `json:"producerId"`
     
-    // 生产者地址
-    ProducerAddress common.Address
+    // SGX 证明时间戳
+    AttestationTS uint64  `json:"attestationTs"`
     
-    // 区块生产时间戳（纳秒精度）
-    ProducerTimestamp uint64
-    
-    // 父区块的 SGX 证明哈希
-    ParentQuoteHash common.Hash
+    // 区块签名（使用节点私钥签名）
+    Signature     []byte  `json:"signature"`
 }
 
-// EncodeExtraData 编码扩展数据
-func EncodeExtraData(extra *ExtraData) ([]byte, error) {
-    return rlp.EncodeToBytes(extra)
+// 序列化 SGX Extra 数据
+func (e *SGXExtra) Encode() ([]byte, error) {
+    return rlp.EncodeToBytes(e)
 }
 
-// DecodeExtraData 解码扩展数据
-func DecodeExtraData(data []byte) (*ExtraData, error) {
-    var extra ExtraData
+// 反序列化 SGX Extra 数据
+func DecodeSGXExtra(data []byte) (*SGXExtra, error) {
+    var extra SGXExtra
     if err := rlp.DecodeBytes(data, &extra); err != nil {
         return nil, err
     }
@@ -466,12 +463,12 @@ func (bp *BlockProducer) produceBlock(txs []*types.Transaction) (*types.Block, e
     }
     
     // 4. 设置扩展数据
-    extra := &ExtraData{
-        ProducerQuote:     quote,
-        ProducerAddress:   bp.attestor.GetAddress(),
-        ProducerTimestamp: uint64(time.Now().UnixNano()),
+    extra := &SGXExtra{
+        SGXQuote:      quote,
+        ProducerID:    bp.attestor.GetAddress().Bytes(),
+        AttestationTS: uint64(time.Now().UnixNano()),
     }
-    header.Extra, _ = EncodeExtraData(extra)
+    header.Extra, _ = extra.Encode()
     
     // 5. 执行交易并组装区块
     // ... (调用 EVM 执行交易)
@@ -798,20 +795,20 @@ func (e *SGXEngine) verifyTimestamp(header, parent *types.Header) error {
 
 // verifyQuote 验证 SGX Quote
 func (e *SGXEngine) verifyQuote(header *types.Header) error {
-    extra, err := DecodeExtraData(header.Extra)
+    extra, err := DecodeSGXExtra(header.Extra)
     if err != nil {
         return fmt.Errorf("failed to decode extra data: %w", err)
     }
     
     // 验证 Quote
-    if err := e.verifier.VerifyQuote(extra.ProducerQuote); err != nil {
+    if err := e.verifier.VerifyQuote(extra.SGXQuote); err != nil {
         return fmt.Errorf("%w: %v", ErrInvalidQuote, err)
     }
     
     // 验证 Quote 中的 reportData 包含区块哈希
     // 这确保 Quote 是为这个特定区块生成的
     expectedReportData := header.Hash().Bytes()
-    if !verifyReportData(extra.ProducerQuote, expectedReportData) {
+    if !verifyReportData(extra.SGXQuote, expectedReportData) {
         return errors.New("quote reportData does not match block hash")
     }
     
@@ -820,20 +817,20 @@ func (e *SGXEngine) verifyQuote(header *types.Header) error {
 
 // verifySignature 验证区块签名
 func (e *SGXEngine) verifySignature(header *types.Header) error {
-    extra, err := DecodeExtraData(header.Extra)
+    extra, err := DecodeSGXExtra(header.Extra)
     if err != nil {
         return err
     }
     
     // 从 Quote 中提取公钥
-    pubKey, err := extractPublicKeyFromQuote(extra.ProducerQuote)
+    pubKey, err := extractPublicKeyFromQuote(extra.SGXQuote)
     if err != nil {
         return err
     }
     
     // 验证签名
     sigHash := sigHash(header)
-    if !verifySignature(pubKey, sigHash, extra.ProducerSignature) {
+    if !verifySignature(pubKey, sigHash, extra.Signature) {
         return ErrInvalidSignature
     }
     
@@ -1822,6 +1819,546 @@ func (t *TxParticipationTracker) CalculateParticipationScore(nodeID common.Hash)
 }
 ```
 
+#### 交易响应时间追踪
+
+测量节点处理交易的响应速度：
+
+```go
+// consensus/sgx/response_tracker.go
+package sgx
+
+// ResponseTimeTracker 响应时间追踪器
+type ResponseTimeTracker struct {
+    responseLogs map[common.Hash][]ResponseRecord
+    config       *ResponseConfig
+}
+
+// ResponseRecord 响应记录
+type ResponseRecord struct {
+    NodeID       common.Hash
+    TxHash       common.Hash
+    SubmitTime   uint64 // 交易提交时间
+    ResponseTime uint64 // 收到响应时间
+    Success      bool   // 是否成功处理
+}
+
+// ResponseConfig 响应配置
+type ResponseConfig struct {
+    WindowSize      int           // 统计窗口大小，默认 100
+    ExcellentMs     uint32        // 优秀响应时间，默认 100ms
+    GoodMs          uint32        // 良好响应时间，默认 500ms
+    AcceptableMs    uint32        // 可接受响应时间，默认 2000ms
+}
+
+// CalculateResponseScore 计算响应得分
+func (t *ResponseTimeTracker) CalculateResponseScore(nodeID common.Hash) uint64 {
+    records := t.getRecentRecords(nodeID)
+    
+    if len(records) == 0 {
+        return 5000 // 无记录时给中等分数
+    }
+    
+    var totalScore uint64
+    var validCount int
+    
+    for _, record := range records {
+        if !record.Success {
+            continue // 失败的不计入响应时间
+        }
+        
+        validCount++
+        responseMs := uint32((record.ResponseTime - record.SubmitTime) * 1000)
+        
+        // 根据响应时间计算得分
+        var score uint64
+        switch {
+        case responseMs <= t.config.ExcellentMs:
+            score = 10000 // 优秀
+        case responseMs <= t.config.GoodMs:
+            score = 8000 // 良好
+        case responseMs <= t.config.AcceptableMs:
+            score = 6000 // 可接受
+        default:
+            score = 3000 // 较慢
+        }
+        
+        totalScore += score
+    }
+    
+    if validCount == 0 {
+        return 5000
+    }
+    
+    return totalScore / uint64(validCount)
+}
+```
+
+#### 综合在线率计算
+
+将以上四种衡量机制综合计算：
+
+```go
+// consensus/sgx/uptime_calculator.go
+package sgx
+
+// UptimeCalculator 综合在线率计算器
+type UptimeCalculator struct {
+    heartbeatMgr        *HeartbeatManager
+    consensusMgr        *UptimeConsensus
+    txParticipation     *TxParticipationTracker
+    responseTracker     *ResponseTimeTracker
+    config              *UptimeConfig
+}
+
+// UptimeConfig 在线率计算配置
+type UptimeConfig struct {
+    // 权重配置（总和 = 100）
+    HeartbeatWeight       uint8 // SGX 心跳权重，默认 40
+    ConsensusWeight       uint8 // 多节点共识权重，默认 30
+    TxParticipationWeight uint8 // 交易参与权重，默认 20
+    ResponseWeight        uint8 // 响应时间权重，默认 10
+}
+
+// CalculateComprehensiveUptime 计算综合在线率
+func (c *UptimeCalculator) CalculateComprehensiveUptime(nodeID common.Hash) uint64 {
+    cfg := c.config
+    
+    // 1. SGX 心跳得分
+    heartbeatScore := c.heartbeatMgr.GetHeartbeatScore(nodeID)
+    
+    // 2. 多节点共识得分
+    consensusScore, _ := c.consensusMgr.CalculateUptimeScore(nodeID)
+    
+    // 3. 交易参与得分
+    txParticipationScore := c.txParticipation.CalculateParticipationScore(nodeID)
+    
+    // 4. 响应时间得分
+    responseScore := c.responseTracker.CalculateResponseScore(nodeID)
+    
+    // 5. 加权计算
+    totalScore := (heartbeatScore * uint64(cfg.HeartbeatWeight) +
+                   consensusScore * uint64(cfg.ConsensusWeight) +
+                   txParticipationScore * uint64(cfg.TxParticipationWeight) +
+                   responseScore * uint64(cfg.ResponseWeight)) / 100
+    
+    return totalScore
+}
+```
+
+**衡量机制总结**：
+
+| 机制 | 权重 | 衡量内容 | 防伪造方式 |
+|------|------|----------|------------|
+| SGX 签名心跳 | 40% | 节点是否定期发送心跳 | SGX enclave 签名 + Quote |
+| 多节点共识 | 30% | 多个节点观测的共识结果 | 2/3 共识 + 签名追溯 |
+| 交易参与 | 20% | 处理的交易数量和 Gas 贡献比例 | 区块链不可篡改记录 |
+| 响应时间 | 10% | 交易处理响应速度 | 交易哈希 + 时间戳 |
+
+**为什么不使用"出块数量"作为衡量标准**：
+
+X Chain 采用按需出块机制，只有在有用户交易时才会出块。这意味着出块频率完全取决于网络交易量，而不是节点的在线状态或贡献度。因此，使用"交易参与比例"（节点处理的交易数量占网络总交易数量的比例）更能准确反映节点的实际贡献。
+
+### 信誉系统设计
+
+```go
+// consensus/sgx/reputation.go
+package sgx
+
+// NodeReputation 节点信誉数据
+type NodeReputation struct {
+    NodeID          common.Hash   // 节点标识
+    UptimeScore     uint64        // 在线时长得分 (0-10000, 代表 0%-100%)
+    ResponseScore   uint64        // 响应速度得分
+    SuccessRate     uint64        // 交易处理成功率
+    TotalTxProcessed uint64       // 累计处理的交易数
+    LastActiveTime  uint64        // 最后活跃时间戳
+    PenaltyCount    uint64        // 惩罚次数
+    ReputationScore uint64        // 综合信誉分 (0-10000)
+}
+
+// ReputationManager 信誉管理器
+type ReputationManager struct {
+    reputations map[common.Hash]*NodeReputation
+    config      *ReputationConfig
+}
+
+// ReputationConfig 信誉系统配置
+type ReputationConfig struct {
+    // 权重配置 (总和 = 100)
+    UptimeWeight      uint8  // 在线时长权重，默认 40
+    ResponseWeight    uint8  // 响应速度权重，默认 20
+    SuccessRateWeight uint8  // 成功率权重，默认 30
+    HistoryWeight     uint8  // 历史记录权重，默认 10
+    
+    // 阈值配置
+    MinUptimeForReward    uint64        // 获得奖励的最低在线率，默认 95%
+    PenaltyThreshold      uint64        // 触发惩罚的在线率阈值，默认 80%
+    RecoveryPeriod        time.Duration // 惩罚恢复期，默认 24 小时
+}
+
+// CalculateReputationScore 计算综合信誉分
+func (m *ReputationManager) CalculateReputationScore(r *NodeReputation) uint64 {
+    cfg := m.config
+    
+    // 加权计算
+    score := (r.UptimeScore * uint64(cfg.UptimeWeight) +
+              r.ResponseScore * uint64(cfg.ResponseWeight) +
+              r.SuccessRate * uint64(cfg.SuccessRateWeight) +
+              m.calculateHistoryScore(r) * uint64(cfg.HistoryWeight)) / 100
+    
+    // 惩罚扣分
+    if r.PenaltyCount > 0 {
+        penaltyDeduction := r.PenaltyCount * 500 // 每次惩罚扣 5%
+        if penaltyDeduction > score {
+            score = 0
+        } else {
+            score -= penaltyDeduction
+        }
+    }
+    
+    return score
+}
+
+// UpdateUptime 更新在线时长
+func (m *ReputationManager) UpdateUptime(nodeID common.Hash, isOnline bool) {
+    r := m.getOrCreateReputation(nodeID)
+    
+    now := uint64(time.Now().Unix())
+    
+    if isOnline {
+        // 在线：增加得分
+        r.UptimeScore = min(r.UptimeScore + 1, 10000)
+        r.LastActiveTime = now
+    } else {
+        // 离线：减少得分
+        if r.UptimeScore > 10 {
+            r.UptimeScore -= 10 // 离线惩罚更重
+        } else {
+            r.UptimeScore = 0
+        }
+    }
+    
+    r.ReputationScore = m.CalculateReputationScore(r)
+}
+```
+
+#### 交易费加权分配
+
+高信誉节点获得更高比例的交易费：
+
+```go
+// 交易费分配策略
+type FeeDistribution struct {
+    // 基础费用分配
+    BaseFee *big.Int
+    
+    // 信誉加权系数
+    ReputationMultiplier func(score uint64) *big.Int
+}
+
+// CalculateFeeShare 计算节点的交易费份额
+func (d *FeeDistribution) CalculateFeeShare(
+    totalFee *big.Int,
+    nodeReputation uint64,
+    allNodes []*NodeReputation,
+) *big.Int {
+    // 计算所有节点的加权总分
+    var totalWeightedScore uint64
+    for _, node := range allNodes {
+        totalWeightedScore += d.getWeightedScore(node.ReputationScore)
+    }
+    
+    if totalWeightedScore == 0 {
+        return big.NewInt(0)
+    }
+    
+    // 按加权比例分配
+    nodeWeightedScore := d.getWeightedScore(nodeReputation)
+    share := new(big.Int).Mul(totalFee, big.NewInt(int64(nodeWeightedScore)))
+    share.Div(share, big.NewInt(int64(totalWeightedScore)))
+    
+    return share
+}
+
+// getWeightedScore 获取加权得分（高信誉节点获得更高权重）
+func (d *FeeDistribution) getWeightedScore(reputationScore uint64) uint64 {
+    // 信誉分 >= 9000 (90%): 权重 x2.0
+    // 信誉分 >= 8000 (80%): 权重 x1.5
+    // 信誉分 >= 7000 (70%): 权重 x1.0
+    // 信誉分 < 7000: 权重 x0.5
+    
+    switch {
+    case reputationScore >= 9000:
+        return reputationScore * 2
+    case reputationScore >= 8000:
+        return reputationScore * 3 / 2
+    case reputationScore >= 7000:
+        return reputationScore
+    default:
+        return reputationScore / 2
+    }
+}
+```
+
+### 惩罚机制
+
+```go
+// PenaltyManager 惩罚管理器
+type PenaltyManager struct {
+    reputationMgr *ReputationManager
+    config        *PenaltyConfig
+}
+
+// PenaltyConfig 惩罚配置
+type PenaltyConfig struct {
+    // 离线惩罚
+    OfflineThreshold   time.Duration // 离线多久触发惩罚，默认 10 分钟
+    OfflinePenalty     uint64        // 离线惩罚扣分，默认 500 (5%)
+    
+    // 频繁离线惩罚
+    FrequentOfflineCount    int           // 频繁离线次数阈值，默认 3 次/天
+    FrequentOfflinePenalty  uint64        // 频繁离线惩罚，默认 1000 (10%)
+    
+    // 恢复机制
+    RecoveryRate       uint64        // 每小时恢复的惩罚分，默认 50
+    MaxPenaltyCount    uint64        // 最大惩罚次数（超过则暂时排除），默认 10
+}
+
+// CheckAndPenalize 检查并执行惩罚
+func (p *PenaltyManager) CheckAndPenalize(nodeID common.Hash) {
+    r := p.reputationMgr.getReputation(nodeID)
+    if r == nil {
+        return
+    }
+    
+    now := uint64(time.Now().Unix())
+    offlineDuration := now - r.LastActiveTime
+    
+    // 检查是否超过离线阈值
+    if offlineDuration > uint64(p.config.OfflineThreshold.Seconds()) {
+        r.PenaltyCount++
+        r.ReputationScore = p.reputationMgr.CalculateReputationScore(r)
+        
+        log.Warn("Node penalized for being offline",
+            "nodeID", nodeID,
+            "offlineDuration", offlineDuration,
+            "penaltyCount", r.PenaltyCount)
+    }
+    
+    // 检查是否应该暂时排除
+    if r.PenaltyCount >= p.config.MaxPenaltyCount {
+        p.excludeNode(nodeID)
+    }
+}
+
+// excludeNode 暂时排除节点（不参与出块）
+func (p *PenaltyManager) excludeNode(nodeID common.Hash) {
+    log.Warn("Node excluded from block production due to excessive penalties",
+        "nodeID", nodeID)
+    // 节点仍可同步数据，但不能出块
+    // 需要连续在线一段时间后才能恢复
+}
+```
+
+### 在线奖励机制
+
+**核心问题**：X Chain 采用按需出块机制，如果网络交易量不足，矿工激励不足，会导致矿工数量自动缩减，形成恶性循环。
+
+```
+问题分析:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  按需出块的激励困境:                                                     │
+│                                                                         │
+│  交易量少 → 出块少 → 矿工收入低 → 矿工退出 → 节点减少                   │
+│       ↑                                                    |            │
+│       +----------------------------------------------------+            │
+│                                                                         │
+│  目标: 即使交易量少，也要维持足够的矿工数量保证网络安全                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**解决方案**：将挖矿定义为"长期稳定在线"，基于在线时间和在线质量定时发放"在线奖励"，但确保交易收益远高于在线奖励。
+
+```go
+// consensus/sgx/online_reward.go
+package sgx
+
+// OnlineRewardConfig 在线奖励配置
+type OnlineRewardConfig struct {
+    // 在线奖励发放间隔（默认 1 小时）
+    RewardInterval      time.Duration
+    
+    // 基础在线奖励（每小时）
+    BaseOnlineReward    *big.Int
+    
+    // 在线质量加成（高质量在线可获得更高奖励）
+    QualityMultiplier   func(uptimeScore uint64) float64
+    
+    // 交易收益保护系数（确保交易收益远高于在线奖励）
+    // 任何交易的收益必须 >= 前 N 个空块最高在线奖励 × 此系数
+    TxRewardProtectionFactor  float64  // 默认 10.0
+    TxRewardProtectionBlocks  int      // 默认 10
+}
+
+// DefaultOnlineRewardConfig 默认配置
+func DefaultOnlineRewardConfig() *OnlineRewardConfig {
+    return &OnlineRewardConfig{
+        RewardInterval:           1 * time.Hour,
+        BaseOnlineReward:         big.NewInt(1e15),  // 0.001 ETH/小时
+        TxRewardProtectionFactor: 10.0,              // 交易收益 >= 10 × 最高在线奖励
+        TxRewardProtectionBlocks: 10,                // 参考前 10 个空块
+        QualityMultiplier: func(uptimeScore uint64) float64 {
+            // 在线质量得分 >= 9500: 1.5x 奖励
+            // 在线质量得分 >= 9000: 1.2x 奖励
+            // 在线质量得分 >= 8000: 1.0x 奖励
+            // 在线质量得分 < 8000: 0.5x 奖励
+            switch {
+            case uptimeScore >= 9500:
+                return 1.5
+            case uptimeScore >= 9000:
+                return 1.2
+            case uptimeScore >= 8000:
+                return 1.0
+            default:
+                return 0.5
+            }
+        },
+    }
+}
+
+// OnlineRewardManager 在线奖励管理器
+type OnlineRewardManager struct {
+    config          *OnlineRewardConfig
+    uptimeCalc      *UptimeCalculator
+    reputationMgr   *ReputationManager
+    
+    // 记录最近的在线奖励（用于交易收益保护计算）
+    recentOnlineRewards []*OnlineRewardRecord
+}
+
+// OnlineRewardRecord 在线奖励记录
+type OnlineRewardRecord struct {
+    NodeID      common.Hash
+    Timestamp   uint64
+    Reward      *big.Int
+    UptimeScore uint64
+}
+
+// CalculateOnlineReward 计算节点的在线奖励
+func (m *OnlineRewardManager) CalculateOnlineReward(nodeID common.Hash) *big.Int {
+    // 1. 获取节点的在线质量得分
+    uptimeScore := m.uptimeCalc.CalculateComprehensiveUptime(nodeID)
+    
+    // 2. 检查是否满足最低在线要求
+    if uptimeScore < 8000 {  // 低于 80% 在线率不发放奖励
+        return big.NewInt(0)
+    }
+    
+    // 3. 计算质量加成
+    multiplier := m.config.QualityMultiplier(uptimeScore)
+    
+    // 4. 计算最终奖励
+    reward := new(big.Int).Set(m.config.BaseOnlineReward)
+    reward.Mul(reward, big.NewInt(int64(multiplier * 100)))
+    reward.Div(reward, big.NewInt(100))
+    
+    return reward
+}
+
+// GetMinTxReward 获取最小交易收益（确保交易收益远高于在线奖励）
+// 核心原则: 一旦有交易，交易获取的收益必须远高于前 N 个空块的最高收益
+func (m *OnlineRewardManager) GetMinTxReward() *big.Int {
+    // 1. 获取最近 N 个在线奖励中的最高值
+    maxOnlineReward := big.NewInt(0)
+    recentCount := min(len(m.recentOnlineRewards), m.config.TxRewardProtectionBlocks)
+    
+    for i := 0; i < recentCount; i++ {
+        record := m.recentOnlineRewards[len(m.recentOnlineRewards)-1-i]
+        if record.Reward.Cmp(maxOnlineReward) > 0 {
+            maxOnlineReward = new(big.Int).Set(record.Reward)
+        }
+    }
+    
+    // 2. 计算最小交易收益 = 最高在线奖励 × 保护系数
+    minTxReward := new(big.Int).Mul(
+        maxOnlineReward,
+        big.NewInt(int64(m.config.TxRewardProtectionFactor)),
+    )
+    
+    return minTxReward
+}
+
+// DistributeOnlineRewards 定时发放在线奖励
+func (m *OnlineRewardManager) DistributeOnlineRewards(activeNodes []common.Hash) map[common.Hash]*big.Int {
+    rewards := make(map[common.Hash]*big.Int)
+    
+    for _, nodeID := range activeNodes {
+        reward := m.CalculateOnlineReward(nodeID)
+        if reward.Sign() > 0 {
+            rewards[nodeID] = reward
+            
+            // 记录奖励（用于交易收益保护计算）
+            m.recentOnlineRewards = append(m.recentOnlineRewards, &OnlineRewardRecord{
+                NodeID:      nodeID,
+                Timestamp:   uint64(time.Now().Unix()),
+                Reward:      reward,
+                UptimeScore: m.uptimeCalc.CalculateComprehensiveUptime(nodeID),
+            })
+        }
+    }
+    
+    // 保留最近的记录
+    if len(m.recentOnlineRewards) > 1000 {
+        m.recentOnlineRewards = m.recentOnlineRewards[len(m.recentOnlineRewards)-1000:]
+    }
+    
+    return rewards
+}
+```
+
+**在线奖励机制的核心原则**：
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  核心原则: 交易最重要                                                    │
+│                                                                         │
+│  1. 在线奖励是"保底收入"                                                │
+│     - 即使没有交易，长期高质量在线的节点也能获得收益                     │
+│     - 防止矿工因收入不稳定而退出                                        │
+│                                                                         │
+│  2. 交易收益必须远高于在线奖励                                          │
+│     - 任何交易的收益 >= 前 10 个空块最高在线奖励 × 10                   │
+│     - 确保矿工有强烈动机处理交易                                        │
+│                                                                         │
+│  3. 在线质量影响奖励                                                    │
+│     - 高质量在线（响应快、稳定）获得更高奖励                            │
+│     - 激励矿工提供优质服务                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+收益对比示例:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  假设: 基础在线奖励 = 0.001 ETH/小时                                    │
+│                                                                         │
+│  高质量在线节点 (95%+ 在线率):                                          │
+│  - 在线奖励: 0.001 × 1.5 = 0.0015 ETH/小时                             │
+│  - 24 小时收入: 0.036 ETH                                               │
+│                                                                         │
+│  一笔交易的最低收益:                                                    │
+│  - 最小交易收益 = 0.0015 × 10 = 0.015 ETH                              │
+│  - 一笔交易 >= 10 小时的在线奖励                                        │
+│                                                                         │
+│  结论: 矿工有强烈动机处理交易，同时在没有交易时也有保底收入              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**激励效果**：
+
+| 场景 | 矿工行为 | 收益来源 |
+|------|----------|----------|
+| 交易量充足 | 积极处理交易 | 主要来自交易费（远高于在线奖励） |
+| 交易量不足 | 保持高质量在线 | 在线奖励（保底收入） |
+| 长期稳定运营 | 持续提供服务 | 在线奖励 + 交易费 + 历史贡献加成 |
+
 ## 文件结构
 
 ```
@@ -1838,6 +2375,11 @@ consensus/sgx/
 ├── heartbeat.go              # SGX 签名心跳机制
 ├── uptime_observer.go        # 多节点在线率观测
 ├── tx_participation_tracker.go # 交易参与追踪
+├── response_tracker.go       # 交易响应时间追踪
+├── uptime_calculator.go      # 综合在线率计算器
+├── reputation.go             # 信誉系统
+├── penalty.go                # 惩罚机制
+├── online_reward.go          # 在线奖励机制
 ├── producer_penalty.go       # 出块者惩罚机制
 ├── api.go                    # RPC API
 ├── config.go                 # 配置
@@ -2291,10 +2833,15 @@ speed_reward_ratios = [1.0, 0.6, 0.3]
 | P2 | SGX 签名心跳机制 | 3 天 |
 | P2 | 多节点在线率观测 | 3 天 |
 | P2 | 交易参与追踪 | 2 天 |
+| P2 | 交易响应时间追踪 | 2 天 |
+| P2 | 综合在线率计算器 | 2 天 |
+| P2 | 信誉系统 | 3 天 |
+| P2 | 惩罚机制 | 2 天 |
+| P2 | 在线奖励机制 | 3 天 |
 | P2 | 防止恶意行为规则 | 2 天 |
 | P3 | RPC API | 2 天 |
 
-**总计：约 5-6 周**
+**总计：约 6-7 周**
 
 ## 注意事项
 
