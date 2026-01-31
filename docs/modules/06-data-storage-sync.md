@@ -48,31 +48,86 @@ X Chain 的配置参数分为两类：
 
 | 类别 | 控制方式 | 特点 | 示例 |
 |------|----------|------|------|
-| **安全相关参数** | Gramine Manifest | 影响度量值，不可外部修改 | 度量值白名单、加密分区路径、密钥迁移配置 |
+| **Manifest 固定参数** | Gramine Manifest | 影响度量值，不可外部修改 | 本地路径配置、链上合约地址 |
+| **链上安全参数** | 链上合约 | 通过投票管理，动态生效 | 白名单、密钥迁移阈值、准入策略 |
 | **非安全参数** | 命令行参数 | 不影响安全性，可灵活配置 | 出块间隔、RPC 端口、日志级别 |
 
-### 安全相关参数（Manifest 控制）
+### Manifest 固定参数
+
+Manifest 中只存储本地配置和链上合约地址。合约地址写死在 manifest 中，作为安全锚点，确保节点只能从指定的合约读取安全参数。
 
 ```toml
-# gramine manifest 中的安全参数
+# gramine manifest 中的固定参数
 [loader.env]
-# 度量值白名单（JSON 格式）
-XCHAIN_MRENCLAVE_WHITELIST = '["abc123...", "def456..."]'
+# 本地路径配置
+XCHAIN_ENCRYPTED_PATH = "/data/encrypted"    # 加密分区路径
+XCHAIN_SECRET_PATH = "/data/secrets"         # 秘密数据存储路径
 
-# 加密分区路径
-XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
-
-# 秘密数据存储路径
-XCHAIN_SECRET_PATH = "/data/secrets"
-
-# 密钥迁移配置
-XCHAIN_KEY_MIGRATION_ENABLED = "true"
-XCHAIN_KEY_MIGRATION_THRESHOLD = "2"
-
-# 节点准入控制
-XCHAIN_ADMISSION_STRICT = "true"
-XCHAIN_ADMISSION_VERIFY_QUOTE = "true"
+# 链上合约地址（写死，作为安全锚点）
+# 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
+XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
+XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
 ```
+
+### 链上安全参数
+
+所有治理相关的安全参数从链上合约动态读取，这样投票结果可以实时生效，无需重新部署节点：
+
+| 参数 | 链上合约 | 说明 |
+|------|----------|------|
+| MRENCLAVE 白名单 | SecurityConfigContract | 允许的 enclave 代码度量值 |
+| MRSIGNER 白名单 | SecurityConfigContract | 允许的签名者度量值 |
+| 密钥迁移阈值 | SecurityConfigContract | 密钥迁移所需的最小节点数 |
+| 节点准入策略 | SecurityConfigContract | 是否严格验证 Quote |
+| 分叉配置 | SecurityConfigContract | 硬分叉升级相关配置 |
+| 数据迁移策略 | SecurityConfigContract | 加密数据迁移相关配置 |
+| 投票阈值 | GovernanceContract | 提案通过所需的投票比例 |
+| 投票期限 | GovernanceContract | 提案投票的区块数 |
+
+**合约职责划分**：
+- **安全配置合约（SecurityConfigContract）**：存储所有安全配置，被其他模块读取
+- **治理合约（GovernanceContract）**：负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约
+
+```go
+// 从链上读取安全参数
+type OnChainConfigSync struct {
+    governanceContract common.Address  // 从 Manifest 读取
+    whitelistContract  common.Address  // 从 Manifest 读取
+    client             *ethclient.Client
+}
+
+func NewOnChainConfigSync() (*OnChainConfigSync, error) {
+    // 从 Manifest 环境变量读取合约地址
+    govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
+    scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
+    
+    return &OnChainConfigSync{
+        governanceContract:     common.HexToAddress(govAddr),
+        securityConfigContract: common.HexToAddress(scAddr), // 安全配置合约，由治理合约管理
+    }, nil
+}
+
+// SyncSecurityParams 从链上同步所有安全参数
+func (s *OnChainConfigSync) SyncSecurityParams() (*SecurityConfig, error) {
+    config := &SecurityConfig{}
+    
+    // 从安全配置合约读取（由治理合约管理）
+    config.AllowedMREnclave = s.fetchWhitelist()
+    
+    // 从治理合约读取
+    config.KeyMigrationThreshold = s.fetchKeyMigrationThreshold()
+    config.AdmissionStrict = s.fetchAdmissionPolicy()
+    config.VotingThreshold = s.fetchVotingThreshold()
+    
+    return config, nil
+}
+```
+
+**安全保证**：
+- 合约地址写死在 Manifest 中，影响 MRENCLAVE，无法被篡改
+- 所有安全参数从链上读取，通过共识机制保证一致性
+- 投票结果记录在链上，不可篡改
+- 节点定期从链上同步参数，确保使用最新的治理决策
 
 ### 非安全参数（命令行控制）
 
@@ -131,26 +186,8 @@ type ParamDefinition struct {
 }
 
 // SecurityParams 安全相关参数定义
+// 注意：白名单不在此列表中，因为白名单应从链上动态读取，而不是从环境变量
 var SecurityParams = []ParamDefinition{
-    {
-        Name:     "mrenclave_whitelist",
-        Category: ParamCategorySecurity,
-        EnvKey:   "XCHAIN_MRENCLAVE_WHITELIST",
-        CliFlag:  "xchain.whitelist",
-        Required: true,
-        Validator: func(v string) error {
-            // 白名单使用 Base64 编码的 CSV 格式
-            decoded, err := base64.StdEncoding.DecodeString(v)
-            if err != nil {
-                return fmt.Errorf("invalid Base64 encoding: %w", err)
-            }
-            lines := strings.Split(string(decoded), "\n")
-            if len(lines) == 0 {
-                return errors.New("whitelist cannot be empty")
-            }
-            return nil
-        },
-    },
     {
         Name:     "encrypted_path",
         Category: ParamCategorySecurity,

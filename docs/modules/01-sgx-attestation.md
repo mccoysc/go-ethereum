@@ -104,35 +104,105 @@ export RA_TLS_CERT_ALGORITHM="secp256k1"
 export RA_TLS_CERT_CONFIG_B64="eyJhbGdvcml0aG0iOiJzZWNwMjU2azEiLC..."
 ```
 
-### 白名单配置
+### 安全参数配置架构
 
-白名单使用 Base64 编码的 CSV 格式（不是 JSON）：
+X Chain 的安全参数分为两类：
 
-```bash
-# RATLS_WHITELIST_CONFIG 格式：Base64 编码的 CSV
-# 每行一个条目，逗号分隔的度量值
-# 格式：MRENCLAVE,MRSIGNER,ISV_PROD_ID,ISV_SVN
+| 类别 | 存储位置 | 特点 |
+|------|----------|------|
+| **Manifest 固定参数** | Gramine Manifest | 影响 MRENCLAVE，不可篡改 |
+| **链上安全参数** | 链上合约 | 通过投票管理，动态生效 |
 
-# 示例 CSV 内容：
-# abc123...,def456...,1,1
-# xyz789...,def456...,1,2
+#### Manifest 固定参数
 
-# Base64 编码后设置
-export RATLS_WHITELIST_CONFIG="YWJjMTIzLi4uLGRlZjQ1Ni4uLiwxLDEKeHl6Nzg5Li4uLGRlZjQ1Ni4uLiwxLDI="
+Manifest 中只存储本地配置和**链上合约地址**。合约地址写死在 manifest 中，作为安全锚点：
+
+```toml
+# Gramine manifest 中的固定参数
+[loader.env]
+# 链上合约地址（写死，作为安全锚点）
+# 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
+XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
+XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
 ```
+
+#### 链上安全参数（动态读取）
+
+所有治理相关的安全参数从链上合约动态读取，投票结果实时生效：
+
+| 参数 | 链上合约 | 说明 |
+|------|----------|------|
+| MRENCLAVE 白名单 | SecurityConfigContract | 允许的 enclave 代码度量值 |
+| MRSIGNER 白名单 | SecurityConfigContract | 允许的签名者度量值 |
+| 密钥迁移阈值 | SecurityConfigContract | 密钥迁移所需的最小节点数 |
+| 节点准入策略 | SecurityConfigContract | 是否严格验证 Quote |
+| 分叉配置 | SecurityConfigContract | 硬分叉升级相关配置 |
+| 数据迁移策略 | SecurityConfigContract | 加密数据迁移相关配置 |
+
+**合约职责划分**：
+- **安全配置合约（SecurityConfigContract）**：存储所有安全配置，被其他模块读取
+- **治理合约（GovernanceContract）**：负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约
+
+```go
+// 从链上读取安全参数
+type OnChainSecurityConfig struct {
+    whitelistContract  common.Address  // 从 Manifest 读取
+    governanceContract common.Address  // 从 Manifest 读取
+    client             *ethclient.Client
+    localCache         *SecurityCache
+}
+
+func NewOnChainSecurityConfig() (*OnChainSecurityConfig, error) {
+    // 从 Manifest 环境变量读取合约地址（写死的安全锚点）
+    scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
+    govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
+    
+    return &OnChainSecurityConfig{
+        securityConfigContract: common.HexToAddress(scAddr), // 安全配置合约，由治理合约管理
+        governanceContract:     common.HexToAddress(govAddr),
+    }, nil
+}
+
+// SyncFromChain 从链上同步所有安全参数
+func (c *OnChainSecurityConfig) SyncFromChain() error {
+    // 从安全配置合约读取（由治理合约管理）
+    c.localCache.AllowedMREnclave = c.fetchWhitelist()
+    
+    // 从治理合约读取
+    c.localCache.KeyMigrationThreshold = c.fetchKeyMigrationThreshold()
+    c.localCache.AdmissionStrict = c.fetchAdmissionPolicy()
+    
+    return nil
+}
+
+// IsAllowedMREnclave 验证时使用本地缓存
+func (c *OnChainSecurityConfig) IsAllowedMREnclave(mrenclave []byte) bool {
+    key := fmt.Sprintf("%x", mrenclave)
+    return c.localCache.AllowedMREnclave[key]
+}
+```
+
+**安全保证**：
+- 合约地址写死在 Manifest 中，影响 MRENCLAVE，无法被篡改
+- 所有安全参数从链上读取，通过共识机制保证一致性
+- 投票结果记录在链上，不可篡改
+- 节点定期从链上同步参数，确保使用最新的治理决策
+- 本节点的 MRENCLAVE 由代码决定，无法伪造
+- 其他节点的 MRENCLAVE 通过 SGX Quote 验证，由 Intel 签名保证真实性
 
 ### RA-TLS 环境变量
 
+以下环境变量用于本节点自身的配置：
+
 | 环境变量 | 描述 | 示例值 |
 |----------|------|--------|
-| `RA_TLS_MRENCLAVE` | 允许的 MRENCLAVE 列表 | `abc123...,def456...` |
-| `RA_TLS_MRSIGNER` | 允许的 MRSIGNER 列表 | `789abc...` |
-| `RA_TLS_ISV_PROD_ID` | 允许的产品 ID | `1` |
-| `RA_TLS_ISV_SVN` | 允许的安全版本号 | `1` |
 | `RA_TLS_CERT_ALGORITHM` | 证书算法 | `secp256k1` |
-| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB（不安全） | `1` |
-| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave（不安全） | `1` |
-| `RATLS_WHITELIST_CONFIG` | Base64 编码的 CSV 白名单 | `YWJjMTIz...` |
+| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB（不安全，仅测试用） | `1` |
+| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave（不安全，仅测试用） | `1` |
+| `XCHAIN_SECURITY_CONFIG_CONTRACT` | 安全配置合约地址（写死，由治理合约管理） | `0xabcdef...` |
+| `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址（写死） | `0x123456...` |
+
+**注意**：白名单数据本身不应存储在环境变量中，应从链上合约动态读取。
 
 ### 证书和私钥存储
 

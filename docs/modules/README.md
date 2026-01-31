@@ -80,22 +80,42 @@ X Chain 是基于 go-ethereum 的区块链，使用 Intel SGX 远程证明替代
 6. 预编译合约模块 - 实现密钥管理预编译合约
 7. 激励机制模块 - 实现奖励计算和分发
 
-## 参数分类
+## 安全参数架构
 
-X Chain 的配置参数分为两类：
+X Chain 的安全参数采用**链上合约存储 + Manifest 固定合约地址**的架构：
 
-### 安全相关参数（Manifest 控制）
+### 合约职责划分
 
-这些参数在 Docker 镜像构建时嵌入 Gramine manifest，影响 MRENCLAVE 度量值，不可在运行时修改：
+| 合约 | 职责 |
+|------|------|
+| **安全配置合约（SecurityConfigContract）** | 存储所有安全配置，被其他模块读取 |
+| **治理合约（GovernanceContract）** | 负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约 |
+
+### Manifest 固定参数
+
+这些参数在 Docker 镜像构建时嵌入 Gramine manifest，影响 MRENCLAVE 度量值：
 
 | 参数 | 说明 |
 |------|------|
-| `XCHAIN_MRENCLAVE_WHITELIST` | 度量值白名单（Base64 编码 CSV） |
 | `XCHAIN_ENCRYPTED_PATH` | 加密分区路径 |
 | `XCHAIN_SECRET_PATH` | 秘密数据路径 |
-| `XCHAIN_KEY_MIGRATION_ENABLED` | 密钥迁移开关 |
-| `XCHAIN_ADMISSION_STRICT` | 严格准入控制 |
-| `RATLS_WHITELIST_CONFIG` | RA-TLS 白名单配置 |
+| `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址（写死，作为安全锚点） |
+| `XCHAIN_SECURITY_CONFIG_CONTRACT` | 安全配置合约地址（写死，作为安全锚点） |
+
+**重要说明**：合约地址写死在 Manifest 中，影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值。
+
+### 链上安全参数（从 SecurityConfigContract 读取）
+
+所有安全、准入、秘密数据管理策略等相关配置都从安全配置合约动态读取：
+
+| 参数 | 说明 |
+|------|------|
+| MRENCLAVE 白名单 | 允许的 enclave 代码度量值 |
+| MRSIGNER 白名单 | 允许的签名者度量值 |
+| 密钥迁移阈值 | 密钥迁移所需的最小节点数 |
+| 节点准入策略 | 是否严格验证 Quote |
+| 分叉配置 | 硬分叉升级相关配置 |
+| 数据迁移策略 | 加密数据迁移相关配置 |
 
 ### 运行时参数（命令行控制）
 
@@ -113,12 +133,25 @@ X Chain 的配置参数分为两类：
 ### 参数校验机制
 
 启动时的参数处理流程：
-1. 首先读取 Manifest 中的安全参数
-2. 读取用户命令行参数
-3. 合并参数：Manifest 参数覆盖用户参数
-4. 如果用户参数与 Manifest 不一致，提示并退出进程
+1. 首先读取 Manifest 中的固定参数（本地路径 + 合约地址）
+2. 从链上安全配置合约读取安全参数
+3. 读取用户命令行参数
+4. 合并参数：Manifest 参数覆盖用户参数
+5. 如果用户参数与 Manifest 不一致，提示并退出进程
 
 详见 [数据存储与同步模块](06-data-storage-sync.md) 中的参数校验机制。
+
+## 网络引导机制（Bootstrap）
+
+X Chain 的安全参数从链上合约读取，但首次运行时还没有链。解决方案是**创世区块预部署合约**：
+
+1. 治理合约和安全配置合约在创世区块中预部署
+2. 合约地址是确定性的（基于部署者地址和 nonce），可以预先计算
+3. Manifest 中写死这个预计算的合约地址
+4. 引导阶段：前 N 个（如 5 个）运行正确 MRENCLAVE 的节点自动成为创始管理者
+5. 正常阶段：新管理者必须通过现有管理者投票添加
+
+详见 [治理模块](05-governance.md) 中的网络引导机制。
 
 ## 测试策略
 
