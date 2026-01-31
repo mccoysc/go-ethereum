@@ -68,7 +68,7 @@ func (vasm *ValueAddedServiceManager) EnableService(serviceID string) error {
 
 	service, exists := vasm.services[serviceID]
 	if !exists {
-		return ErrNoRewardData
+		return ErrServiceNotFound
 	}
 
 	service.Enabled = true
@@ -84,7 +84,7 @@ func (vasm *ValueAddedServiceManager) DisableService(serviceID string) error {
 
 	service, exists := vasm.services[serviceID]
 	if !exists {
-		return ErrNoRewardData
+		return ErrServiceNotFound
 	}
 
 	service.Enabled = false

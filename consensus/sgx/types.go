@@ -157,6 +157,7 @@ type HistoricalContribution struct {
 	TotalTxs               uint64         `json:"totalTxs"`               // 历史总交易数
 	ActiveDays             uint64         `json:"activeDays"`             // 活跃天数
 	ContributionMultiplier float64        `json:"contributionMultiplier"` // 贡献倍数（1.0 - 2.0）
+	FirstContributionTime  time.Time      `json:"firstContributionTime"`  // 首次贡献时间
 	LastUpdateTime         time.Time      `json:"lastUpdateTime"`
 }
 

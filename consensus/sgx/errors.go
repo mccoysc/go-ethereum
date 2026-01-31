@@ -32,8 +32,9 @@ var (
 	ErrBlockIntervalTooShort = errors.New("block interval too short")
 
 	// 奖励错误
-	ErrInvalidReward = errors.New("invalid reward calculation")
-	ErrNoRewardData  = errors.New("no reward data available")
+	ErrInvalidReward    = errors.New("invalid reward calculation")
+	ErrNoRewardData     = errors.New("no reward data available")
+	ErrServiceNotFound  = errors.New("service not found")
 
 	// 信誉错误
 	ErrNodeExcluded  = errors.New("node is excluded due to penalties")

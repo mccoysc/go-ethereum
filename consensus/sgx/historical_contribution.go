@@ -38,10 +38,13 @@ func (hct *HistoricalContributionTracker) RecordContribution(address common.Addr
 	contribution.TotalTxs += txs
 
 	// 更新活跃天数（基于首次记录时间）
+	if contribution.FirstContributionTime.IsZero() {
+		contribution.FirstContributionTime = time.Now()
+	}
 	if contribution.LastUpdateTime.IsZero() {
 		contribution.LastUpdateTime = time.Now()
 	}
-	daysSinceStart := uint64(time.Since(contribution.LastUpdateTime).Hours() / 24)
+	daysSinceStart := uint64(time.Since(contribution.FirstContributionTime).Hours() / 24)
 	if daysSinceStart > contribution.ActiveDays {
 		contribution.ActiveDays = daysSinceStart
 	}
