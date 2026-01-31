@@ -11,7 +11,7 @@ import (
 // ProducerPenaltyTracker 出块者惩罚追踪器
 type ProducerPenaltyTracker struct {
 	config *PenaltyConfig
-	
+
 	mu        sync.RWMutex
 	penalties map[common.Address]*ProducerPenalty
 }
@@ -40,7 +40,7 @@ func (ppt *ProducerPenaltyTracker) RecordLowQualityBlock(address common.Address,
 
 	if qualityScore < ppt.config.LowQualityThreshold {
 		penalty.LowQualityCount++
-		
+
 		// 累积惩罚
 		penaltyAmount := new(big.Int).Set(ppt.config.PenaltyAmount)
 		penalty.TotalPenalty.Add(penalty.TotalPenalty, penaltyAmount)

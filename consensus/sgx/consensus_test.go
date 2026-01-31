@@ -199,7 +199,7 @@ func TestMultiProducerReward(t *testing.T) {
 
 	// Create candidate blocks
 	candidates := make([]*BlockCandidate, 3)
-	
+
 	for i := 0; i < 3; i++ {
 		header := &types.Header{
 			Number:     big.NewInt(100),

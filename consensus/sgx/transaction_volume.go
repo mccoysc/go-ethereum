@@ -8,8 +8,8 @@ import (
 
 // TransactionVolumeTracker 交易量追踪器
 type TransactionVolumeTracker struct {
-	mu         sync.RWMutex
-	volumeData map[common.Address]*TransactionVolumeData
+	mu           sync.RWMutex
+	volumeData   map[common.Address]*TransactionVolumeData
 	totalTxCount uint64
 	totalGasUsed uint64
 }
@@ -55,12 +55,12 @@ func (tvt *TransactionVolumeTracker) calculateVolumeScore(data *TransactionVolum
 	// 基于市场份额计算评分
 	// 市场份额 0-10% -> 评分 0-5000
 	// 市场份额 10-50% -> 评分 5000-10000
-	
+
 	share := data.MarketShare
 	if share <= 0.1 {
 		return uint64(share / 0.1 * 5000)
 	}
-	
+
 	return uint64(5000 + (share-0.1)/0.4*5000)
 }
 

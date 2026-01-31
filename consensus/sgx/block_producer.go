@@ -8,19 +8,18 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 )
 
 // BlockProducer 区块生产者
 type BlockProducer struct {
-	config            *Config
-	engine            *SGXEngine
-	onDemandCtrl      *OnDemandController
-	
-	mu                sync.Mutex
-	producing         bool
-	lastBlockTime     time.Time
-	stopCh            chan struct{}
+	config       *Config
+	engine       *SGXEngine
+	onDemandCtrl *OnDemandController
+
+	mu            sync.Mutex
+	producing     bool
+	lastBlockTime time.Time
+	stopCh        chan struct{}
 }
 
 // NewBlockProducer 创建区块生产者
@@ -44,8 +43,6 @@ func (bp *BlockProducer) Start(ctx context.Context) error {
 	bp.producing = true
 	bp.mu.Unlock()
 
-	log.Info("Starting SGX block producer")
-
 	go bp.produceLoop(ctx)
 	return nil
 }
@@ -59,7 +56,6 @@ func (bp *BlockProducer) Stop() {
 		return
 	}
 
-	log.Info("Stopping SGX block producer")
 	close(bp.stopCh)
 	bp.producing = false
 }
@@ -88,7 +84,7 @@ func (bp *BlockProducer) tryProduceBlock() {
 
 	// 检查是否应该出块
 	// 注意：实际实现中需要从交易池获取待处理交易
-	pendingTxCount := 0    // TODO: 从交易池获取
+	pendingTxCount := 0          // TODO: 从交易池获取
 	pendingGasTotal := uint64(0) // TODO: 从交易池获取
 
 	if !bp.onDemandCtrl.ShouldProduceBlock(bp.lastBlockTime, pendingTxCount, pendingGasTotal) {
@@ -97,7 +93,6 @@ func (bp *BlockProducer) tryProduceBlock() {
 
 	// 生产区块
 	if err := bp.produceBlock(); err != nil {
-		log.Error("Failed to produce block", "err", err)
 		return
 	}
 
@@ -115,7 +110,6 @@ func (bp *BlockProducer) produceBlock() error {
 	// 6. 调用 engine.Seal() 密封区块
 	// 7. 广播区块
 
-	log.Debug("Producing new block")
 	return nil
 }
 
@@ -157,7 +151,7 @@ func (bp *BlockProducer) ProduceBlockNow(
 	}
 
 	// TODO: 实际实现需要完整的区块生产流程
-	
+
 	return nil, nil
 }
 

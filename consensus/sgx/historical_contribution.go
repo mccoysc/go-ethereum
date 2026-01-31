@@ -28,17 +28,24 @@ func (hct *HistoricalContributionTracker) RecordContribution(address common.Addr
 	contribution, exists := hct.contributions[address]
 	if !exists {
 		contribution = &HistoricalContribution{
-			Address: address,
+			Address:    address,
+			ActiveDays: 0,
 		}
 		hct.contributions[address] = contribution
 	}
 
 	contribution.TotalBlocks += blocks
 	contribution.TotalTxs += txs
-	contribution.LastUpdateTime = time.Now()
 
-	// 更新活跃天数（简化实现）
-	contribution.ActiveDays = uint64(time.Since(contribution.LastUpdateTime).Hours() / 24)
+	// 更新活跃天数（基于首次记录时间）
+	if contribution.LastUpdateTime.IsZero() {
+		contribution.LastUpdateTime = time.Now()
+	}
+	daysSinceStart := uint64(time.Since(contribution.LastUpdateTime).Hours() / 24)
+	if daysSinceStart > contribution.ActiveDays {
+		contribution.ActiveDays = daysSinceStart
+	}
+	contribution.LastUpdateTime = time.Now()
 
 	// 计算贡献倍数
 	contribution.ContributionMultiplier = hct.calculateMultiplier(contribution)

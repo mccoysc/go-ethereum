@@ -22,26 +22,26 @@ type SGXEngine struct {
 	config *Config
 
 	// 外部依赖
-	attestor  Attestor
-	verifier  Verifier
+	attestor Attestor
+	verifier Verifier
 
 	// 内部组件
-	blockProducer        *BlockProducer
-	onDemandController   *OnDemandController
-	blockQualityScorer   *BlockQualityScorer
-	multiProducerReward  *MultiProducerRewardCalculator
-	forkChoiceRule       *ForkChoiceRule
-	reorgHandler         *ReorgHandler
-	uptimeCalculator     *UptimeCalculator
-	reputationSystem     *ReputationSystem
-	penaltyManager       *PenaltyManagerImpl
-	onlineRewardCalc     *OnlineRewardCalculator
-	nodeSelector         *NodeSelector
-	comprehensiveReward  *ComprehensiveRewardCalculator
+	blockProducer       *BlockProducer
+	onDemandController  *OnDemandController
+	blockQualityScorer  *BlockQualityScorer
+	multiProducerReward *MultiProducerRewardCalculator
+	forkChoiceRule      *ForkChoiceRule
+	reorgHandler        *ReorgHandler
+	uptimeCalculator    *UptimeCalculator
+	reputationSystem    *ReputationSystem
+	penaltyManager      *PenaltyManagerImpl
+	onlineRewardCalc    *OnlineRewardCalculator
+	nodeSelector        *NodeSelector
+	comprehensiveReward *ComprehensiveRewardCalculator
 
 	// 同步
 	mu sync.RWMutex
-	
+
 	// 状态
 	started bool
 }
@@ -285,7 +285,7 @@ func (e *SGXEngine) SealHash(header *types.Header) common.Hash {
 		extraCopy := *extra
 		extraCopy.Signature = []byte{}
 		extraData, _ := extraCopy.Encode()
-		
+
 		headerCopy := types.CopyHeader(header)
 		headerCopy.Extra = extraData
 		return headerCopy.Hash()
@@ -342,7 +342,7 @@ func (e *SGXEngine) accumulateRewards(chain consensus.ChainHeaderReader, state *
 	// 计算区块质量倍数
 	block := types.NewBlock(header, body, nil, nil)
 	quality := e.blockQualityScorer.CalculateQuality(block)
-	
+
 	// 应用质量倍数
 	qualityBonus := new(big.Int).SetUint64(uint64(float64(blockReward.Uint64()) * (quality.RewardMultiplier - 1.0)))
 	if qualityBonus.Sign() > 0 {

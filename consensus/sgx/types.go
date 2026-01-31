@@ -36,15 +36,15 @@ func DecodeSGXExtra(data []byte) (*SGXExtra, error) {
 // BlockQuality 区块质量评分
 type BlockQuality struct {
 	// 原始指标
-	TxCount    uint64 `json:"txCount"`    // 交易数量
-	BlockSize  uint64 `json:"blockSize"`  // 区块大小（字节）
-	GasUsed    uint64 `json:"gasUsed"`    // Gas 使用量
+	TxCount        uint64 `json:"txCount"`        // 交易数量
+	BlockSize      uint64 `json:"blockSize"`      // 区块大小（字节）
+	GasUsed        uint64 `json:"gasUsed"`        // Gas 使用量
 	DiversityScore uint64 `json:"diversityScore"` // 交易来源多样性
 
 	// 评分（0-10000）
-	TxCountScore   uint64  `json:"txCountScore"`   // 交易数量评分
-	BlockSizeScore uint64  `json:"blockSizeScore"` // 区块大小评分
-	GasUtilScore   uint64  `json:"gasUtilScore"`   // Gas 利用率评分
+	TxCountScore       uint64 `json:"txCountScore"`       // 交易数量评分
+	BlockSizeScore     uint64 `json:"blockSizeScore"`     // 区块大小评分
+	GasUtilScore       uint64 `json:"gasUtilScore"`       // Gas 利用率评分
 	DiversityScoreNorm uint64 `json:"diversityScoreNorm"` // 多样性评分
 
 	// 总评分和倍数
@@ -105,89 +105,89 @@ type HeartbeatMessage struct {
 // TxParticipation 交易参与数据
 type TxParticipation struct {
 	Address        common.Address `json:"address"`
-	ProcessedTxs   uint64         `json:"processedTxs"`   // 处理的交易数
-	ProcessedGas   uint64         `json:"processedGas"`   // 处理的 Gas 总量
-	TotalBlocks    uint64         `json:"totalBlocks"`    // 总区块数
+	ProcessedTxs   uint64         `json:"processedTxs"` // 处理的交易数
+	ProcessedGas   uint64         `json:"processedGas"` // 处理的 Gas 总量
+	TotalBlocks    uint64         `json:"totalBlocks"`  // 总区块数
 	LastUpdateTime time.Time      `json:"lastUpdateTime"`
 }
 
 // ResponseTimeData 响应时间数据
 type ResponseTimeData struct {
-	Address        common.Address  `json:"address"`
-	AvgResponseMs  uint64          `json:"avgResponseMs"`  // 平均响应时间（毫秒）
-	P50ResponseMs  uint64          `json:"p50ResponseMs"`  // P50 响应时间
-	P95ResponseMs  uint64          `json:"p95ResponseMs"`  // P95 响应时间
-	P99ResponseMs  uint64          `json:"p99ResponseMs"`  // P99 响应时间
-	SampleCount    uint64          `json:"sampleCount"`    // 样本数量
-	LastUpdateTime time.Time       `json:"lastUpdateTime"`
+	Address        common.Address `json:"address"`
+	AvgResponseMs  uint64         `json:"avgResponseMs"` // 平均响应时间（毫秒）
+	P50ResponseMs  uint64         `json:"p50ResponseMs"` // P50 响应时间
+	P95ResponseMs  uint64         `json:"p95ResponseMs"` // P95 响应时间
+	P99ResponseMs  uint64         `json:"p99ResponseMs"` // P99 响应时间
+	SampleCount    uint64         `json:"sampleCount"`   // 样本数量
+	LastUpdateTime time.Time      `json:"lastUpdateTime"`
 }
 
 // PenaltyRecord 惩罚记录
 type PenaltyRecord struct {
-	Address        common.Address `json:"address"`
-	PenaltyType    string         `json:"penaltyType"`    // 惩罚类型
-	PenaltyAmount  *big.Int       `json:"penaltyAmount"`  // 惩罚金额
-	Timestamp      time.Time      `json:"timestamp"`
-	Reason         string         `json:"reason"`         // 惩罚原因
+	Address       common.Address `json:"address"`
+	PenaltyType   string         `json:"penaltyType"`   // 惩罚类型
+	PenaltyAmount *big.Int       `json:"penaltyAmount"` // 惩罚金额
+	Timestamp     time.Time      `json:"timestamp"`
+	Reason        string         `json:"reason"` // 惩罚原因
 }
 
 // ServiceQualityData 服务质量数据
 type ServiceQualityData struct {
-	Address          common.Address `json:"address"`
-	ResponseScore    uint64         `json:"responseScore"`    // 响应时间评分（0-10000）
-	ThroughputScore  uint64         `json:"throughputScore"`  // 吞吐量评分（0-10000）
-	QualityScore     uint64         `json:"qualityScore"`     // 综合服务质量评分（0-10000）
-	LastUpdateTime   time.Time      `json:"lastUpdateTime"`
+	Address         common.Address `json:"address"`
+	ResponseScore   uint64         `json:"responseScore"`   // 响应时间评分（0-10000）
+	ThroughputScore uint64         `json:"throughputScore"` // 吞吐量评分（0-10000）
+	QualityScore    uint64         `json:"qualityScore"`    // 综合服务质量评分（0-10000）
+	LastUpdateTime  time.Time      `json:"lastUpdateTime"`
 }
 
 // TransactionVolumeData 交易量数据
 type TransactionVolumeData struct {
 	Address        common.Address `json:"address"`
-	TxCount        uint64         `json:"txCount"`        // 交易数量
-	GasUsed        uint64         `json:"gasUsed"`        // Gas 使用量
-	MarketShare    float64        `json:"marketShare"`    // 市场份额（0-1）
-	VolumeScore    uint64         `json:"volumeScore"`    // 交易量评分（0-10000）
+	TxCount        uint64         `json:"txCount"`     // 交易数量
+	GasUsed        uint64         `json:"gasUsed"`     // Gas 使用量
+	MarketShare    float64        `json:"marketShare"` // 市场份额（0-1）
+	VolumeScore    uint64         `json:"volumeScore"` // 交易量评分（0-10000）
 	LastUpdateTime time.Time      `json:"lastUpdateTime"`
 }
 
 // HistoricalContribution 历史贡献数据
 type HistoricalContribution struct {
-	Address          common.Address `json:"address"`
-	TotalBlocks      uint64         `json:"totalBlocks"`      // 历史总区块数
-	TotalTxs         uint64         `json:"totalTxs"`         // 历史总交易数
-	ActiveDays       uint64         `json:"activeDays"`       // 活跃天数
-	ContributionMultiplier float64   `json:"contributionMultiplier"` // 贡献倍数（1.0 - 2.0）
-	LastUpdateTime   time.Time      `json:"lastUpdateTime"`
+	Address                common.Address `json:"address"`
+	TotalBlocks            uint64         `json:"totalBlocks"`            // 历史总区块数
+	TotalTxs               uint64         `json:"totalTxs"`               // 历史总交易数
+	ActiveDays             uint64         `json:"activeDays"`             // 活跃天数
+	ContributionMultiplier float64        `json:"contributionMultiplier"` // 贡献倍数（1.0 - 2.0）
+	LastUpdateTime         time.Time      `json:"lastUpdateTime"`
 }
 
 // ComprehensiveReward 综合奖励数据
 type ComprehensiveReward struct {
-	Address            common.Address `json:"address"`
-	BlockReward        *big.Int       `json:"blockReward"`        // 出块奖励
-	OnlineReward       *big.Int       `json:"onlineReward"`       // 在线奖励
-	QualityBonus       *big.Int       `json:"qualityBonus"`       // 质量奖励
-	ServiceBonus       *big.Int       `json:"serviceBonus"`       // 服务奖励
-	HistoricalBonus    *big.Int       `json:"historicalBonus"`    // 历史贡献奖励
-	TotalReward        *big.Int       `json:"totalReward"`        // 总奖励
-	Timestamp          time.Time      `json:"timestamp"`
+	Address         common.Address `json:"address"`
+	BlockReward     *big.Int       `json:"blockReward"`     // 出块奖励
+	OnlineReward    *big.Int       `json:"onlineReward"`    // 在线奖励
+	QualityBonus    *big.Int       `json:"qualityBonus"`    // 质量奖励
+	ServiceBonus    *big.Int       `json:"serviceBonus"`    // 服务奖励
+	HistoricalBonus *big.Int       `json:"historicalBonus"` // 历史贡献奖励
+	TotalReward     *big.Int       `json:"totalReward"`     // 总奖励
+	Timestamp       time.Time      `json:"timestamp"`
 }
 
 // ProducerPenalty 出块者惩罚数据
 type ProducerPenalty struct {
-	Address           common.Address `json:"address"`
-	LowQualityCount   uint64         `json:"lowQualityCount"`   // 低质量区块数
-	EmptyBlockCount   uint64         `json:"emptyBlockCount"`   // 空区块数
-	TotalPenalty      *big.Int       `json:"totalPenalty"`      // 总惩罚
-	ExcludedUntil     time.Time      `json:"excludedUntil"`     // 排除截止时间
-	LastPenaltyTime   time.Time      `json:"lastPenaltyTime"`
+	Address         common.Address `json:"address"`
+	LowQualityCount uint64         `json:"lowQualityCount"` // 低质量区块数
+	EmptyBlockCount uint64         `json:"emptyBlockCount"` // 空区块数
+	TotalPenalty    *big.Int       `json:"totalPenalty"`    // 总惩罚
+	ExcludedUntil   time.Time      `json:"excludedUntil"`   // 排除截止时间
+	LastPenaltyTime time.Time      `json:"lastPenaltyTime"`
 }
 
 // ValueAddedService 增值服务数据
 type ValueAddedService struct {
 	ServiceID      string         `json:"serviceId"`
 	Provider       common.Address `json:"provider"`
-	ServiceType    string         `json:"serviceType"`    // 服务类型
-	PremiumRate    float64        `json:"premiumRate"`    // 溢价率
+	ServiceType    string         `json:"serviceType"` // 服务类型
+	PremiumRate    float64        `json:"premiumRate"` // 溢价率
 	Enabled        bool           `json:"enabled"`
 	LastUpdateTime time.Time      `json:"lastUpdateTime"`
 }

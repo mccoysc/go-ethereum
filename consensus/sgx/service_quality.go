@@ -9,8 +9,8 @@ import (
 // ServiceQualityScorer 服务质量评分器
 type ServiceQualityScorer struct {
 	responseTracker *ResponseTracker
-	
-	mu sync.RWMutex
+
+	mu          sync.RWMutex
 	qualityData map[common.Address]*ServiceQualityData
 }
 
@@ -40,7 +40,7 @@ func (sqs *ServiceQualityScorer) CalculateQualityScore(address common.Address) *
 	if responseData != nil {
 		// 响应时间评分
 		data.ResponseScore = sqs.calculateResponseScore(responseData.P95ResponseMs)
-		
+
 		// 吞吐量评分（基于响应时间估算）
 		data.ThroughputScore = sqs.calculateThroughputScore(responseData.P95ResponseMs)
 	}
@@ -55,7 +55,7 @@ func (sqs *ServiceQualityScorer) CalculateQualityScore(address common.Address) *
 func (sqs *ServiceQualityScorer) calculateResponseScore(responseMs uint64) uint64 {
 	// 目标响应时间 100ms
 	targetMs := uint64(100)
-	
+
 	if responseMs <= targetMs {
 		return 10000
 	}
@@ -63,7 +63,7 @@ func (sqs *ServiceQualityScorer) calculateResponseScore(responseMs uint64) uint6
 	// 线性降低评分
 	ratio := float64(targetMs) / float64(responseMs)
 	score := uint64(ratio * 10000)
-	
+
 	if score > 10000 {
 		score = 10000
 	}
@@ -80,7 +80,7 @@ func (sqs *ServiceQualityScorer) calculateThroughputScore(responseMs uint64) uin
 
 	// 假设目标吞吐量对应 50ms 响应时间
 	targetMs := uint64(50)
-	
+
 	if responseMs <= targetMs {
 		return 10000
 	}
@@ -88,7 +88,7 @@ func (sqs *ServiceQualityScorer) calculateThroughputScore(responseMs uint64) uin
 	// 线性降低评分
 	ratio := float64(targetMs) / float64(responseMs)
 	score := uint64(ratio * 10000)
-	
+
 	if score > 10000 {
 		score = 10000
 	}

@@ -48,7 +48,7 @@ func (v *BlockVerifier) VerifyBlock(chain consensus.ChainHeaderReader, block *ty
 func (v *BlockVerifier) verifyBody(block *types.Block) error {
 	// 验证交易数量
 	if len(block.Transactions()) > v.engine.config.MaxTxPerBlock {
-		return fmt.Errorf("too many transactions: %d > %d", 
+		return fmt.Errorf("too many transactions: %d > %d",
 			len(block.Transactions()), v.engine.config.MaxTxPerBlock)
 	}
 
@@ -58,7 +58,7 @@ func (v *BlockVerifier) verifyBody(block *types.Block) error {
 		totalGas += tx.Gas()
 	}
 	if totalGas > v.engine.config.MaxGasPerBlock {
-		return fmt.Errorf("total gas exceeds limit: %d > %d", 
+		return fmt.Errorf("total gas exceeds limit: %d > %d",
 			totalGas, v.engine.config.MaxGasPerBlock)
 	}
 
@@ -79,12 +79,12 @@ func (e *SGXEngine) verifyBasic(header *types.Header) error {
 
 	// 验证 Extra 字段长度
 	if len(header.Extra) < MinExtraDataLength {
-		return fmt.Errorf("extra data too short: %d < %d", 
+		return fmt.Errorf("extra data too short: %d < %d",
 			len(header.Extra), MinExtraDataLength)
 	}
 
 	if len(header.Extra) > MaxExtraDataLength {
-		return fmt.Errorf("extra data too long: %d > %d", 
+		return fmt.Errorf("extra data too long: %d > %d",
 			len(header.Extra), MaxExtraDataLength)
 	}
 
@@ -125,7 +125,7 @@ func (e *SGXEngine) verifyQuote(header *types.Header) error {
 	}
 
 	if !bytes.Equal(producerID, extra.ProducerID) {
-		return fmt.Errorf("producer ID mismatch: quote=%x, extra=%x", 
+		return fmt.Errorf("producer ID mismatch: quote=%x, extra=%x",
 			producerID, extra.ProducerID)
 	}
 

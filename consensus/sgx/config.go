@@ -42,13 +42,13 @@ type Config struct {
 
 // QualityConfig 区块质量评分配置
 type QualityConfig struct {
-	TxCountWeight         float64 // 交易数量权重 (%)
-	BlockSizeWeight       float64 // 区块大小权重 (%)
-	GasUtilizationWeight  float64 // Gas 利用率权重 (%)
-	TxDiversityWeight     float64 // 交易多样性权重 (%)
-	MinTxThreshold        int     // 最小交易数阈值
-	TargetBlockSize       uint64  // 目标区块大小（字节）
-	TargetGasUtilization  float64 // 目标 Gas 利用率
+	TxCountWeight        float64 // 交易数量权重 (%)
+	BlockSizeWeight      float64 // 区块大小权重 (%)
+	GasUtilizationWeight float64 // Gas 利用率权重 (%)
+	TxDiversityWeight    float64 // 交易多样性权重 (%)
+	MinTxThreshold       int     // 最小交易数阈值
+	TargetBlockSize      uint64  // 目标区块大小（字节）
+	TargetGasUtilization float64 // 目标 Gas 利用率
 }
 
 // UptimeConfig 在线率计算配置
@@ -74,22 +74,22 @@ type ReputationConfig struct {
 
 // PenaltyConfig 惩罚机制配置
 type PenaltyConfig struct {
-	LowQualityThreshold  uint64        // 低质量区块阈值
-	EmptyBlockThreshold  uint64        // 空区块阈值
-	OfflineThreshold     time.Duration // 离线阈值
-	PenaltyAmount        *big.Int      // 惩罚金额
-	ExclusionPeriod      time.Duration // 排除期
-	RecoveryPeriod       time.Duration // 恢复期
+	LowQualityThreshold uint64        // 低质量区块阈值
+	EmptyBlockThreshold uint64        // 空区块阈值
+	OfflineThreshold    time.Duration // 离线阈值
+	PenaltyAmount       *big.Int      // 惩罚金额
+	ExclusionPeriod     time.Duration // 排除期
+	RecoveryPeriod      time.Duration // 恢复期
 }
 
 // RewardConfig 奖励机制配置
 type RewardConfig struct {
-	BaseBlockReward       *big.Int      // 基础出块奖励
-	OnlineRewardPerEpoch  *big.Int      // 每个周期的在线奖励
-	QualityBonusRate      float64       // 质量奖励比率
-	ServiceBonusRate      float64       // 服务奖励比率
-	HistoricalBonusRate   float64       // 历史贡献奖励比率
-	EpochDuration         time.Duration // 奖励周期
+	BaseBlockReward      *big.Int      // 基础出块奖励
+	OnlineRewardPerEpoch *big.Int      // 每个周期的在线奖励
+	QualityBonusRate     float64       // 质量奖励比率
+	ServiceBonusRate     float64       // 服务奖励比率
+	HistoricalBonusRate  float64       // 历史贡献奖励比率
+	EpochDuration        time.Duration // 奖励周期
 }
 
 // DefaultConfig 默认配置
@@ -139,8 +139,8 @@ func DefaultConfig() *Config {
 			UptimeWeight:      60.0,
 			SuccessRateWeight: 30.0,
 			PenaltyWeight:     10.0,
-			MinUptimeScore:    6000,  // 60%
-			MinSuccessRate:    0.8,   // 80%
+			MinUptimeScore:    6000, // 60%
+			MinSuccessRate:    0.8,  // 80%
 			UpdateInterval:    1 * time.Hour,
 		},
 
@@ -156,12 +156,12 @@ func DefaultConfig() *Config {
 
 		// 奖励机制配置
 		RewardConfig: &RewardConfig{
-			BaseBlockReward:      big.NewInt(2e18),    // 2 ETH
-			OnlineRewardPerEpoch: big.NewInt(1e17),    // 0.1 ETH
-			QualityBonusRate:     0.5,                 // 50% 质量奖励
-			ServiceBonusRate:     0.3,                 // 30% 服务奖励
-			HistoricalBonusRate:  0.2,                 // 20% 历史贡献奖励
-			EpochDuration:        24 * time.Hour,      // 24小时周期
+			BaseBlockReward:      big.NewInt(2e18), // 2 ETH
+			OnlineRewardPerEpoch: big.NewInt(1e17), // 0.1 ETH
+			QualityBonusRate:     0.5,              // 50% 质量奖励
+			ServiceBonusRate:     0.3,              // 30% 服务奖励
+			HistoricalBonusRate:  0.2,              // 20% 历史贡献奖励
+			EpochDuration:        24 * time.Hour,   // 24小时周期
 		},
 	}
 }
