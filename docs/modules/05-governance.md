@@ -207,6 +207,35 @@ func (bc *BootstrapContract) IsBootstrapPhase() bool {
 - 当 `SecurityConfigContract` 中的 MRENCLAVE 白名单包含多个值时，表示正在进行升级
 - 新节点（运行新 MRENCLAVE 的节点）进入只读模式
 - 旧节点继续正常处理交易，直到升级完成
+- **升级完成区块高度**：当区块高度达到指定值时，即使白名单中还有多个 MRENCLAVE，新节点也认为升级完成
+
+### 升级完成区块高度
+
+为了提供明确的升级截止时间，避免升级过程无限期拖延，引入"升级完成区块高度"参数。当区块高度达到这个值时，即使合约还没把度量值改成一个，新节点也只接受与自己一致度量值的节点。
+
+**设计原理**：
+- 在添加新 MRENCLAVE 到白名单时，同时设置 `upgradeCompleteBlock` 参数
+- 新节点检查：如果当前区块高度 >= `upgradeCompleteBlock`，则认为升级完成
+- 升级完成后，新节点只接受与自己相同 MRENCLAVE 的节点，拒绝旧版本节点的连接
+
+```go
+// governance/upgrade_config.go
+package governance
+
+// UpgradeConfig 升级配置（存储在 SecurityConfigContract 中）
+type UpgradeConfig struct {
+    // 新版本 MRENCLAVE
+    NewMREnclave [32]byte
+    
+    // 升级完成区块高度
+    // 当区块高度达到此值时，即使白名单中还有多个 MRENCLAVE，
+    // 新节点也认为升级完成，只接受与自己一致度量值的节点
+    UpgradeCompleteBlock uint64
+    
+    // 升级开始区块高度（添加新 MRENCLAVE 时的区块高度）
+    UpgradeStartBlock uint64
+}
+```
 
 ```go
 // governance/upgrade_mode.go
@@ -224,15 +253,17 @@ var (
 
 // UpgradeModeChecker 升级模式检查器
 type UpgradeModeChecker struct {
-    securityConfig SecurityConfigReader
-    localMREnclave [32]byte
+    securityConfig   SecurityConfigReader
+    localMREnclave   [32]byte
+    currentBlockFunc func() uint64 // 获取当前区块高度的函数
 }
 
 // NewUpgradeModeChecker 创建升级模式检查器
-func NewUpgradeModeChecker(config SecurityConfigReader, localMR [32]byte) *UpgradeModeChecker {
+func NewUpgradeModeChecker(config SecurityConfigReader, localMR [32]byte, blockFunc func() uint64) *UpgradeModeChecker {
     return &UpgradeModeChecker{
-        securityConfig: config,
-        localMREnclave: localMR,
+        securityConfig:   config,
+        localMREnclave:   localMR,
+        currentBlockFunc: blockFunc,
     }
 }
 
@@ -241,6 +272,30 @@ func NewUpgradeModeChecker(config SecurityConfigReader, localMR [32]byte) *Upgra
 func (c *UpgradeModeChecker) IsUpgradeInProgress() bool {
     whitelist := c.securityConfig.GetMREnclaveWhitelist()
     return len(whitelist) > 1
+}
+
+// IsUpgradeComplete 检查升级是否已完成
+// 升级完成条件：
+// 1. 白名单中只有一个 MRENCLAVE，或
+// 2. 当前区块高度 >= 升级完成区块高度
+func (c *UpgradeModeChecker) IsUpgradeComplete() bool {
+    whitelist := c.securityConfig.GetMREnclaveWhitelist()
+    
+    // 条件 1: 白名单中只有一个 MRENCLAVE
+    if len(whitelist) <= 1 {
+        return true
+    }
+    
+    // 条件 2: 当前区块高度 >= 升级完成区块高度
+    upgradeConfig := c.securityConfig.GetUpgradeConfig()
+    if upgradeConfig != nil && upgradeConfig.UpgradeCompleteBlock > 0 {
+        currentBlock := c.currentBlockFunc()
+        if currentBlock >= upgradeConfig.UpgradeCompleteBlock {
+            return true
+        }
+    }
+    
+    return false
 }
 
 // IsNewVersionNode 检查本节点是否是新版本节点
@@ -257,13 +312,28 @@ func (c *UpgradeModeChecker) IsNewVersionNode() bool {
 }
 
 // ShouldRejectWriteOperation 检查是否应该拒绝写操作
-// 升级期间，新版本节点拒绝所有写操作
+// 升级期间（未完成），新版本节点拒绝所有写操作
 func (c *UpgradeModeChecker) ShouldRejectWriteOperation() bool {
+    // 如果升级已完成，不拒绝写操作
+    if c.IsUpgradeComplete() {
+        return false
+    }
+    
     return c.IsUpgradeInProgress() && c.IsNewVersionNode()
 }
 
+// ShouldRejectOldVersionPeer 检查是否应该拒绝旧版本节点的连接
+// 升级完成后，新节点只接受与自己一致度量值的节点
+func (c *UpgradeModeChecker) ShouldRejectOldVersionPeer(peerMREnclave [32]byte) bool {
+    // 如果升级已完成，只接受与自己一致度量值的节点
+    if c.IsUpgradeComplete() && c.IsNewVersionNode() {
+        return peerMREnclave != c.localMREnclave
+    }
+    return false
+}
+
 // ValidateTransaction 验证交易是否可以被处理
-// 在升级期间，新版本节点拒绝所有签名的交易
+// 在升级期间（未完成），新版本节点拒绝所有签名的交易
 func (c *UpgradeModeChecker) ValidateTransaction(tx *types.Transaction) error {
     if c.ShouldRejectWriteOperation() {
         // 升级期间，新版本节点只允许读取操作
@@ -281,6 +351,7 @@ func (c *UpgradeModeChecker) ValidateTransaction(tx *types.Transaction) error {
 │                     升级期间只读模式                              │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
+│  阶段 1: 升级进行中（区块高度 < UpgradeCompleteBlock）           │
 │  白名单状态：[MRENCLAVE_OLD, MRENCLAVE_NEW]                      │
 │                                                                  │
 │  ┌─────────────────────┐      ┌─────────────────────┐           │
@@ -292,24 +363,32 @@ func (c *UpgradeModeChecker) ValidateTransaction(tx *types.Transaction) error {
 │  │  - 出块 ✓            │      │  - 出块 ✗            │           │
 │  │  - 读取状态 ✓        │      │  - 读取状态 ✓        │           │
 │  │  - 同步区块 ✓        │      │  - 同步区块 ✓        │           │
+│  │  - 接受新旧节点 ✓    │      │  - 接受新旧节点 ✓    │           │
 │  └─────────────────────┘      └─────────────────────┘           │
 │                                                                  │
-│  升级完成后（移除旧 MRENCLAVE）：                                 │
-│  白名单状态：[MRENCLAVE_NEW]                                     │
+├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  ┌─────────────────────┐                                        │
-│  │  新版本节点          │                                        │
-│  │  MRENCLAVE_NEW      │                                        │
-│  ├─────────────────────┤                                        │
-│  │  正常模式            │                                        │
-│  │  - 处理交易 ✓        │                                        │
-│  │  - 出块 ✓            │                                        │
-│  │  - 读取状态 ✓        │                                        │
-│  │  - 同步区块 ✓        │                                        │
-│  └─────────────────────┘                                        │
+│  阶段 2: 升级完成（区块高度 >= UpgradeCompleteBlock）            │
+│  白名单状态：可能仍为 [MRENCLAVE_OLD, MRENCLAVE_NEW]             │
+│                                                                  │
+│  ┌─────────────────────┐      ┌─────────────────────┐           │
+│  │  旧版本节点          │      │  新版本节点          │           │
+│  │  MRENCLAVE_OLD      │      │  MRENCLAVE_NEW      │           │
+│  ├─────────────────────┤      ├─────────────────────┤           │
+│  │  被隔离              │      │  正常模式            │           │
+│  │  - 无法连接新节点    │      │  - 处理交易 ✓        │           │
+│  │                      │      │  - 出块 ✓            │           │
+│  │                      │      │  - 读取状态 ✓        │           │
+│  │                      │      │  - 同步区块 ✓        │           │
+│  │                      │      │  - 只接受新节点 ✓    │           │
+│  └─────────────────────┘      └─────────────────────┘           │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**升级完成条件**（满足任一即可）：
+1. 白名单中只剩下一个 MRENCLAVE（通过投票移除旧版本）
+2. 当前区块高度 >= `UpgradeCompleteBlock`（达到预设的升级截止高度）
 
 **交易池集成**：
 
