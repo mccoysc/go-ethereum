@@ -4,17 +4,18 @@
 
 SGX 证明模块是 X Chain 安全基础设施的核心组件，负责实现 Intel SGX 远程证明功能，确保节点运行在可信执行环境中，并验证节点代码的完整性。
 
+**重要说明**：RA-TLS 证书生成和验证功能应直接使用原生 Gramine 项目的 ra-tls 实现（https://github.com/gramineproject/gramine 的 `tools/sgx/ra-tls/` 目录），而不是自行实现。Gramine 的 RA-TLS 库提供了完整的证书生成（`ra_tls_create_key_and_crt_der`）和验证（`ra_tls_verify_callback_der`）功能。
+
 ## 负责团队
 
 **安全/SGX 团队**
 
 ## 模块职责
 
-1. 生成 SGX Quote（远程证明数据）
-2. 验证其他节点的 SGX Quote
-3. 管理 MRENCLAVE/MRSIGNER 白名单
-4. 集成 Intel DCAP 库
-5. 实现侧信道攻击防护
+1. 集成 Gramine RA-TLS 库进行证书生成和验证
+2. 管理 MRENCLAVE/MRSIGNER 白名单
+3. 配置 RA-TLS 环境变量
+4. 实现侧信道攻击防护
 
 ## 依赖关系
 
@@ -24,24 +25,134 @@ SGX 证明模块是 X Chain 安全基础设施的核心组件，负责实现 Int
 +------------------+
         |
         v
++---------------------------+
+|  Gramine RA-TLS 库        |
+|  (libra_tls_attest.so)    |
+|  (libra_tls_verify.so)    |
++---------------------------+
+        |
+        v
 +------------------+
 |  Gramine 运行时  |
 +------------------+
         |
         v
 +------------------+
-|  Intel SGX SDK   |
+|  Intel SGX DCAP  |
 +------------------+
 ```
 
 ### 上游依赖
 - Gramine LibOS（提供 `/dev/attestation` 接口）
-- Intel SGX DCAP 库
+- Gramine RA-TLS 库（证书生成和验证）
+- Intel SGX DCAP 库（Quote 验证）
+- mbedTLS（密码学操作）
 
 ### 下游依赖（被以下模块使用）
 - P2P 网络模块（RA-TLS 握手）
 - 共识引擎模块（区块验证）
 - 治理模块（白名单管理）
+
+## Gramine RA-TLS 库使用
+
+RA-TLS 实现来自原生 Gramine 项目：https://github.com/gramineproject/gramine/tree/master/tools/sgx/ra-tls
+
+### RA-TLS 核心 API
+
+Gramine 的 RA-TLS 库提供以下核心函数（定义在 `ra_tls.h`）：
+
+```c
+// 证书生成（Attester 端）
+int ra_tls_create_key_and_crt_der(
+    uint8_t** der_key,       // 输出：DER 格式私钥
+    size_t* der_key_size,    // 输出：私钥大小
+    uint8_t** der_crt,       // 输出：DER 格式证书（嵌入 SGX Quote）
+    size_t* der_crt_size     // 输出：证书大小
+);
+
+// 证书验证（Verifier 端）
+int ra_tls_verify_callback_der(
+    uint8_t* der_crt,        // 输入：DER 格式证书
+    size_t der_crt_size      // 输入：证书大小
+);
+
+// 设置自定义度量值验证回调
+void ra_tls_set_measurement_callback(verify_measurements_cb_t f_cb);
+```
+
+### 证书算法配置
+
+为兼容以太坊环境（配置的地址是以太坊地址），RA-TLS 证书生成应使用 **secp256k1** 椭圆曲线：
+
+```bash
+# 通过环境变量配置证书算法
+export RA_TLS_CERT_ALGORITHM="secp256k1"
+```
+
+或通过 JSON 配置（Base64 编码）：
+
+```bash
+# JSON 配置示例
+{
+    "algorithm": "secp256k1",
+    "subject": "CN=X-Chain-Node,O=XChain,C=US",
+    "not_before": "20240101000000",
+    "not_after": "20341231235959"
+}
+
+# Base64 编码后设置环境变量
+export RA_TLS_CERT_CONFIG_B64="eyJhbGdvcml0aG0iOiJzZWNwMjU2azEiLC..."
+```
+
+### 白名单配置
+
+白名单使用 Base64 编码的 CSV 格式（不是 JSON）：
+
+```bash
+# RATLS_WHITELIST_CONFIG 格式：Base64 编码的 CSV
+# 每行一个条目，逗号分隔的度量值
+# 格式：MRENCLAVE,MRSIGNER,ISV_PROD_ID,ISV_SVN
+
+# 示例 CSV 内容：
+# abc123...,def456...,1,1
+# xyz789...,def456...,1,2
+
+# Base64 编码后设置
+export RATLS_WHITELIST_CONFIG="YWJjMTIzLi4uLGRlZjQ1Ni4uLiwxLDEKeHl6Nzg5Li4uLGRlZjQ1Ni4uLiwxLDI="
+```
+
+### RA-TLS 环境变量
+
+| 环境变量 | 描述 | 示例值 |
+|----------|------|--------|
+| `RA_TLS_MRENCLAVE` | 允许的 MRENCLAVE 列表 | `abc123...,def456...` |
+| `RA_TLS_MRSIGNER` | 允许的 MRSIGNER 列表 | `789abc...` |
+| `RA_TLS_ISV_PROD_ID` | 允许的产品 ID | `1` |
+| `RA_TLS_ISV_SVN` | 允许的安全版本号 | `1` |
+| `RA_TLS_CERT_ALGORITHM` | 证书算法 | `secp256k1` |
+| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB（不安全） | `1` |
+| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave（不安全） | `1` |
+| `RATLS_WHITELIST_CONFIG` | Base64 编码的 CSV 白名单 | `YWJjMTIz...` |
+
+### 证书和私钥存储
+
+根据安全要求：
+- **证书**：可以存储在普通目录
+- **私钥**：必须存储在加密分区
+
+```toml
+# Gramine manifest 配置
+[[fs.mounts]]
+type = "encrypted"
+path = "/app/keys"           # 私钥存储路径（加密分区）
+uri = "file:/data/keys"
+key_name = "_sgx_mrenclave"
+
+[[fs.mounts]]
+type = "chroot"
+path = "/app/certs"          # 证书存储路径（普通目录）
+uri = "file:/data/certs"
+```
 
 ## 核心接口定义
 
