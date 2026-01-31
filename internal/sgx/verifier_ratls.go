@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
+//go:build !cgo
 // +build !cgo
 
 package sgx
@@ -46,12 +47,12 @@ func (v *GramineRATLSVerifier) VerifyQuote(quote []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse quote: %w", err)
 	}
-	
+
 	// Check MRENCLAVE whitelist
 	if !v.IsAllowedMREnclave(parsedQuote.MRENCLAVE[:]) {
 		return fmt.Errorf("MRENCLAVE not in allowed list: %x", parsedQuote.MRENCLAVE)
 	}
-	
+
 	// Note: Full verification requires CGO and Gramine libraries
 	return nil
 }
@@ -63,11 +64,11 @@ func (v *GramineRATLSVerifier) VerifyCertificate(cert *x509.Certificate) error {
 func (v *GramineRATLSVerifier) IsAllowedMREnclave(mrenclave []byte) bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	
+
 	if len(v.allowedMREnclave) == 0 {
 		return true
 	}
-	
+
 	return v.allowedMREnclave[string(mrenclave)]
 }
 
@@ -82,4 +83,3 @@ func (v *GramineRATLSVerifier) RemoveAllowedMREnclave(mrenclave []byte) {
 	defer v.mu.Unlock()
 	delete(v.allowedMREnclave, string(mrenclave))
 }
-

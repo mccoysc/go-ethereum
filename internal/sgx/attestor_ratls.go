@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with the go-ethereum library. If not, see <http://www.gnu.org/licenses/>.
 
+//go:build !cgo
 // +build !cgo
 
 package sgx
@@ -71,4 +72,3 @@ func (v *GramineRATLSVerifier) IsAllowedMREnclave(mrenclave []byte) bool {
 func (v *GramineRATLSVerifier) AddAllowedMREnclave(mrenclave []byte) {}
 
 func (v *GramineRATLSVerifier) RemoveAllowedMREnclave(mrenclave []byte) {}
-

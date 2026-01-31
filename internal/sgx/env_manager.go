@@ -31,21 +31,21 @@ import (
 type SecurityConfig struct {
 	// MRENCLAVE whitelist
 	AllowedMREnclave []string
-	
+
 	// MRSIGNER whitelist
 	AllowedMRSigner []string
-	
+
 	// ISV Product ID and Security Version Number
 	ISVProdID uint16
 	ISVSVN    uint16
-	
+
 	// Certificate validity timestamps
 	CertNotBefore string
 	CertNotAfter  string
-	
+
 	// Key migration parameters
 	KeyMigrationThreshold uint64
-	
+
 	// Admission policy
 	AdmissionStrict bool
 }
@@ -80,21 +80,21 @@ func NewRATLSEnvManager(client *ethclient.Client) (*RATLSEnvManager, error) {
 	// These are fixed in the manifest and affect MRENCLAVE
 	scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
 	govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
-	
+
 	if scAddr == "" {
 		return nil, fmt.Errorf("XCHAIN_SECURITY_CONFIG_CONTRACT not set in environment")
 	}
 	if govAddr == "" {
 		return nil, fmt.Errorf("XCHAIN_GOVERNANCE_CONTRACT not set in environment")
 	}
-	
+
 	manager := &RATLSEnvManager{
 		securityConfigContract: common.HexToAddress(scAddr),
 		governanceContract:     common.HexToAddress(govAddr),
 		client:                 client,
 		cachedConfig:           &SecurityConfig{},
 	}
-	
+
 	return manager, nil
 }
 
@@ -103,26 +103,26 @@ func NewRATLSEnvManager(client *ethclient.Client) (*RATLSEnvManager, error) {
 func (m *RATLSEnvManager) InitFromContract() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	// 1. Clear dynamic environment variables (prevent external injection)
 	for _, envVar := range dynamicEnvVars {
 		os.Unsetenv(envVar)
 	}
-	
+
 	// 2. Fetch security configuration from on-chain contract
 	config, err := m.fetchSecurityConfig()
 	if err != nil {
 		return fmt.Errorf("failed to fetch security config from contract: %w", err)
 	}
-	
+
 	m.cachedConfig = config
 	m.lastUpdate = time.Now()
-	
+
 	// 3. Configure environment variables or callbacks based on parameter types
 	if err := m.applyConfiguration(config); err != nil {
 		return fmt.Errorf("failed to apply configuration: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -139,7 +139,7 @@ func (m *RATLSEnvManager) applyConfiguration(config *SecurityConfig) error {
 		log.Info("MRENCLAVE whitelist has multiple values, using callback verification",
 			"count", len(config.AllowedMREnclave))
 	}
-	
+
 	// Handle MRSIGNER whitelist
 	if len(config.AllowedMRSigner) == 1 {
 		os.Setenv("RA_TLS_MRSIGNER", config.AllowedMRSigner[0])
@@ -147,13 +147,13 @@ func (m *RATLSEnvManager) applyConfiguration(config *SecurityConfig) error {
 		log.Info("MRSIGNER whitelist has multiple values, using callback verification",
 			"count", len(config.AllowedMRSigner))
 	}
-	
+
 	// Set single-value parameters
 	os.Setenv("RA_TLS_ISV_PROD_ID", fmt.Sprintf("%d", config.ISVProdID))
 	os.Setenv("RA_TLS_ISV_SVN", fmt.Sprintf("%d", config.ISVSVN))
 	os.Setenv("RA_TLS_CERT_TIMESTAMP_NOT_BEFORE", config.CertNotBefore)
 	os.Setenv("RA_TLS_CERT_TIMESTAMP_NOT_AFTER", config.CertNotAfter)
-	
+
 	return nil
 }
 
@@ -162,7 +162,7 @@ func (m *RATLSEnvManager) applyConfiguration(config *SecurityConfig) error {
 func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
 	// TODO: Implement actual contract calls
 	// For now, return a default configuration
-	
+
 	// In production, this would:
 	// 1. Call SecurityConfigContract.getAllowedMREnclave()
 	// 2. Call SecurityConfigContract.getAllowedMRSigner()
@@ -171,7 +171,7 @@ func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
 	// 5. Call SecurityConfigContract.getCertValidityPeriod()
 	// 6. Call GovernanceContract.getKeyMigrationThreshold()
 	// 7. Call SecurityConfigContract.getAdmissionPolicy()
-	
+
 	config := &SecurityConfig{
 		AllowedMREnclave:      []string{},
 		AllowedMRSigner:       []string{},
@@ -182,7 +182,7 @@ func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
 		KeyMigrationThreshold: 3,
 		AdmissionStrict:       false,
 	}
-	
+
 	return config, nil
 }
 
@@ -192,7 +192,7 @@ func (m *RATLSEnvManager) StartPeriodicRefresh(refreshInterval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(refreshInterval)
 		defer ticker.Stop()
-		
+
 		for range ticker.C {
 			if err := m.InitFromContract(); err != nil {
 				log.Error("Failed to refresh security config from contract", "error", err)
@@ -208,12 +208,12 @@ func (m *RATLSEnvManager) StartPeriodicRefresh(refreshInterval time.Duration) {
 func (m *RATLSEnvManager) GetCachedConfig() *SecurityConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	// Return a copy to prevent external modification
 	config := *m.cachedConfig
 	config.AllowedMREnclave = append([]string{}, m.cachedConfig.AllowedMREnclave...)
 	config.AllowedMRSigner = append([]string{}, m.cachedConfig.AllowedMRSigner...)
-	
+
 	return &config
 }
 
@@ -222,15 +222,15 @@ func (m *RATLSEnvManager) GetCachedConfig() *SecurityConfig {
 func (m *RATLSEnvManager) IsAllowedMREnclave(mrenclave []byte) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	mrenclaveHex := fmt.Sprintf("%x", mrenclave)
-	
+
 	for _, allowed := range m.cachedConfig.AllowedMREnclave {
 		if mrenclaveHex == allowed {
 			return true
 		}
 	}
-	
+
 	return false
 }
 

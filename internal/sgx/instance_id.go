@@ -27,7 +27,7 @@ import (
 type InstanceID struct {
 	// CPUInstanceID is the unique identifier for the SGX CPU
 	CPUInstanceID []byte
-	
+
 	// QuoteType indicates whether this is EPID or DCAP quote
 	QuoteType uint16
 }
@@ -41,36 +41,36 @@ func ExtractInstanceID(quote []byte) (*InstanceID, error) {
 	if len(quote) < 432 {
 		return nil, errors.New("quote too short for instance ID extraction")
 	}
-	
+
 	// Parse quote to get basic information
 	parsedQuote, err := ParseQuote(quote)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse quote: %w", err)
 	}
-	
+
 	instanceID := &InstanceID{
 		QuoteType: parsedQuote.SignType,
 	}
-	
+
 	// Extract instance ID based on quote type
 	switch parsedQuote.SignType {
 	case 0, 1: // EPID (Unlinkable or Linkable)
 		// For EPID quotes, the platform instance ID is in the signature data
 		// This is a simplified extraction - real implementation needs EPID library
 		instanceID.CPUInstanceID = extractEPIDInstanceID(quote)
-		
+
 	case 2, 3: // DCAP (ECDSA P-256 or ECDSA P-384)
 		// For DCAP quotes, extract FMSPC and other platform identifiers
 		instanceID.CPUInstanceID = extractDCAPInstanceID(quote)
-		
+
 	default:
 		return nil, fmt.Errorf("unknown quote signature type: %d", parsedQuote.SignType)
 	}
-	
+
 	if len(instanceID.CPUInstanceID) == 0 {
 		return nil, errors.New("failed to extract instance ID from quote")
 	}
-	
+
 	return instanceID, nil
 }
 
@@ -87,21 +87,21 @@ func extractEPIDInstanceID(quote []byte) []byte {
 	//
 	// Note: This is a simplified implementation. Production code should
 	// use Intel's EPID verification library for proper extraction.
-	
+
 	if len(quote) < 436 {
 		return nil
 	}
-	
+
 	// Extract signature length (2 bytes at offset 432)
 	// GID is typically within the first part of EPID signature
 	// For this implementation, we create a composite ID from available data
-	
+
 	// Use the first 32 bytes of signature data as instance identifier
 	instanceID := make([]byte, 32)
 	if len(quote) >= 432+32 {
 		copy(instanceID, quote[432:464])
 	}
-	
+
 	return instanceID
 }
 
@@ -124,27 +124,27 @@ func extractDCAPInstanceID(quote []byte) []byte {
 	// - CPUSVN (CPU Security Version Number) - in report body
 	// - PCESVN (PCE Security Version Number) - from QE report
 	// - FMSPC (Family-Model-Stepping-Platform-CustomSKU) - from cert
-	
+
 	if len(quote) < 432 {
 		return nil
 	}
-	
+
 	// For simplified implementation, create composite ID from:
 	// 1. CPUSVN (16 bytes at offset 64 in report)
 	// 2. Report data subset (for uniqueness across same platform)
-	
+
 	instanceID := make([]byte, 32)
-	
+
 	// Copy CPUSVN (16 bytes from offset 64)
 	if len(quote) >= 80 {
 		copy(instanceID[0:16], quote[64:80])
 	}
-	
+
 	// Copy part of attributes (16 bytes from offset 96)
 	if len(quote) >= 112 {
 		copy(instanceID[16:32], quote[96:112])
 	}
-	
+
 	return instanceID
 }
 
@@ -158,10 +158,10 @@ func (id *InstanceID) Equal(other *InstanceID) bool {
 	if id == nil || other == nil {
 		return id == other
 	}
-	
+
 	if id.QuoteType != other.QuoteType {
 		return false
 	}
-	
+
 	return ConstantTimeCompare(id.CPUInstanceID, other.CPUInstanceID)
 }
