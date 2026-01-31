@@ -199,6 +199,172 @@ func (bc *BootstrapContract) IsBootstrapPhase() bool {
 }
 ```
 
+### 升级期间只读模式
+
+在硬分叉升级期间（当白名单中存在多个 MRENCLAVE 时），新版本节点只允许读取类操作，所有会导致修改的操作（签名的交易）都被拒绝。这确保了升级过程中数据的一致性和安全性。
+
+**判断条件**：
+- 当 `SecurityConfigContract` 中的 MRENCLAVE 白名单包含多个值时，表示正在进行升级
+- 新节点（运行新 MRENCLAVE 的节点）进入只读模式
+- 旧节点继续正常处理交易，直到升级完成
+
+```go
+// governance/upgrade_mode.go
+package governance
+
+import (
+    "errors"
+    
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+var (
+    ErrUpgradeReadOnlyMode = errors.New("node is in upgrade read-only mode, write operations are rejected")
+)
+
+// UpgradeModeChecker 升级模式检查器
+type UpgradeModeChecker struct {
+    securityConfig SecurityConfigReader
+    localMREnclave [32]byte
+}
+
+// NewUpgradeModeChecker 创建升级模式检查器
+func NewUpgradeModeChecker(config SecurityConfigReader, localMR [32]byte) *UpgradeModeChecker {
+    return &UpgradeModeChecker{
+        securityConfig: config,
+        localMREnclave: localMR,
+    }
+}
+
+// IsUpgradeInProgress 检查是否正在进行升级
+// 当白名单中存在多个 MRENCLAVE 时，表示正在进行升级
+func (c *UpgradeModeChecker) IsUpgradeInProgress() bool {
+    whitelist := c.securityConfig.GetMREnclaveWhitelist()
+    return len(whitelist) > 1
+}
+
+// IsNewVersionNode 检查本节点是否是新版本节点
+// 新版本节点的 MRENCLAVE 与白名单中最新添加的 MRENCLAVE 匹配
+func (c *UpgradeModeChecker) IsNewVersionNode() bool {
+    whitelist := c.securityConfig.GetMREnclaveWhitelist()
+    if len(whitelist) <= 1 {
+        return false
+    }
+    
+    // 最新添加的 MRENCLAVE 是新版本
+    latestMR := whitelist[len(whitelist)-1]
+    return c.localMREnclave == latestMR.MRENCLAVE
+}
+
+// ShouldRejectWriteOperation 检查是否应该拒绝写操作
+// 升级期间，新版本节点拒绝所有写操作
+func (c *UpgradeModeChecker) ShouldRejectWriteOperation() bool {
+    return c.IsUpgradeInProgress() && c.IsNewVersionNode()
+}
+
+// ValidateTransaction 验证交易是否可以被处理
+// 在升级期间，新版本节点拒绝所有签名的交易
+func (c *UpgradeModeChecker) ValidateTransaction(tx *types.Transaction) error {
+    if c.ShouldRejectWriteOperation() {
+        // 升级期间，新版本节点只允许读取操作
+        // 所有签名的交易（会导致状态修改）都被拒绝
+        return ErrUpgradeReadOnlyMode
+    }
+    return nil
+}
+```
+
+**升级期间只读模式流程**：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     升级期间只读模式                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  白名单状态：[MRENCLAVE_OLD, MRENCLAVE_NEW]                      │
+│                                                                  │
+│  ┌─────────────────────┐      ┌─────────────────────┐           │
+│  │  旧版本节点          │      │  新版本节点          │           │
+│  │  MRENCLAVE_OLD      │      │  MRENCLAVE_NEW      │           │
+│  ├─────────────────────┤      ├─────────────────────┤           │
+│  │  正常模式            │      │  只读模式            │           │
+│  │  - 处理交易 ✓        │      │  - 处理交易 ✗        │           │
+│  │  - 出块 ✓            │      │  - 出块 ✗            │           │
+│  │  - 读取状态 ✓        │      │  - 读取状态 ✓        │           │
+│  │  - 同步区块 ✓        │      │  - 同步区块 ✓        │           │
+│  └─────────────────────┘      └─────────────────────┘           │
+│                                                                  │
+│  升级完成后（移除旧 MRENCLAVE）：                                 │
+│  白名单状态：[MRENCLAVE_NEW]                                     │
+│                                                                  │
+│  ┌─────────────────────┐                                        │
+│  │  新版本节点          │                                        │
+│  │  MRENCLAVE_NEW      │                                        │
+│  ├─────────────────────┤                                        │
+│  │  正常模式            │                                        │
+│  │  - 处理交易 ✓        │                                        │
+│  │  - 出块 ✓            │                                        │
+│  │  - 读取状态 ✓        │                                        │
+│  │  - 同步区块 ✓        │                                        │
+│  └─────────────────────┘                                        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**交易池集成**：
+
+```go
+// core/txpool/upgrade_filter.go
+package txpool
+
+import (
+    "github.com/ethereum/go-ethereum/core/types"
+    "github.com/ethereum/go-ethereum/governance"
+)
+
+// UpgradeFilter 升级期间的交易过滤器
+type UpgradeFilter struct {
+    checker *governance.UpgradeModeChecker
+}
+
+// NewUpgradeFilter 创建升级过滤器
+func NewUpgradeFilter(checker *governance.UpgradeModeChecker) *UpgradeFilter {
+    return &UpgradeFilter{checker: checker}
+}
+
+// Filter 过滤交易
+// 升级期间，新版本节点拒绝所有交易
+func (f *UpgradeFilter) Filter(tx *types.Transaction) error {
+    return f.checker.ValidateTransaction(tx)
+}
+```
+
+**共识引擎集成**：
+
+```go
+// consensus/poa_sgx/upgrade_check.go
+package poa_sgx
+
+import (
+    "github.com/ethereum/go-ethereum/governance"
+)
+
+// CanProduceBlock 检查是否可以出块
+// 升级期间，新版本节点不能出块
+func (e *Engine) CanProduceBlock() bool {
+    if e.upgradeChecker.ShouldRejectWriteOperation() {
+        return false
+    }
+    return true
+}
+```
+
+**安全保证**：
+- 升级期间，新版本节点只能同步和验证区块，不能产生新区块或处理交易
+- 这确保了升级过程中不会出现分叉或数据不一致
+- 只有当旧版本 MRENCLAVE 从白名单中移除后，新版本节点才能正常工作
+- 升级完成的标志是白名单中只剩下一个 MRENCLAVE
+
 ### 创世配置示例
 
 ```json
