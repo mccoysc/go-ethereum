@@ -6,12 +6,12 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	internalsgx "github.com/ethereum/go-ethereum/internal/sgx"
 )
 
-// Attestor SGX 证明接口
+// Attestor extends the internal/sgx.Attestor interface with consensus-specific methods
 type Attestor interface {
-	// GenerateQuote 生成 SGX Quote
-	GenerateQuote(data []byte) ([]byte, error)
+	internalsgx.Attestor
 
 	// SignInEnclave 在 Enclave 内签名
 	SignInEnclave(data []byte) ([]byte, error)
@@ -20,10 +20,9 @@ type Attestor interface {
 	GetProducerID() ([]byte, error)
 }
 
-// Verifier SGX 验证接口
+// Verifier extends the internal/sgx.Verifier interface with consensus-specific methods
 type Verifier interface {
-	// VerifyQuote 验证 SGX Quote
-	VerifyQuote(quote []byte) error
+	internalsgx.Verifier
 
 	// VerifySignature 验证签名
 	VerifySignature(data, signature, producerID []byte) error
