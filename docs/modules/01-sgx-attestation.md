@@ -606,8 +606,8 @@ type GramineAttestor struct {
 }
 
 func NewGramineAttestor() (*GramineAttestor, error) {
-    // 生成 TLS 密钥对
-    privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+    // 生成 TLS 密钥对（使用 P-384 曲线符合 Gramine RA-TLS 规范）
+    privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
     if err != nil {
         return nil, fmt.Errorf("failed to generate key: %w", err)
     }
@@ -1025,7 +1025,8 @@ type MockAttestor struct {
 }
 
 func NewMockAttestor() *MockAttestor {
-    privateKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+    // 使用 P-384 曲线符合规范要求
+    privateKey, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
     return &MockAttestor{
         privateKey: privateKey,
         mrenclave:  make([]byte, 32),
