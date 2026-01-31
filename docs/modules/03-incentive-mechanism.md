@@ -422,8 +422,9 @@ func (s *BlockQualityScorer) scoreTxCount(txCount int) uint64 {
     if txCount <= 10 {
         return uint64(txCount * 10)
     }
-    // 10-100 笔之间，得分从 100 线性增加到 100
-    return uint64(10 + (txCount-10)*90/90)
+    // 10-100 笔之间，逐渐增长但速度放缓
+    // 此处简化为恒定增长，实际可使用对数函数
+    return uint64(10 + (txCount-10))
 }
 
 // scoreGasUtilization Gas 利用率得分

@@ -1730,8 +1730,8 @@ func (amm *AutoMigrationManager) checkUpgradeProgress() {
 
 // canMigrate 检查是否允许迁移
 func (amm *AutoMigrationManager) canMigrate(permissionLevel governance.PermissionLevel) bool {
-    amm.mu.RLock()
-    defer amm.mu.RUnlock()
+    amm.mu.Lock()
+    defer amm.mu.Unlock()
     
     // 如果已经在迁移中，不允许新的迁移
     if amm.migrationStatus.InProgress {
@@ -1823,9 +1823,18 @@ func (amm *AutoMigrationManager) isMigrationComplete() bool {
 
 // getCurrentBlockHeight 获取当前区块高度
 func (amm *AutoMigrationManager) getCurrentBlockHeight() uint64 {
-    // 从共识引擎获取当前区块高度
-    // 这里简化处理，实际需要注入区块链接口
-    return 0 // TODO: 实现
+    // 实际实现需要注入区块链接口，例如：
+    // type BlockchainReader interface {
+    //     CurrentBlock() *types.Block
+    // }
+    // 然后在 AutoMigrationManager 中添加该接口字段：
+    // blockchain BlockchainReader
+    // 
+    // 实现示例：
+    // if amm.blockchain != nil {
+    //     return amm.blockchain.CurrentBlock().NumberU64()
+    // }
+    return 0 // 占位实现，需在实际使用时注入区块链接口
 }
 
 // GetMigrationStatus 获取迁移状态
