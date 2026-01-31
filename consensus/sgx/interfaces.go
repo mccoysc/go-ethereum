@@ -6,28 +6,37 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	internalsgx "github.com/ethereum/go-ethereum/internal/sgx"
 )
 
-// Attestor extends the internal/sgx.Attestor interface with consensus-specific methods
+// Attestor SGX 证明接口
+// 用于生成 SGX Quote 和签名区块
 type Attestor interface {
-	internalsgx.Attestor
+	// GenerateQuote 生成 SGX Quote
+	// data: 要包含在 Quote 中的数据（最大 64 字节）
+	GenerateQuote(data []byte) ([]byte, error)
 
-	// SignInEnclave 在 Enclave 内签名
+	// SignInEnclave 在 Enclave 内签名数据
+	// 返回 ECDSA 签名（65 字节）
 	SignInEnclave(data []byte) ([]byte, error)
 
-	// GetProducerID 获取出块者 ID
+	// GetProducerID 获取出块者 ID（以太坊地址，20 字节）
 	GetProducerID() ([]byte, error)
 }
 
-// Verifier extends the internal/sgx.Verifier interface with consensus-specific methods
+// Verifier SGX 验证接口
+// 用于验证 SGX Quote 和区块签名
 type Verifier interface {
-	internalsgx.Verifier
+	// VerifyQuote 验证 SGX Quote 的有效性
+	// 包括签名验证和 TCB 状态检查
+	VerifyQuote(quote []byte) error
 
-	// VerifySignature 验证签名
+	// VerifySignature 验证 ECDSA 签名
+	// data: 被签名的数据
+	// signature: ECDSA 签名（65 字节）
+	// producerID: 出块者 ID（以太坊地址，20 字节）
 	VerifySignature(data, signature, producerID []byte) error
 
-	// ExtractProducerID 从 Quote 中提取生产者 ID
+	// ExtractProducerID 从 SGX Quote 中提取出块者 ID
 	ExtractProducerID(quote []byte) ([]byte, error)
 }
 

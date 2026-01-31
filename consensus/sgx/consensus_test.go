@@ -1,15 +1,12 @@
 package sgx
 
 import (
-	"crypto/tls"
-	"crypto/x509"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -38,19 +35,6 @@ func (m *MockAttestor) GetProducerID() ([]byte, error) {
 	return m.producerID, nil
 }
 
-// Implement internalsgx.Attestor interface methods
-func (m *MockAttestor) GenerateCertificate() (*tls.Certificate, error) {
-	return nil, nil
-}
-
-func (m *MockAttestor) GetMREnclave() []byte {
-	return make([]byte, 32)
-}
-
-func (m *MockAttestor) GetMRSigner() []byte {
-	return make([]byte, 32)
-}
-
 // MockVerifier 模拟 SGX 验证器
 type MockVerifier struct{}
 
@@ -68,23 +52,6 @@ func (m *MockVerifier) VerifySignature(data, signature, producerID []byte) error
 
 func (m *MockVerifier) ExtractProducerID(quote []byte) ([]byte, error) {
 	return []byte("mock-producer-id"), nil
-}
-
-// Implement internalsgx.Verifier interface methods
-func (m *MockVerifier) VerifyCertificate(cert *x509.Certificate) error {
-	return nil
-}
-
-func (m *MockVerifier) IsAllowedMREnclave(mrenclave []byte) bool {
-	return true
-}
-
-func (m *MockVerifier) AddAllowedMREnclave(mrenclave []byte) {
-	// Mock implementation - do nothing
-}
-
-func (m *MockVerifier) RemoveAllowedMREnclave(mrenclave []byte) {
-	// Mock implementation - do nothing
 }
 
 // TestNewEngine tests engine creation
@@ -378,81 +345,6 @@ func TestPenaltyManager(t *testing.T) {
 	if count != 3 {
 		t.Errorf("Expected 3 penalties, got %d", count)
 	}
-}
-
-// TestModule01Integration tests integration with Module 01 SGX attestation
-func TestModule01Integration(t *testing.T) {
-	config := DefaultConfig()
-
-	// Generate a test private key for signing
-	privateKey, err := crypto.GenerateKey()
-	if err != nil {
-		t.Fatalf("Failed to generate private key: %v", err)
-	}
-
-	// Create engine with Module 01 implementation
-	engine, err := NewWithModule01(config, privateKey)
-	if err != nil {
-		t.Fatalf("Failed to create engine with Module 01: %v", err)
-	}
-
-	if engine == nil {
-		t.Fatal("Engine should not be nil")
-	}
-
-	// Test that attestor can generate quotes
-	if engine.attestor == nil {
-		t.Fatal("Attestor should not be nil")
-	}
-
-	// Test quote generation
-	testData := []byte("test-data")
-	quote, err := engine.attestor.GenerateQuote(testData)
-	if err != nil {
-		t.Fatalf("Failed to generate quote: %v", err)
-	}
-
-	if len(quote) == 0 {
-		t.Fatal("Quote should not be empty")
-	}
-
-	// Test producer ID
-	producerID, err := engine.attestor.GetProducerID()
-	if err != nil {
-		t.Fatalf("Failed to get producer ID: %v", err)
-	}
-
-	if len(producerID) != 20 {
-		t.Errorf("Producer ID should be 20 bytes (Ethereum address), got %d", len(producerID))
-	}
-
-	// Test signing
-	signature, err := engine.attestor.SignInEnclave(testData)
-	if err != nil {
-		t.Fatalf("Failed to sign in enclave: %v", err)
-	}
-
-	if len(signature) != 65 {
-		t.Errorf("Signature should be 65 bytes, got %d", len(signature))
-	}
-
-	// Test signature verification
-	if engine.verifier == nil {
-		t.Fatal("Verifier should not be nil")
-	}
-
-	err = engine.verifier.VerifySignature(testData, signature, producerID)
-	if err != nil {
-		t.Fatalf("Failed to verify signature: %v", err)
-	}
-
-	// Test quote verification (should pass in mock mode)
-	err = engine.verifier.VerifyQuote(quote)
-	if err != nil {
-		t.Fatalf("Failed to verify quote: %v", err)
-	}
-
-	t.Log("Module 01 integration test passed successfully")
 }
 
 // BenchmarkBlockQualityScoring benchmarks quality scoring
