@@ -2,14 +2,26 @@
 
 This package implements Intel SGX attestation functionality for X Chain, following the specification in `docs/modules/01-sgx-attestation.md`.
 
+**✅ Status**: Refactored to meet specification requirements (commit c19e916)
+
 ## Overview
 
 The SGX attestation module provides the core infrastructure for:
-- Generating SGX Quotes for remote attestation
-- Generating RA-TLS certificates with embedded SGX Quotes
+- Generating SGX Quotes for remote attestation via Gramine
+- **Generating RA-TLS certificates using Gramine's native library (CGO)**
 - Verifying SGX Quotes and RA-TLS certificates
 - Managing MRENCLAVE/MRSIGNER whitelists
+- **Dynamic security parameter management from on-chain contracts**
+- **Instance ID extraction to prevent Sybil attacks**
 - Side-channel attack protection through constant-time operations
+
+## Key Improvements (vs Initial Implementation)
+
+1. **✅ Gramine RA-TLS Integration**: Added CGO wrappers for `ra_tls_create_key_and_crt_der()` and `ra_tls_verify_callback_der()`
+2. **✅ P-384 Curve**: Fixed to use NIST P-384 (SECP384R1) as required by specification
+3. **✅ RATLSEnvManager**: Dynamic security parameter management from on-chain contracts
+4. **✅ Instance ID Extraction**: Hardware uniqueness verification to prevent Sybil attacks
+5. **✅ Build Tags**: Proper CGO/non-CGO separation for different environments
 
 ## Architecture
 
@@ -32,25 +44,51 @@ Defines the interface for Quote and certificate verification:
 
 ### Implementations
 
-#### GramineAttestor (`attestor_impl.go`)
-Production implementation using Gramine's `/dev/attestation` interface:
+#### GramineRATLSAttestor (Production - CGO) (`attestor_ratls.go`)
+Production implementation using Gramine's native RA-TLS library via CGO:
+- Calls `ra_tls_create_key_and_crt_der()` for certificate generation
+- Uses P-384 (SECP384R1) elliptic curve as required
+- Generates genuine SGX Quotes with Intel signatures
+- Requires Gramine RA-TLS libraries at build/runtime
+- Build with: `CGO_ENABLED=1 go build -tags cgo`
+
+#### GramineAttestor (Fallback) (`attestor_impl.go`)
+Fallback implementation for development/testing:
+- Uses Gramine's `/dev/attestation` interface for Quote generation
+- Implements certificate generation with Go standard library
+- Uses P-384 curve
 - Automatically detects SGX environment
 - Falls back to mock mode in non-SGX environments
-- Generates ECDSA P-256 key pairs for TLS
-- Embeds public key hash in Quote's report_data field
 
-#### DCAPVerifier (`verifier_impl.go`)
-DCAP-based quote verification:
-- Verifies Quote signatures (mock implementation for testing)
-- Checks TCB status
+#### DCAPVerifier (Production - CGO) (`verifier_ratls.go`)
+Production DCAP-based quote verification via CGO:
+- Calls `ra_tls_verify_callback_der()` for certificate verification
+- Supports custom measurement callbacks via `ra_tls_set_measurement_callback()`
 - Validates MRENCLAVE against whitelist
-- Verifies certificate public key matches Quote report_data
+- Checks TCB status
+- Requires Gramine RA-TLS libraries
 
-#### MockAttestor (`mock_attestor.go`)
-Mock implementation for testing in non-SGX environments:
-- Generates fake but structurally valid Quotes
-- Useful for development and CI/CD pipelines
-- Same interface as real attestor
+#### DCAPVerifier (Fallback) (`verifier_impl.go`)
+Fallback verifier for development/testing:
+- Parses Quote structures
+- Validates MRENCLAVE against whitelist
+- Basic TCB checking
+- Mock signature verification
+
+#### RATLSEnvManager (`env_manager.go`)
+Dynamic security parameter management:
+- Reads contract addresses from Gramine Manifest
+- Fetches MRENCLAVE/MRSIGNER whitelists from on-chain contracts
+- Configures RA-TLS environment variables or callbacks
+- Supports periodic refresh of security parameters
+- Integrates with governance contracts
+
+#### Instance ID Extraction (`instance_id.go`)
+Hardware uniqueness verification:
+- Extracts CPU-specific identifiers from SGX Quotes
+- Supports both EPID and DCAP quote types
+- Prevents same hardware from running multiple nodes
+- Used for Sybil attack prevention
 
 ### Data Structures
 
@@ -79,6 +117,51 @@ Side-channel attack protection:
 - `ConstantTimeSelect()` - Timing-safe selection
 
 All sensitive comparisons use these functions to prevent timing attacks.
+
+## Building
+
+### Development/Testing (Non-CGO)
+
+For development and testing without SGX/Gramine libraries:
+
+```bash
+# CGO is disabled by default in most environments
+go build ./internal/sgx/...
+go test ./internal/sgx/...
+```
+
+This automatically uses the non-CGO fallback implementations.
+
+### Production (With CGO and Gramine)
+
+For production deployment with Gramine RA-TLS:
+
+```bash
+# Enable CGO and link Gramine libraries
+export CGO_ENABLED=1
+export CGO_CFLAGS="-I/path/to/gramine/include"
+export CGO_LDFLAGS="-L/path/to/gramine/lib -lra_tls_attest -lra_tls_verify -lsgx_dcap_ql"
+
+# Build with cgo tag
+go build -tags cgo ./internal/sgx/...
+```
+
+### Gramine Manifest Configuration
+
+Configure security parameters in your Gramine manifest:
+
+```toml
+[loader.env]
+# Contract addresses (security anchor - affects MRENCLAVE)
+XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
+XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
+
+# TCB policy (fixed in manifest)
+RA_TLS_ALLOW_OUTDATED_TCB_INSECURE = ""
+RA_TLS_ALLOW_HW_CONFIG_NEEDED = "1"
+RA_TLS_ALLOW_SW_HARDENING_NEEDED = "1"
+RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE = ""
+```
 
 ## Usage
 
