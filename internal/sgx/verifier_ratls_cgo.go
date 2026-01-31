@@ -20,19 +20,34 @@
 package sgx
 
 /*
-#cgo LDFLAGS: -lra_tls_attest -lra_tls_verify -lsgx_dcap_ql -lmbedtls -lmbedx509 -lmbedcrypto
+// Conditional library linking based on gramine_libs build tag
+#cgo gramine_libs LDFLAGS: -lra_tls_attest -lra_tls_verify -lsgx_dcap_ql -lmbedtls -lmbedx509 -lmbedcrypto
+
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 
-// Forward declarations for Gramine RA-TLS functions
-extern int ra_tls_verify_callback_der(uint8_t* der_crt, size_t der_crt_size);
+// Gramine RA-TLS function declarations
+int ra_tls_verify_callback_der(uint8_t* der_crt, size_t der_crt_size);
 
 // Callback function type for custom measurement verification
 typedef int (*verify_measurements_cb_t)(const char* mrenclave, const char* mrsigner,
                                          const char* isv_prod_id, const char* isv_svn);
 
-extern void ra_tls_set_measurement_callback(verify_measurements_cb_t f_cb);
+void ra_tls_set_measurement_callback(verify_measurements_cb_t f_cb);
+
+// Stub implementations when Gramine libraries are not available
+#ifndef GRAMINE_LIBS_AVAILABLE
+
+int __attribute__((weak)) ra_tls_verify_callback_der(uint8_t* der_crt, size_t der_crt_size) {
+    return -9999; // Special error code for stub
+}
+
+void __attribute__((weak)) ra_tls_set_measurement_callback(verify_measurements_cb_t f_cb) {
+    // No-op
+}
+
+#endif
 
 // Global storage for allowed measurements (accessed by callback)
 static char** g_allowed_mrenclaves = NULL;

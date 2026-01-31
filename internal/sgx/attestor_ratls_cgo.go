@@ -20,15 +20,33 @@
 package sgx
 
 /*
-#cgo LDFLAGS: -lra_tls_attest -lra_tls_verify -lsgx_dcap_ql -lmbedtls -lmbedx509 -lmbedcrypto
+// Conditional library linking based on gramine_libs build tag
+#cgo gramine_libs LDFLAGS: -lra_tls_attest -lra_tls_verify -lsgx_dcap_ql -lmbedtls -lmbedx509 -lmbedcrypto
+
 #include <stdlib.h>
 #include <stdint.h>
 
-// Forward declarations for Gramine RA-TLS functions
-// These functions are provided by libra_tls_attest.so from Gramine
-extern int ra_tls_create_key_and_crt_der(uint8_t** der_key, size_t* der_key_size,
-                                          uint8_t** der_crt, size_t* der_crt_size);
-extern void ra_tls_free_key_and_crt_der(uint8_t* der_key, uint8_t* der_crt);
+// Gramine RA-TLS function declarations
+int ra_tls_create_key_and_crt_der(uint8_t** der_key, size_t* der_key_size,
+                                   uint8_t** der_crt, size_t* der_crt_size);
+void ra_tls_free_key_and_crt_der(uint8_t* der_key, uint8_t* der_crt);
+
+// Stub implementations when Gramine libraries are not available
+// These will cause linker errors to be resolved by defining them inline
+#ifndef GRAMINE_LIBS_AVAILABLE
+
+// Weak attribute allows real implementation to override if available
+int __attribute__((weak)) ra_tls_create_key_and_crt_der(uint8_t** der_key, size_t* der_key_size,
+                                                          uint8_t** der_crt, size_t* der_crt_size) {
+    // Return error indicating library not available
+    return -9999; // Special error code for stub
+}
+
+void __attribute__((weak)) ra_tls_free_key_and_crt_der(uint8_t* der_key, uint8_t* der_crt) {
+    // No-op
+}
+
+#endif
 */
 import "C"
 import (
