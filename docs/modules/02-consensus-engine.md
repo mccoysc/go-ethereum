@@ -1439,22 +1439,409 @@ func (s *BlockQualityScorer) calculateRewardMultiplier(quality *BlockQuality) fl
 - 防止"搭便车"（后续矿工如果没有新交易，不分配收益）
 - 鼓励矿工尽可能收集更多不同的交易
 
+### 防止恶意行为
+
+```go
+// 防止恶意行为的额外规则
+
+// 1. 交易数量评分（考虑网络状态）
+// 重要：交易量少是网络状态问题，不是矿工的问题，不应惩罚矿工
+// 只有在矿工明显"抢跑"（网络中有更多交易但矿工只打包少量）时才降低收益
+func (s *BlockQualityScorer) evaluateTxCount(
+    quality *BlockQuality,
+    pendingTxCount uint64,  // 当前交易池中的待处理交易数
+    maxWaitTime time.Duration,  // 最大等待时间
+    actualWaitTime time.Duration,  // 实际等待时间
+) {
+    // 如果交易池中交易很少，矿工打包所有可用交易，不惩罚
+    if quality.TxCount >= pendingTxCount {
+        // 矿工已打包所有可用交易，给予满分
+        return
+    }
+    
+    // 如果已经等待到最大等待时间，不惩罚（矿工已尽力等待）
+    if actualWaitTime >= maxWaitTime {
+        return
+    }
+    
+    // 只有在交易池中有更多交易，但矿工提前出块时才降低收益
+    // 这是为了防止矿工"抢跑"（故意只打包少量交易以快速获得收益）
+    packingRatio := float64(quality.TxCount) / float64(pendingTxCount)
+    if packingRatio < 0.5 {
+        // 打包比例低于 50%，降低收益
+        quality.RewardMultiplier *= packingRatio + 0.5  // 最低 50% 收益
+    }
+}
+
+// 2. 连续低质量区块惩罚
+// 如果矿工连续出低质量区块，累积惩罚
+type ProducerPenalty struct {
+    ConsecutiveLowQuality int     // 连续低质量区块数
+    PenaltyMultiplier     float64 // 惩罚倍数
+}
+
+func (p *ProducerPenalty) UpdatePenalty(quality *BlockQuality) {
+    if quality.TotalScore < 3000 {
+        p.ConsecutiveLowQuality++
+        // 每连续 1 个低质量区块，惩罚 10%
+        p.PenaltyMultiplier = 1.0 - float64(p.ConsecutiveLowQuality)*0.1
+        if p.PenaltyMultiplier < 0.5 {
+            p.PenaltyMultiplier = 0.5 // 最低 50%
+        }
+    } else {
+        // 出高质量区块，重置惩罚
+        p.ConsecutiveLowQuality = 0
+        p.PenaltyMultiplier = 1.0
+    }
+}
+
+// 3. 自我交易检测
+// 如果区块中大部分交易来自出块者自己，降低收益
+func (s *BlockQualityScorer) detectSelfTransactions(
+    block *types.Block,
+    producer common.Address,
+) float64 {
+    selfTxCount := 0
+    for _, tx := range block.Transactions() {
+        from, _ := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+        if from == producer {
+            selfTxCount++
+        }
+    }
+    
+    selfRatio := float64(selfTxCount) / float64(len(block.Transactions()))
+    
+    // 自我交易比例超过 50%，收益降低
+    if selfRatio > 0.5 {
+        return 1.0 - (selfRatio-0.5) // 50% 自我交易 = 100% 收益，100% 自我交易 = 50% 收益
+    }
+    
+    return 1.0
+}
+```
+
+### 节点稳定性激励机制
+
+**核心问题**：节点必须稳定在线提供服务，否则会损害用户体验，降低使用积极性，进而减少矿工收入，形成恶性循环。
+
+```
+恶性循环:
+节点不稳定 → 用户体验差 → 使用减少 → 交易费减少 → 矿工收入降低 → 更少人运营节点
+                                    ↑                                    |
+                                    +------------------------------------+
+
+良性循环 (目标):
+节点稳定 → 用户体验好 → 使用增加 → 交易费增加 → 矿工收入提高 → 更多人运营节点
+                                    ↑                                    |
+                                    +------------------------------------+
+```
+
+#### SGX 签名心跳机制
+
+利用 SGX enclave 的签名能力，节点定期发送可验证的心跳消息：
+
+```go
+// consensus/sgx/heartbeat.go
+package sgx
+
+// Heartbeat SGX 签名心跳消息
+type Heartbeat struct {
+    NodeID      common.Hash   // 节点标识
+    Timestamp   uint64        // 心跳时间戳（Unix 秒）
+    BlockHeight uint64        // 当前区块高度
+    Challenge   [32]byte      // 随机挑战值（防重放）
+    SGXQuote    []byte        // SGX 远程证明 Quote
+    Signature   []byte        // enclave 内私钥签名
+}
+
+// HeartbeatManager 心跳管理器
+type HeartbeatManager struct {
+    sgxAttestor   *SGXAttestor
+    peers         map[common.Hash]*PeerHeartbeatState
+    config        *HeartbeatConfig
+    
+    // 心跳记录（用于计算在线率）
+    heartbeatLog  map[common.Hash][]HeartbeatRecord
+}
+
+// HeartbeatConfig 心跳配置
+type HeartbeatConfig struct {
+    Interval          time.Duration // 心跳间隔，默认 30 秒
+    Timeout           time.Duration // 心跳超时，默认 90 秒（3 个间隔）
+    WindowSize        int           // 统计窗口大小，默认 1000 个心跳
+    MinObservers      int           // 最少观测者数量，默认 3
+    QuoteRefreshRate  int           // SGX Quote 刷新频率，默认每 100 个心跳
+}
+
+// GenerateHeartbeat 生成 SGX 签名心跳
+func (m *HeartbeatManager) GenerateHeartbeat() (*Heartbeat, error) {
+    // 1. 获取当前状态
+    now := uint64(time.Now().Unix())
+    blockHeight := m.chain.CurrentBlock().Number().Uint64()
+    
+    // 2. 生成随机挑战值（防重放攻击）
+    var challenge [32]byte
+    if _, err := rand.Read(challenge[:]); err != nil {
+        return nil, err
+    }
+    
+    // 3. 构造心跳数据
+    hb := &Heartbeat{
+        NodeID:      m.nodeID,
+        Timestamp:   now,
+        BlockHeight: blockHeight,
+        Challenge:   challenge,
+    }
+    
+    // 4. 在 SGX enclave 内签名
+    dataToSign := m.serializeHeartbeatData(hb)
+    signature, err := m.sgxAttestor.SignInEnclave(dataToSign)
+    if err != nil {
+        return nil, err
+    }
+    hb.Signature = signature
+    
+    // 5. 定期附加 SGX Quote（证明 enclave 身份）
+    if m.shouldRefreshQuote() {
+        quote, err := m.sgxAttestor.GenerateQuote(dataToSign)
+        if err != nil {
+            return nil, err
+        }
+        hb.SGXQuote = quote
+    }
+    
+    return hb, nil
+}
+
+// VerifyHeartbeat 验证心跳消息
+func (m *HeartbeatManager) VerifyHeartbeat(hb *Heartbeat) error {
+    // 1. 验证时间戳（不能太旧或太新）
+    now := uint64(time.Now().Unix())
+    if hb.Timestamp < now-60 || hb.Timestamp > now+10 {
+        return ErrInvalidTimestamp
+    }
+    
+    // 2. 验证签名
+    dataToVerify := m.serializeHeartbeatData(hb)
+    if !m.verifySignature(hb.NodeID, dataToVerify, hb.Signature) {
+        return ErrInvalidSignature
+    }
+    
+    // 3. 如果包含 SGX Quote，验证 Quote
+    if len(hb.SGXQuote) > 0 {
+        if err := m.sgxAttestor.VerifyQuote(hb.SGXQuote, dataToVerify); err != nil {
+            return fmt.Errorf("invalid SGX quote: %w", err)
+        }
+    }
+    
+    // 4. 检查重放攻击（挑战值不能重复）
+    if m.isReplayedChallenge(hb.NodeID, hb.Challenge) {
+        return ErrReplayAttack
+    }
+    
+    return nil
+}
+```
+
+**SGX 签名心跳的安全性**：
+
+| 攻击类型 | 防护机制 |
+|----------|----------|
+| 伪造心跳 | SGX enclave 内签名，无法在 enclave 外伪造 |
+| 重放攻击 | 随机挑战值 + 时间戳验证 |
+| 时间欺骗 | 多节点观测 + 时间戳范围检查 |
+| 身份冒充 | SGX Quote 验证 MRENCLAVE |
+
+#### 多节点共识观测
+
+单个节点的观测可能不准确（网络分区、恶意报告），因此采用多节点共识：
+
+```go
+// consensus/sgx/uptime_observer.go
+package sgx
+
+// UptimeObservation 单次在线观测记录
+type UptimeObservation struct {
+    ObserverID  common.Hash // 观测者节点 ID
+    TargetID    common.Hash // 被观测节点 ID
+    Timestamp   uint64      // 观测时间
+    IsOnline    bool        // 是否在线
+    ResponseMs  uint32      // 响应时间（毫秒）
+    Signature   []byte      // 观测者签名
+}
+
+// UptimeConsensus 在线率共识计算
+type UptimeConsensus struct {
+    observations map[common.Hash][]UptimeObservation // 按目标节点分组
+    config       *ConsensusConfig
+}
+
+// ConsensusConfig 共识配置
+type ConsensusConfig struct {
+    MinObservers        int     // 最少观测者数量，默认 3
+    ConsensusThreshold  float64 // 共识阈值，默认 0.67 (2/3)
+    ObservationWindow   time.Duration // 观测窗口，默认 1 小时
+}
+
+// CalculateUptimeScore 计算节点在线率得分
+func (c *UptimeConsensus) CalculateUptimeScore(nodeID common.Hash) (uint64, error) {
+    observations := c.getRecentObservations(nodeID)
+    
+    // 1. 检查观测者数量
+    observers := c.getUniqueObservers(observations)
+    if len(observers) < c.config.MinObservers {
+        return 0, ErrInsufficientObservers
+    }
+    
+    // 2. 按时间槽分组观测结果
+    timeSlots := c.groupByTimeSlot(observations)
+    
+    // 3. 对每个时间槽计算共识结果
+    var onlineSlots, totalSlots int
+    for _, slotObs := range timeSlots {
+        totalSlots++
+        
+        // 计算该时间槽的在线观测比例
+        onlineCount := 0
+        for _, obs := range slotObs {
+            if obs.IsOnline {
+                onlineCount++
+            }
+        }
+        
+        // 如果超过 2/3 观测者认为在线，则该时间槽计为在线
+        if float64(onlineCount)/float64(len(slotObs)) >= c.config.ConsensusThreshold {
+            onlineSlots++
+        }
+    }
+    
+    // 4. 计算在线率得分 (0-10000)
+    if totalSlots == 0 {
+        return 0, nil
+    }
+    score := uint64(onlineSlots * 10000 / totalSlots)
+    
+    return score, nil
+}
+```
+
+**多节点共识的优势**：
+
+```
+单节点观测问题:
+节点 A 观测节点 B → A 可能因网络问题误判 B 离线
+                 → A 可能恶意报告 B 离线
+
+多节点共识解决:
+节点 A ─┐
+节点 C ─┼─→ 共识: 2/3 以上认为在线 → 判定为在线
+节点 D ─┘
+
+防串谋机制:
+- 观测者必须是活跃节点（有交易处理记录）
+- 观测结果需要签名（可追溯责任）
+- 异常观测模式会被检测（如某节点总是报告他人离线）
+```
+
+#### 交易参与追踪
+
+**重要说明**：X Chain 采用按需出块机制（有交易才出块），因此不能使用"出块频率"或"出块数量"作为节点贡献的衡量标准。正确的衡量方式是**交易参与比例**，即节点处理的交易数量占网络总交易数量的比例。
+
+```go
+// consensus/sgx/tx_participation_tracker.go
+package sgx
+
+// TxParticipationTracker 交易参与追踪器
+type TxParticipationTracker struct {
+    participationLog map[common.Hash][]TxParticipationRecord
+    networkStats     *NetworkTxStats
+    config           *ParticipationConfig
+}
+
+// TxParticipationRecord 交易参与记录
+type TxParticipationRecord struct {
+    NodeID      common.Hash
+    TxHash      common.Hash
+    BlockNumber uint64
+    Timestamp   uint64
+    GasUsed     uint64
+}
+
+// NetworkTxStats 网络交易统计
+type NetworkTxStats struct {
+    TotalTxCount    uint64    // 统计窗口内的总交易数
+    TotalGasUsed    uint64    // 统计窗口内的总 Gas 消耗
+    WindowStart     uint64    // 统计窗口开始时间
+    WindowEnd       uint64    // 统计窗口结束时间
+}
+
+// ParticipationConfig 参与追踪配置
+type ParticipationConfig struct {
+    WindowDuration    time.Duration // 统计窗口时长，默认 7 天
+    MinTxForScore     uint64        // 计算得分的最小交易数，默认 10
+}
+
+// CalculateParticipationScore 计算交易参与得分
+func (t *TxParticipationTracker) CalculateParticipationScore(nodeID common.Hash) uint64 {
+    records := t.getRecentRecords(nodeID)
+    
+    if len(records) < int(t.config.MinTxForScore) {
+        return 0 // 参与交易太少，无法评估
+    }
+    
+    var totalScore uint64
+    
+    // 1. 交易数量参与比例得分（占 60%）
+    nodeTxCount := uint64(len(records))
+    networkTxCount := t.networkStats.TotalTxCount
+    if networkTxCount > 0 {
+        // 计算节点处理的交易占网络总交易的比例
+        // 乘以节点数量进行归一化（假设理想情况下每个节点处理相等比例的交易）
+        activeNodes := t.getActiveNodeCount()
+        expectedShare := networkTxCount / activeNodes
+        if expectedShare > 0 {
+            participationScore := min(nodeTxCount*10000/expectedShare, 10000)
+            totalScore += participationScore * 60 / 100
+        }
+    }
+    
+    // 2. Gas 贡献比例得分（占 40%）
+    // 处理高 Gas 交易说明节点承担了更多计算负载
+    nodeGasUsed := t.calculateNodeGasUsed(records)
+    networkGasUsed := t.networkStats.TotalGasUsed
+    if networkGasUsed > 0 {
+        activeNodes := t.getActiveNodeCount()
+        expectedGasShare := networkGasUsed / activeNodes
+        if expectedGasShare > 0 {
+            gasScore := min(nodeGasUsed*10000/expectedGasShare, 10000)
+            totalScore += gasScore * 40 / 100
+        }
+    }
+    
+    return totalScore
+}
+```
+
 ## 文件结构
 
 ```
 consensus/sgx/
-├── consensus.go          # Engine 接口实现
-├── types.go              # 数据结构定义
-├── block_producer.go     # 区块生产者
-├── on_demand.go          # 按需出块逻辑
-├── verify.go             # 区块验证
-├── fork_choice.go        # 分叉选择
-├── reorg.go              # 重组处理
-├── block_quality.go      # 区块质量评分器
+├── consensus.go              # Engine 接口实现
+├── types.go                  # 数据结构定义
+├── block_producer.go         # 区块生产者
+├── on_demand.go              # 按需出块逻辑
+├── verify.go                 # 区块验证
+├── fork_choice.go            # 分叉选择
+├── reorg.go                  # 重组处理
+├── block_quality.go          # 区块质量评分器
 ├── multi_producer_reward.go  # 多生产者收益分配
-├── api.go                # RPC API
-├── config.go             # 配置
-└── consensus_test.go     # 测试
+├── heartbeat.go              # SGX 签名心跳机制
+├── uptime_observer.go        # 多节点在线率观测
+├── tx_participation_tracker.go # 交易参与追踪
+├── producer_penalty.go       # 出块者惩罚机制
+├── api.go                    # RPC API
+├── config.go                 # 配置
+└── consensus_test.go         # 测试
 ```
 
 ## 单元测试指南
@@ -1901,9 +2288,13 @@ speed_reward_ratios = [1.0, 0.6, 0.3]
 | P1 | 新交易追踪机制 | 2 天 |
 | P2 | 重组处理 | 2 天 |
 | P2 | 升级模式检查器 | 2 天 |
-| P2 | RPC API | 2 天 |
+| P2 | SGX 签名心跳机制 | 3 天 |
+| P2 | 多节点在线率观测 | 3 天 |
+| P2 | 交易参与追踪 | 2 天 |
+| P2 | 防止恶意行为规则 | 2 天 |
+| P3 | RPC API | 2 天 |
 
-**总计：约 4-5 周**
+**总计：约 5-6 周**
 
 ## 注意事项
 
