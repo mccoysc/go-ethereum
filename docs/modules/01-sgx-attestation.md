@@ -194,13 +194,42 @@ func (c *OnChainSecurityConfig) IsAllowedMREnclave(mrenclave []byte) bool {
 - 本节点的 MRENCLAVE 由代码决定，无法伪造
 - 其他节点的 MRENCLAVE 通过 SGX Quote 验证，由 Intel 签名保证真实性
 
-### RA-TLS 环境变量管理（动态从合约读取）
+### RA-TLS 环境变量管理
 
-**重要安全原则**：所有 RA-TLS 安全相关环境变量**禁止**从静态配置读取，必须在 geth 启动时从链上合约读取，然后动态设置/覆盖进程的环境变量。
+RA-TLS 环境变量分为两类：Manifest 固定配置（影响 MRENCLAVE）和动态从合约读取。
 
-#### Manifest 中禁止配置的环境变量
+#### Manifest 中固定配置的环境变量
 
-以下环境变量属于安全相关配置，**禁止**在 Manifest 中静态配置：
+以下环境变量写死在 Manifest 中，影响 MRENCLAVE，geth 启动时已生效：
+
+| 环境变量 | 说明 |
+|----------|------|
+| `XCHAIN_SECURITY_CONFIG_CONTRACT` | 安全配置合约地址 |
+| `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址 |
+| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB（生产环境设为空或不设置） |
+| `RA_TLS_ALLOW_HW_CONFIG_NEEDED` | 允许硬件配置需要更新 |
+| `RA_TLS_ALLOW_SW_HARDENING_NEEDED` | 允许软件加固需要 |
+| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave（生产环境设为空或不设置） |
+
+```toml
+# Gramine manifest 中的固定参数
+[loader.env]
+# 合约地址（安全锚点）
+XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
+XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
+
+# TCB 策略（写死，影响 MRENCLAVE）
+# 生产环境：不设置或设为空，表示不允许
+# 测试环境：设为 "1" 表示允许
+RA_TLS_ALLOW_OUTDATED_TCB_INSECURE = ""
+RA_TLS_ALLOW_HW_CONFIG_NEEDED = "1"
+RA_TLS_ALLOW_SW_HARDENING_NEEDED = "1"
+RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE = ""
+```
+
+#### 动态从合约读取的环境变量
+
+以下环境变量在 geth 启动时从 SecurityConfigContract 读取并设置：
 
 | 环境变量 | 说明 | 来源 |
 |----------|------|------|
@@ -208,31 +237,19 @@ func (c *OnChainSecurityConfig) IsAllowedMREnclave(mrenclave []byte) bool {
 | `RA_TLS_MRSIGNER` | 期望的 MRSIGNER 值 | 从 SecurityConfigContract 读取 |
 | `RA_TLS_ISV_PROD_ID` | 期望的 ISV 产品 ID | 从 SecurityConfigContract 读取 |
 | `RA_TLS_ISV_SVN` | 期望的 ISV 安全版本号 | 从 SecurityConfigContract 读取 |
-| `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB | 从 SecurityConfigContract 读取 |
-| `RA_TLS_ALLOW_HW_CONFIG_NEEDED` | 允许硬件配置需要更新 | 从 SecurityConfigContract 读取 |
-| `RA_TLS_ALLOW_SW_HARDENING_NEEDED` | 允许软件加固需要 | 从 SecurityConfigContract 读取 |
-| `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave | 从 SecurityConfigContract 读取 |
 | `RA_TLS_CERT_TIMESTAMP_NOT_BEFORE` | 证书有效期开始 | 从 SecurityConfigContract 读取 |
 | `RA_TLS_CERT_TIMESTAMP_NOT_AFTER` | 证书有效期结束 | 从 SecurityConfigContract 读取 |
 
-#### Manifest 中允许配置的环境变量
-
-只有合约地址可以写死在 Manifest 中（作为安全锚点，影响 MRENCLAVE）：
-
-| 环境变量 | 说明 |
-|----------|------|
-| `XCHAIN_SECURITY_CONFIG_CONTRACT` | 安全配置合约地址（写死） |
-| `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址（写死） |
-
 #### 启动时环境变量动态设置流程
 
-geth 启动时必须执行以下流程：
+geth 启动时从合约读取安全参数并设置环境变量（TCB 相关参数已在 Manifest 中固定，无需动态设置）：
 
 ```go
 // internal/sgx/env_manager.go
 package sgx
 
 import (
+    "fmt"
     "os"
     "github.com/ethereum/go-ethereum/common"
 )
@@ -244,23 +261,20 @@ type RATLSEnvManager struct {
 }
 
 // 需要从合约读取并设置的环境变量列表
-var securityEnvVars = []string{
+// 注意：TCB 相关参数（RA_TLS_ALLOW_*）已在 Manifest 中固定配置，不在此列表中
+var dynamicEnvVars = []string{
     "RA_TLS_MRENCLAVE",
     "RA_TLS_MRSIGNER",
     "RA_TLS_ISV_PROD_ID",
     "RA_TLS_ISV_SVN",
-    "RA_TLS_ALLOW_OUTDATED_TCB_INSECURE",
-    "RA_TLS_ALLOW_HW_CONFIG_NEEDED",
-    "RA_TLS_ALLOW_SW_HARDENING_NEEDED",
-    "RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE",
     "RA_TLS_CERT_TIMESTAMP_NOT_BEFORE",
     "RA_TLS_CERT_TIMESTAMP_NOT_AFTER",
 }
 
 // InitFromContract 从合约读取安全参数并设置环境变量
 func (m *RATLSEnvManager) InitFromContract() error {
-    // 1. 先清除所有安全相关环境变量（防止静态配置被使用）
-    for _, envVar := range securityEnvVars {
+    // 1. 清除动态环境变量（防止外部注入）
+    for _, envVar := range dynamicEnvVars {
         os.Unsetenv(envVar)
     }
     
@@ -270,7 +284,7 @@ func (m *RATLSEnvManager) InitFromContract() error {
         return fmt.Errorf("failed to fetch security config from contract: %w", err)
     }
     
-    // 3. 设置环境变量（覆盖任何可能的静态配置）
+    // 3. 设置动态环境变量
     for _, mrenclave := range config.AllowedMREnclave {
         // RA_TLS_MRENCLAVE 环境变量支持单个值
         // 多个 MRENCLAVE 通过 ra_tls_set_measurement_callback 回调验证
@@ -278,11 +292,16 @@ func (m *RATLSEnvManager) InitFromContract() error {
         break // 只设置第一个，其余通过回调验证
     }
     
-    if config.AllowOutdatedTCB {
-        os.Setenv("RA_TLS_ALLOW_OUTDATED_TCB_INSECURE", "1")
+    if len(config.AllowedMRSigner) > 0 {
+        os.Setenv("RA_TLS_MRSIGNER", config.AllowedMRSigner[0])
     }
     
-    // ... 设置其他环境变量
+    os.Setenv("RA_TLS_ISV_PROD_ID", fmt.Sprintf("%d", config.ISVProdID))
+    os.Setenv("RA_TLS_ISV_SVN", fmt.Sprintf("%d", config.ISVSVN))
+    
+    // 证书时间戳
+    os.Setenv("RA_TLS_CERT_TIMESTAMP_NOT_BEFORE", config.CertNotBefore)
+    os.Setenv("RA_TLS_CERT_TIMESTAMP_NOT_AFTER", config.CertNotAfter)
     
     return nil
 }
