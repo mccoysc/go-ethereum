@@ -27,7 +27,7 @@ X Chain 的安全参数从链上合约读取，但这存在一个"鸡和蛋"的�
 
 ### 解决方案：创世区块预部署
 
-治理合约和白名单合约在创世区块中预部署，合约地址是确定性的（基于部署者地址和 nonce），可以预先计算并写入 Manifest。
+治理合约和安全配置合约在创世区块中预部署，合约地址是确定性的（基于部署者地址和 nonce），可以预先计算并写入 Manifest。安全配置合约由治理合约管理。
 
 ```go
 // genesis/bootstrap.go
@@ -45,8 +45,8 @@ type BootstrapConfig struct {
     VotingThreshold uint64 // 百分比，如 67 表示 2/3
     
     // 预部署合约地址（确定性计算）
-    GovernanceContract common.Address
-    WhitelistContract  common.Address
+    GovernanceContract     common.Address
+    SecurityConfigContract common.Address // 安全配置合约，由治理合约管理
 }
 
 // DefaultBootstrapConfig 默认引导配置
@@ -227,8 +227,8 @@ func CalculateContractAddress(deployer common.Address, nonce uint64) common.Addr
 // 预计算的合约地址（用于 Manifest）
 const (
     // 假设部署者地址为 0x0000...0000，nonce 从 0 开始
-    GovernanceContractAddress = "0x1234567890abcdef1234567890abcdef12345678"
-    WhitelistContractAddress  = "0xabcdef1234567890abcdef1234567890abcdef12"
+    GovernanceContractAddress     = "0x1234567890abcdef1234567890abcdef12345678"
+    SecurityConfigContractAddress = "0xabcdef1234567890abcdef1234567890abcdef12" // 安全配置合约
 )
 ```
 

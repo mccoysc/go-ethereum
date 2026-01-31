@@ -122,7 +122,7 @@ Manifest 中只存储本地配置和**链上合约地址**。合约地址写死�
 [loader.env]
 # 链上合约地址（写死，作为安全锚点）
 # 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
-XCHAIN_WHITELIST_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
+XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
 XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
 ```
 
@@ -132,10 +132,14 @@ XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
 
 | 参数 | 链上合约 | 说明 |
 |------|----------|------|
-| MRENCLAVE 白名单 | WhitelistContract | 允许的 enclave 代码度量值 |
-| MRSIGNER 白名单 | WhitelistContract | 允许的签名者度量值 |
-| 密钥迁移阈值 | GovernanceContract | 密钥迁移所需的最小节点数 |
-| 节点准入策略 | GovernanceContract | 是否严格验证 Quote |
+| MRENCLAVE 白名单 | SecurityConfigContract | 允许的 enclave 代码度量值 |
+| MRSIGNER 白名单 | SecurityConfigContract | 允许的签名者度量值 |
+| 密钥迁移阈值 | SecurityConfigContract | 密钥迁移所需的最小节点数 |
+| 节点准入策略 | SecurityConfigContract | 是否严格验证 Quote |
+| 分叉配置 | SecurityConfigContract | 硬分叉升级相关配置 |
+| 数据迁移策略 | SecurityConfigContract | 加密数据迁移相关配置 |
+
+**注意**：所有安全、准入、秘密数据管理策略等相关配置都存储在安全配置合约中，但对安全配置合约的管理（修改配置）由治理合约通过投票实现。
 
 ```go
 // 从链上读取安全参数
@@ -148,18 +152,18 @@ type OnChainSecurityConfig struct {
 
 func NewOnChainSecurityConfig() (*OnChainSecurityConfig, error) {
     // 从 Manifest 环境变量读取合约地址（写死的安全锚点）
-    wlAddr := os.Getenv("XCHAIN_WHITELIST_CONTRACT")
+    scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
     govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
     
     return &OnChainSecurityConfig{
-        whitelistContract:  common.HexToAddress(wlAddr),
-        governanceContract: common.HexToAddress(govAddr),
+        securityConfigContract: common.HexToAddress(scAddr), // 安全配置合约，由治理合约管理
+        governanceContract:     common.HexToAddress(govAddr),
     }, nil
 }
 
 // SyncFromChain 从链上同步所有安全参数
 func (c *OnChainSecurityConfig) SyncFromChain() error {
-    // 从白名单合约读取
+    // 从安全配置合约读取（由治理合约管理）
     c.localCache.AllowedMREnclave = c.fetchWhitelist()
     
     // 从治理合约读取
@@ -193,7 +197,7 @@ func (c *OnChainSecurityConfig) IsAllowedMREnclave(mrenclave []byte) bool {
 | `RA_TLS_CERT_ALGORITHM` | 证书算法 | `secp256k1` |
 | `RA_TLS_ALLOW_OUTDATED_TCB_INSECURE` | 允许过期 TCB（不安全，仅测试用） | `1` |
 | `RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE` | 允许调试 enclave（不安全，仅测试用） | `1` |
-| `XCHAIN_WHITELIST_CONTRACT` | 白名单合约地址（写死） | `0xabcdef...` |
+| `XCHAIN_SECURITY_CONFIG_CONTRACT` | 安全配置合约地址（写死，由治理合约管理） | `0xabcdef...` |
 | `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址（写死） | `0x123456...` |
 
 **注意**：白名单数据本身不应存储在环境变量中，应从链上合约动态读取。

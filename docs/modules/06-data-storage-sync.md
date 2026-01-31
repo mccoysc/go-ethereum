@@ -66,7 +66,7 @@ XCHAIN_SECRET_PATH = "/data/secrets"         # 秘密数据存储路径
 # 链上合约地址（写死，作为安全锚点）
 # 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
 XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
-XCHAIN_WHITELIST_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
+XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
 ```
 
 ### 链上安全参数
@@ -75,12 +75,16 @@ XCHAIN_WHITELIST_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
 
 | 参数 | 链上合约 | 说明 |
 |------|----------|------|
-| MRENCLAVE 白名单 | WhitelistContract | 允许的 enclave 代码度量值 |
-| MRSIGNER 白名单 | WhitelistContract | 允许的签名者度量值 |
-| 密钥迁移阈值 | GovernanceContract | 密钥迁移所需的最小节点数 |
-| 节点准入策略 | GovernanceContract | 是否严格验证 Quote |
+| MRENCLAVE 白名单 | SecurityConfigContract | 允许的 enclave 代码度量值 |
+| MRSIGNER 白名单 | SecurityConfigContract | 允许的签名者度量值 |
+| 密钥迁移阈值 | SecurityConfigContract | 密钥迁移所需的最小节点数 |
+| 节点准入策略 | SecurityConfigContract | 是否严格验证 Quote |
+| 分叉配置 | SecurityConfigContract | 硬分叉升级相关配置 |
+| 数据迁移策略 | SecurityConfigContract | 加密数据迁移相关配置 |
 | 投票阈值 | GovernanceContract | 提案通过所需的投票比例 |
 | 投票期限 | GovernanceContract | 提案投票的区块数 |
+
+**注意**：所有安全、准入、秘密数据管理策略等相关配置都存储在安全配置合约中，但对安全配置合约的管理（修改配置）由治理合约通过投票实现。
 
 ```go
 // 从链上读取安全参数
@@ -93,11 +97,11 @@ type OnChainConfigSync struct {
 func NewOnChainConfigSync() (*OnChainConfigSync, error) {
     // 从 Manifest 环境变量读取合约地址
     govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
-    wlAddr := os.Getenv("XCHAIN_WHITELIST_CONTRACT")
+    scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
     
     return &OnChainConfigSync{
-        governanceContract: common.HexToAddress(govAddr),
-        whitelistContract:  common.HexToAddress(wlAddr),
+        governanceContract:     common.HexToAddress(govAddr),
+        securityConfigContract: common.HexToAddress(scAddr), // 安全配置合约，由治理合约管理
     }, nil
 }
 
@@ -105,7 +109,7 @@ func NewOnChainConfigSync() (*OnChainConfigSync, error) {
 func (s *OnChainConfigSync) SyncSecurityParams() (*SecurityConfig, error) {
     config := &SecurityConfig{}
     
-    // 从白名单合约读取
+    // 从安全配置合约读取（由治理合约管理）
     config.AllowedMREnclave = s.fetchWhitelist()
     
     // 从治理合约读取

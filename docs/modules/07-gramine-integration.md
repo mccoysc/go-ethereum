@@ -71,7 +71,7 @@ XCHAIN_SECRET_PATH = "/data/secrets"         # 秘密数据存储路径
 # 链上合约地址（写死，作为安全锚点）
 # 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
 XCHAIN_GOVERNANCE_CONTRACT = "{{ governance_contract }}"
-XCHAIN_WHITELIST_CONTRACT = "{{ whitelist_contract }}"
+XCHAIN_SECURITY_CONFIG_CONTRACT = "{{ security_config_contract }}"
 
 # SGX 配置
 [sgx]
@@ -159,7 +159,7 @@ Manifest 中只存储本地配置和链上合约地址。合约地址写死在 m
 | `XCHAIN_ENCRYPTED_PATH` | 加密分区路径 | 绝对路径 |
 | `XCHAIN_SECRET_PATH` | 秘密数据路径 | 绝对路径 |
 | `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址（写死） | 以太坊地址 |
-| `XCHAIN_WHITELIST_CONTRACT` | 白名单合约地址（写死） | 以太坊地址 |
+| `XCHAIN_SECURITY_CONFIG_CONTRACT` | 安全配置合约地址（写死，由治理合约管理） | 以太坊地址 |
 
 **重要说明**：
 - 白名单（MRENCLAVE/MRSIGNER）不应存储在 Manifest 环境变量中
@@ -219,7 +219,7 @@ RUN gramine-sgx-gen-private-key /tmp/signing_key.pem
 # 设置构建参数
 # 注意：白名单不再作为构建参数，而是从链上合约动态读取
 ARG GOVERNANCE_CONTRACT=""
-ARG WHITELIST_CONTRACT=""
+ARG SECURITY_CONFIG_CONTRACT=""
 ARG LOG_LEVEL="error"
 
 # 编译 manifest（步骤 1）
@@ -227,7 +227,7 @@ ARG LOG_LEVEL="error"
 RUN gramine-manifest \
     -Dlog_level=${LOG_LEVEL} \
     -Dgovernance_contract="${GOVERNANCE_CONTRACT}" \
-    -Dwhitelist_contract="${WHITELIST_CONTRACT}" \
+    -Dsecurity_config_contract="${SECURITY_CONFIG_CONTRACT}" \
     -Darch_libdir=/lib/x86_64-linux-gnu \
     /app/geth.manifest.template /app/geth.manifest
 
@@ -390,7 +390,7 @@ volumes:
 # 注意：白名单不再作为构建参数，而是从链上合约动态读取
 docker build \
     --build-arg GOVERNANCE_CONTRACT="0x1234567890abcdef1234567890abcdef12345678" \
-    --build-arg WHITELIST_CONTRACT="0xabcdef1234567890abcdef1234567890abcdef12" \
+    --build-arg SECURITY_CONFIG_CONTRACT="0xabcdef1234567890abcdef1234567890abcdef12" \
     -t xchain/geth:latest .
 ```
 
@@ -443,11 +443,15 @@ X Chain 的安全参数分为两类：
 
 | 参数 | 链上合约 | 说明 |
 |------|----------|------|
-| MRENCLAVE 白名单 | WhitelistContract | 允许的 enclave 代码度量值 |
-| MRSIGNER 白名单 | WhitelistContract | 允许的签名者度量值 |
-| 密钥迁移阈值 | GovernanceContract | 密钥迁移所需的最小节点数 |
-| 节点准入策略 | GovernanceContract | 是否严格验证 Quote |
+| MRENCLAVE 白名单 | SecurityConfigContract | 允许的 enclave 代码度量值 |
+| MRSIGNER 白名单 | SecurityConfigContract | 允许的签名者度量值 |
+| 密钥迁移阈值 | SecurityConfigContract | 密钥迁移所需的最小节点数 |
+| 节点准入策略 | SecurityConfigContract | 是否严格验证 Quote |
+| 分叉配置 | SecurityConfigContract | 硬分叉升级相关配置 |
+| 数据迁移策略 | SecurityConfigContract | 加密数据迁移相关配置 |
 | 投票阈值 | GovernanceContract | 提案通过所需的投票比例 |
+
+**注意**：所有安全、准入、秘密数据管理策略等相关配置都存储在安全配置合约中，但对安全配置合约的管理（修改配置）由治理合约通过投票实现。
 
 **重要说明**：
 - 白名单不再存储在 Manifest 环境变量中
