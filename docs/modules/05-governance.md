@@ -17,6 +17,220 @@
 5. 验证者质押与动态管理
 6. 自动密钥迁移机制
 7. 投票透明性查询
+8. **网络引导机制**（Bootstrap）
+
+## 网络引导机制（Bootstrap）
+
+### 引导问题
+
+X Chain 的安全参数从链上合约读取，但这存在一个"鸡和蛋"的问题：首次运行时还没有链，哪来的合约地址？
+
+### 解决方案：创世区块预部署
+
+治理合约和白名单合约在创世区块中预部署，合约地址是确定性的（基于部署者地址和 nonce），可以预先计算并写入 Manifest。
+
+```go
+// genesis/bootstrap.go
+package genesis
+
+// BootstrapConfig 引导配置
+type BootstrapConfig struct {
+    // 创始 MRENCLAVE（第一个版本代码的度量值）
+    AllowedMREnclave [32]byte
+    
+    // 创始管理者数量上限
+    MaxFounders uint64
+    
+    // 引导阶段结束后的投票阈值
+    VotingThreshold uint64 // 百分比，如 67 表示 2/3
+    
+    // 预部署合约地址（确定性计算）
+    GovernanceContract common.Address
+    WhitelistContract  common.Address
+}
+
+// DefaultBootstrapConfig 默认引导配置
+func DefaultBootstrapConfig() *BootstrapConfig {
+    return &BootstrapConfig{
+        MaxFounders:     5,  // 最多 5 个创始管理者
+        VotingThreshold: 67, // 2/3 投票通过
+    }
+}
+```
+
+### 引导阶段流程
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        引导阶段（Bootstrap Phase）                │
+├─────────────────────────────────────────────────────────────────┤
+│  1. 创世配置指定初始 MRENCLAVE + 创始管理者数量上限              │
+│  2. 前 N 个运行正确 MRENCLAVE 的节点自动成为创始管理者           │
+│  3. 达到上限后，引导阶段自动结束                                 │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        正常阶段（Normal Phase）                   │
+├─────────────────────────────────────────────────────────────────┤
+│  1. 新管理者必须通过现有管理者投票添加                           │
+│  2. 投票需要达到一定比例（如 2/3）                               │
+│  3. 标准治理流程                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 创始管理者身份
+
+创始管理者由 **MRENCLAVE** 决定，而不是由具体地址决定：
+
+1. 创世配置中指定初始允许的 MRENCLAVE（第一个版本代码的度量值）
+2. 任何运行该 MRENCLAVE 的节点自动成为创始验证者
+3. 创始验证者的地址由其 SGX 证明中的公钥派生
+4. 后续管理者通过投票添加
+
+**信任根**：
+- 创始 MRENCLAVE 是第一个版本代码编译后的度量值
+- 这是唯一的"信任根"，由项目方/社区确定
+- 可以通过可重现构建（reproducible build）让任何人验证
+
+### 引导合约实现
+
+```go
+// governance/bootstrap_contract.go
+package governance
+
+import (
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// BootstrapContract 引导合约
+type BootstrapContract struct {
+    // 引导阶段是否结束
+    BootstrapEnded bool
+    
+    // 当前创始管理者数量
+    FounderCount uint64
+    
+    // 最大创始管理者数量
+    MaxFounders uint64
+    
+    // 允许的创始 MRENCLAVE
+    AllowedMREnclave [32]byte
+    
+    // 创始管理者列表
+    Founders map[common.Address]bool
+    
+    // 硬件 ID 到管理者的映射（防止同一硬件多次注册）
+    HardwareToFounder map[[32]byte]common.Address
+}
+
+// RegisterFounder 注册创始管理者
+func (bc *BootstrapContract) RegisterFounder(
+    caller common.Address,
+    mrenclave [32]byte,
+    hardwareID [32]byte,
+    quote []byte,
+) error {
+    // 1. 检查引导阶段是否已结束
+    if bc.BootstrapEnded {
+        return ErrBootstrapEnded
+    }
+    
+    // 2. 验证 MRENCLAVE 是否匹配
+    if mrenclave != bc.AllowedMREnclave {
+        return ErrInvalidMREnclave
+    }
+    
+    // 3. 验证 SGX Quote
+    if !VerifySGXQuote(quote, mrenclave) {
+        return ErrInvalidQuote
+    }
+    
+    // 4. 检查硬件 ID 是否已注册
+    if _, exists := bc.HardwareToFounder[hardwareID]; exists {
+        return ErrHardwareAlreadyRegistered
+    }
+    
+    // 5. 检查是否已达到上限
+    if bc.FounderCount >= bc.MaxFounders {
+        bc.BootstrapEnded = true
+        return ErrMaxFoundersReached
+    }
+    
+    // 6. 注册创始管理者
+    bc.Founders[caller] = true
+    bc.HardwareToFounder[hardwareID] = caller
+    bc.FounderCount++
+    
+    // 7. 检查是否达到上限，自动结束引导阶段
+    if bc.FounderCount >= bc.MaxFounders {
+        bc.BootstrapEnded = true
+    }
+    
+    return nil
+}
+
+// IsFounder 检查是否为创始管理者
+func (bc *BootstrapContract) IsFounder(addr common.Address) bool {
+    return bc.Founders[addr]
+}
+
+// IsBootstrapPhase 检查是否处于引导阶段
+func (bc *BootstrapContract) IsBootstrapPhase() bool {
+    return !bc.BootstrapEnded
+}
+```
+
+### 创世配置示例
+
+```json
+{
+  "config": {
+    "chainId": 1337,
+    "xchain": {
+      "bootstrap": {
+        "allowedMREnclave": "abc123def456789...",
+        "maxFounders": 5,
+        "votingThreshold": 67
+      }
+    }
+  },
+  "alloc": {
+    "0x1234567890abcdef1234567890abcdef12345678": {
+      "code": "0x...",
+      "storage": {
+        "0x0": "0x05",
+        "0x1": "0xabc123def456789..."
+      }
+    }
+  }
+}
+```
+
+### 合约地址确定性计算
+
+```go
+// genesis/address.go
+package genesis
+
+import (
+    "github.com/ethereum/go-ethereum/common"
+    "github.com/ethereum/go-ethereum/crypto"
+)
+
+// CalculateContractAddress 计算确定性合约地址
+// 基于部署者地址和 nonce
+func CalculateContractAddress(deployer common.Address, nonce uint64) common.Address {
+    return crypto.CreateAddress(deployer, nonce)
+}
+
+// 预计算的合约地址（用于 Manifest）
+const (
+    // 假设部署者地址为 0x0000...0000，nonce 从 0 开始
+    GovernanceContractAddress = "0x1234567890abcdef1234567890abcdef12345678"
+    WhitelistContractAddress  = "0xabcdef1234567890abcdef1234567890abcdef12"
+)
+```
 
 ## 依赖关系
 

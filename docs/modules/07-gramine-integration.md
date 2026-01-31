@@ -61,25 +61,17 @@ loader.env.PATH = "/bin:/usr/bin"
 
 # 安全相关参数（影响度量值 MRENCLAVE）
 [loader.env]
-# 度量值白名单（Base64 编码的 CSV 格式）
-XCHAIN_MRENCLAVE_WHITELIST = "{{ mrenclave_whitelist_base64 }}"
+# 注意：白名单不应放在环境变量中，应从链上合约动态读取
+# 以下是本节点自身的固定配置
 
-# 加密分区路径
-XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
+# 本地路径配置
+XCHAIN_ENCRYPTED_PATH = "/data/encrypted"    # 加密分区路径
+XCHAIN_SECRET_PATH = "/data/secrets"         # 秘密数据存储路径
 
-# 秘密数据存储路径
-XCHAIN_SECRET_PATH = "/data/secrets"
-
-# 密钥迁移配置
-XCHAIN_KEY_MIGRATION_ENABLED = "{{ key_migration_enabled }}"
-XCHAIN_KEY_MIGRATION_THRESHOLD = "{{ key_migration_threshold }}"
-
-# 节点准入控制
-XCHAIN_ADMISSION_STRICT = "{{ admission_strict }}"
-XCHAIN_ADMISSION_VERIFY_QUOTE = "true"
-
-# RA-TLS 配置
-RATLS_WHITELIST_CONFIG = "{{ ratls_whitelist_base64 }}"
+# 链上合约地址（写死，作为安全锚点）
+# 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
+XCHAIN_GOVERNANCE_CONTRACT = "{{ governance_contract }}"
+XCHAIN_WHITELIST_CONTRACT = "{{ whitelist_contract }}"
 
 # SGX 配置
 [sgx]
@@ -160,16 +152,19 @@ nsswitch = "file:/etc/nsswitch.conf"
 
 ### 安全参数说明
 
-安全参数直接嵌入 manifest 文件，影响 MRENCLAVE 度量值：
+Manifest 中只存储本地配置和链上合约地址。合约地址写死在 manifest 中，作为安全锚点：
 
 | 参数 | 说明 | 格式 |
 |------|------|------|
-| `XCHAIN_MRENCLAVE_WHITELIST` | 允许的度量值白名单 | Base64 编码的 CSV |
 | `XCHAIN_ENCRYPTED_PATH` | 加密分区路径 | 绝对路径 |
 | `XCHAIN_SECRET_PATH` | 秘密数据路径 | 绝对路径 |
-| `XCHAIN_KEY_MIGRATION_ENABLED` | 是否启用密钥迁移 | "true"/"false" |
-| `XCHAIN_ADMISSION_STRICT` | 严格准入控制 | "true"/"false" |
-| `RATLS_WHITELIST_CONFIG` | RA-TLS 白名单配置 | Base64 编码的 CSV |
+| `XCHAIN_GOVERNANCE_CONTRACT` | 治理合约地址（写死） | 以太坊地址 |
+| `XCHAIN_WHITELIST_CONTRACT` | 白名单合约地址（写死） | 以太坊地址 |
+
+**重要说明**：
+- 白名单（MRENCLAVE/MRSIGNER）不应存储在 Manifest 环境变量中
+- 所有治理相关的安全参数（白名单、密钥迁移阈值、准入策略等）从链上合约动态读取
+- 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
 
 ### 加密分区配置
 
@@ -222,21 +217,17 @@ COPY deploy/gramine/geth.manifest.template /app/
 RUN gramine-sgx-gen-private-key /tmp/signing_key.pem
 
 # 设置构建参数
-ARG MRENCLAVE_WHITELIST=""
-ARG KEY_MIGRATION_ENABLED="false"
-ARG KEY_MIGRATION_THRESHOLD="2"
-ARG ADMISSION_STRICT="true"
-ARG RATLS_WHITELIST=""
+# 注意：白名单不再作为构建参数，而是从链上合约动态读取
+ARG GOVERNANCE_CONTRACT=""
+ARG WHITELIST_CONTRACT=""
 ARG LOG_LEVEL="error"
 
 # 编译 manifest（步骤 1）
+# 只嵌入本地配置和链上合约地址
 RUN gramine-manifest \
     -Dlog_level=${LOG_LEVEL} \
-    -Dmrenclave_whitelist_base64="${MRENCLAVE_WHITELIST}" \
-    -Dkey_migration_enabled="${KEY_MIGRATION_ENABLED}" \
-    -Dkey_migration_threshold="${KEY_MIGRATION_THRESHOLD}" \
-    -Dadmission_strict="${ADMISSION_STRICT}" \
-    -Dratls_whitelist_base64="${RATLS_WHITELIST}" \
+    -Dgovernance_contract="${GOVERNANCE_CONTRACT}" \
+    -Dwhitelist_contract="${WHITELIST_CONTRACT}" \
     -Darch_libdir=/lib/x86_64-linux-gnu \
     /app/geth.manifest.template /app/geth.manifest
 
@@ -390,19 +381,23 @@ volumes:
 
 ## 参数分类与处理
 
-### 安全参数（Manifest 控制）
+### Manifest 固定参数
 
 这些参数在镜像构建时嵌入 manifest，影响 MRENCLAVE 度量值：
 
 ```bash
-# 构建时设置安全参数
+# 构建时设置固定参数（只有本地配置和链上合约地址）
+# 注意：白名单不再作为构建参数，而是从链上合约动态读取
 docker build \
-    --build-arg MRENCLAVE_WHITELIST="$(cat whitelist.csv | base64 -w0)" \
-    --build-arg KEY_MIGRATION_ENABLED="true" \
-    --build-arg ADMISSION_STRICT="true" \
-    --build-arg RATLS_WHITELIST="$(cat ratls_whitelist.csv | base64 -w0)" \
+    --build-arg GOVERNANCE_CONTRACT="0x1234567890abcdef1234567890abcdef12345678" \
+    --build-arg WHITELIST_CONTRACT="0xabcdef1234567890abcdef1234567890abcdef12" \
     -t xchain/geth:latest .
 ```
+
+**重要说明**：
+- 合约地址写死在 manifest 中，作为安全锚点
+- 所有治理相关的安全参数（白名单、密钥迁移阈值、准入策略等）从链上合约动态读取
+- 这样投票结果可以实时生效，无需重新构建镜像
 
 ### 运行时参数（命令行控制）
 
@@ -431,38 +426,33 @@ docker run xchain/geth:latest \
                                                  +------------------+
 ```
 
-## 白名单配置格式
+## 链上安全参数配置
 
-### MRENCLAVE 白名单
+### 安全参数架构
 
-白名单使用 Base64 编码的 CSV 格式：
+X Chain 的安全参数分为两类：
 
-```
-# whitelist.csv（原始格式）
-# MRENCLAVE,VERSION,DESCRIPTION
-abc123def456...,1.0.0,Initial release
-def456abc789...,1.0.1,Bug fix release
-```
+| 类别 | 存储位置 | 特点 |
+|------|----------|------|
+| **Manifest 固定参数** | Gramine Manifest | 影响 MRENCLAVE，不可篡改 |
+| **链上安全参数** | 链上合约 | 通过投票管理，动态生效 |
 
-编码后嵌入 manifest：
+### 链上安全参数
 
-```bash
-# 编码
-WHITELIST_BASE64=$(cat whitelist.csv | base64 -w0)
+所有治理相关的安全参数从链上合约动态读取：
 
-# 在 manifest 中使用
-XCHAIN_MRENCLAVE_WHITELIST = "${WHITELIST_BASE64}"
-```
+| 参数 | 链上合约 | 说明 |
+|------|----------|------|
+| MRENCLAVE 白名单 | WhitelistContract | 允许的 enclave 代码度量值 |
+| MRSIGNER 白名单 | WhitelistContract | 允许的签名者度量值 |
+| 密钥迁移阈值 | GovernanceContract | 密钥迁移所需的最小节点数 |
+| 节点准入策略 | GovernanceContract | 是否严格验证 Quote |
+| 投票阈值 | GovernanceContract | 提案通过所需的投票比例 |
 
-### RA-TLS 白名单
-
-RA-TLS 白名单同样使用 Base64 编码的 CSV 格式：
-
-```
-# ratls_whitelist.csv（原始格式）
-# MRENCLAVE,MRSIGNER,ISV_PROD_ID,ISV_SVN
-abc123...,def456...,1,1
-```
+**重要说明**：
+- 白名单不再存储在 Manifest 环境变量中
+- 节点启动后从链上合约动态读取安全参数
+- 投票结果实时生效，无需重新构建镜像
 
 ## 硬件支持检测
 
