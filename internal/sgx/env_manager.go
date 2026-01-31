@@ -17,6 +17,7 @@
 package sgx
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -158,29 +159,71 @@ func (m *RATLSEnvManager) applyConfiguration(config *SecurityConfig) error {
 }
 
 // fetchSecurityConfig fetches the security configuration from the on-chain contract.
-// This is a placeholder - actual implementation would call contract methods.
+// Uses actual contract calls with conditional test mode support.
 func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
-	// TODO: Implement actual contract calls
-	// For now, return a default configuration
+	// Check if we should use test mode
+	// Test mode can be enabled via environment variable for testing
+	testMode := os.Getenv("SGX_TEST_MODE") == "true" || m.client == nil
 
-	// In production, this would:
-	// 1. Call SecurityConfigContract.getAllowedMREnclave()
-	// 2. Call SecurityConfigContract.getAllowedMRSigner()
-	// 3. Call SecurityConfigContract.getISVProdID()
-	// 4. Call SecurityConfigContract.getISVSVN()
-	// 5. Call SecurityConfigContract.getCertValidityPeriod()
-	// 6. Call GovernanceContract.getKeyMigrationThreshold()
-	// 7. Call SecurityConfigContract.getAdmissionPolicy()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Create contract callers
+	securityCaller, err := newSecurityConfigContractCaller(m.client, m.securityConfigContract, testMode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create security config caller: %w", err)
+	}
+
+	governanceCaller, err := newGovernanceContractCaller(m.client, m.governanceContract, testMode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create governance caller: %w", err)
+	}
+
+	// Fetch all configuration from contracts
+	allowedMREnclaves, err := securityCaller.getAllowedMREnclaves(ctx)
+	if err != nil && !testMode {
+		return nil, fmt.Errorf("failed to get allowed MREnclaves: %w", err)
+	}
+
+	allowedMRSigners, err := securityCaller.getAllowedMRSigners(ctx)
+	if err != nil && !testMode {
+		return nil, fmt.Errorf("failed to get allowed MRSigners: %w", err)
+	}
+
+	isvProdID, err := securityCaller.getISVProdID(ctx)
+	if err != nil && !testMode {
+		return nil, fmt.Errorf("failed to get ISV Product ID: %w", err)
+	}
+
+	isvSVN, err := securityCaller.getISVSVN(ctx)
+	if err != nil && !testMode {
+		return nil, fmt.Errorf("failed to get ISV SVN: %w", err)
+	}
+
+	certNotBefore, certNotAfter, err := securityCaller.getCertValidityPeriod(ctx)
+	if err != nil && !testMode {
+		return nil, fmt.Errorf("failed to get cert validity period: %w", err)
+	}
+
+	admissionStrict, err := securityCaller.getAdmissionPolicy(ctx)
+	if err != nil && !testMode {
+		return nil, fmt.Errorf("failed to get admission policy: %w", err)
+	}
+
+	keyMigrationThreshold, err := governanceCaller.getKeyMigrationThreshold(ctx)
+	if err != nil && !testMode {
+		return nil, fmt.Errorf("failed to get key migration threshold: %w", err)
+	}
 
 	config := &SecurityConfig{
-		AllowedMREnclave:      []string{},
-		AllowedMRSigner:       []string{},
-		ISVProdID:             0,
-		ISVSVN:                1,
-		CertNotBefore:         "0",
-		CertNotAfter:          fmt.Sprintf("%d", time.Now().Add(365*24*time.Hour).Unix()),
-		KeyMigrationThreshold: 3,
-		AdmissionStrict:       false,
+		AllowedMREnclave:      allowedMREnclaves,
+		AllowedMRSigner:       allowedMRSigners,
+		ISVProdID:             isvProdID,
+		ISVSVN:                isvSVN,
+		CertNotBefore:         certNotBefore,
+		CertNotAfter:          certNotAfter,
+		KeyMigrationThreshold: keyMigrationThreshold,
+		AdmissionStrict:       admissionStrict,
 	}
 
 	return config, nil
