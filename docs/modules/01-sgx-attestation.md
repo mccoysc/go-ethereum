@@ -80,29 +80,21 @@ int ra_tls_verify_callback_der(
 void ra_tls_set_measurement_callback(verify_measurements_cb_t f_cb);
 ```
 
-### 证书算法说明
+### 证书算法
 
-**官方 Gramine RA-TLS 限制**：官方 Gramine 的 `ra_tls_create_key_and_crt_der()` 函数固定使用 **NIST P-384 (SECP384R1)** 椭圆曲线生成密钥对，不支持配置其他算法。
+Gramine 的 `ra_tls_create_key_and_crt_der()` 函数使用 NIST P-384 (SECP384R1) 椭圆曲线生成密钥对（摘自 ra_tls.h）：
 
 ```c
-// 官方 Gramine ra_tls_create_key_and_crt_der() 说明（摘自 ra_tls.h）：
 // "The function first generates a random ECDSA keypair with NIST P-384 (SECP384R1) elliptic curve."
 ```
 
-**以太坊兼容性说明**：由于以太坊使用 secp256k1 曲线，而官方 Gramine RA-TLS 使用 SECP384R1，X Chain 需要在应用层处理密钥转换：
-
-1. **RA-TLS 证书**：使用官方 Gramine 生成的 SECP384R1 证书进行节点间 TLS 通信和 SGX 远程证明
-2. **以太坊地址**：在应用层单独生成 secp256k1 密钥对用于以太坊交易签名
-3. **密钥绑定**：通过 SGX Quote 的 report_data 字段绑定两个密钥（将以太坊公钥哈希嵌入 Quote）
+**以太坊密钥绑定**：X Chain 在应用层生成以太坊密钥对，通过 SGX Quote 的 report_data 字段绑定：
 
 ```go
 // 密钥绑定示例
 type NodeKeys struct {
-    // RA-TLS 密钥（SECP384R1，由 Gramine 生成）
-    RATLSCert *tls.Certificate
-    
-    // 以太坊密钥（secp256k1，应用层生成）
-    EthPrivateKey *ecdsa.PrivateKey
+    RATLSCert     *tls.Certificate  // RA-TLS 证书（由 Gramine 生成）
+    EthPrivateKey *ecdsa.PrivateKey // 以太坊密钥（应用层生成）
     EthAddress    common.Address
 }
 
@@ -280,8 +272,8 @@ func (m *RATLSEnvManager) InitFromContract() error {
     
     // 3. 设置环境变量（覆盖任何可能的静态配置）
     for _, mrenclave := range config.AllowedMREnclave {
-        // 注意：官方 Gramine 只支持单个 MRENCLAVE 值
-        // 如需支持多个，需要使用 ra_tls_set_measurement_callback
+        // RA_TLS_MRENCLAVE 环境变量支持单个值
+        // 多个 MRENCLAVE 通过 ra_tls_set_measurement_callback 回调验证
         os.Setenv("RA_TLS_MRENCLAVE", mrenclave)
         break // 只设置第一个，其余通过回调验证
     }
@@ -304,13 +296,13 @@ func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
 
 #### 多 MRENCLAVE 白名单支持
 
-由于官方 Gramine 的 `RA_TLS_MRENCLAVE` 环境变量只支持单个值，X Chain 需要使用自定义回调函数支持多个 MRENCLAVE：
+`RA_TLS_MRENCLAVE` 环境变量支持单个值，X Chain 使用 `ra_tls_set_measurement_callback` 回调函数支持多个 MRENCLAVE：
 
 ```go
 // 使用 ra_tls_set_measurement_callback 支持多 MRENCLAVE 白名单
 func setupMeasurementCallback(allowedMREnclaves []string) {
     // 注册自定义验证回调
-    // 回调函数签名（官方 Gramine）：
+    // 回调函数签名（定义在 ra_tls.h）：
     // int (*verify_measurements_cb_t)(const char* mrenclave, const char* mrsigner,
     //                                  const char* isv_prod_id, const char* isv_svn);
     
@@ -320,8 +312,6 @@ func setupMeasurementCallback(allowedMREnclaves []string) {
 ```
 
 **重要说明**：
-- 官方 Gramine 不支持 `RA_TLS_CERT_ALGORITHM` 或 `RA_TLS_CERT_CONFIG_B64` 环境变量
-- 证书算法固定为 SECP384R1，无法通过环境变量配置
 - 所有安全参数必须从链上合约动态读取，禁止静态配置
 
 ### 证书和私钥存储
