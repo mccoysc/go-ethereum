@@ -192,14 +192,9 @@ func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string,
 		return fmt.Errorf("SECURITY: Cannot retrieve current enclave MRENCLAVE: %w", err)
 	}
 	
-	log.Info("Current enclave MRENCLAVE", "mrenclave", currentMREnclave)
+	log.Info("Current enclave MRENCLAVE", "mrenclave", fmt.Sprintf("%x", currentMREnclaveBytes))
 	
-	// Compare MRENCLAVEs (convert hex string to bytes)
-	currentMREnclaveBytes := make([]byte, 32)
-	for i := 0; i < 32; i++ {
-		fmt.Sscanf(currentMREnclave[i*2:i*2+2], "%02x", &currentMREnclaveBytes[i])
-	}
-	
+	// Compare MRENCLAVEs (both are now byte arrays)
 	if !bytes.Equal(manifestMREnclave, currentMREnclaveBytes) {
 		return fmt.Errorf("MRENCLAVE MISMATCH! Manifest MRENCLAVE does not match current enclave. " +
 			"This indicates the manifest file has been tampered with or replaced. " +
@@ -332,17 +327,15 @@ func ValidateManifestIntegrity() error {
 	}
 	log.Info("Running under Gramine", "version", gramineVersion)
 	
-	// Step 2: 检查MRENCLAVE - 必须存在
-	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
-	if mrenclave == "" {
-		mrenclave = os.Getenv("SGX_MRENCLAVE")
+	// Step 2: 获取当前enclave的MRENCLAVE
+	// 注意：不要使用RA_TLS_MRENCLAVE（那是用于对端验证的）
+	// 应该从Gramine伪文件系统获取当前enclave的MRENCLAVE
+	mrenclave, err := getCurrentMREnclaveFromGramine()
+	if err != nil {
+		return fmt.Errorf("SECURITY: Cannot get current enclave MRENCLAVE: %w. " +
+			"This is REQUIRED for manifest verification.", err)
 	}
-	if mrenclave == "" {
-		return fmt.Errorf("SECURITY: MRENCLAVE not found in environment (RA_TLS_MRENCLAVE or SGX_MRENCLAVE). " +
-			"MRENCLAVE is REQUIRED for manifest verification. " +
-			"For testing: export RA_TLS_MRENCLAVE=<64-char-hex>")
-	}
-	log.Info("MRENCLAVE available for verification", "MRENCLAVE", mrenclave[:min(16, len(mrenclave))]+"...")
+	log.Info("Current enclave MRENCLAVE retrieved", "MRENCLAVE", fmt.Sprintf("%x", mrenclave[:min(16, len(mrenclave))])+"...")
 	
 	// Step 3: 定位manifest文件（必须存在）
 	log.Info("Step 1: Locating manifest file...")
@@ -416,19 +409,17 @@ func MustVerifyManifest() {
 	}
 }
 
-// GetMRENCLAVE returns the MRENCLAVE measurement from environment
-// This proves the manifest was verified by Gramine
+// GetMRENCLAVE returns the MRENCLAVE measurement of the currently running enclave
+// Uses Gramine pseudo filesystem - NOT RA_TLS_MRENCLAVE (which is for peer verification)
 func GetMRENCLAVE() (string, error) {
-	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
-	if mrenclave == "" {
-		mrenclave = os.Getenv("SGX_MRENCLAVE")
+	// Get current enclave MRENCLAVE from Gramine pseudo filesystem
+	mrenclave, err := getCurrentMREnclaveFromGramine()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current enclave MRENCLAVE: %w", err)
 	}
 
-	if mrenclave == "" {
-		return "", fmt.Errorf("MRENCLAVE not found in environment")
-	}
-
-	return mrenclave, nil
+	// Convert to hex string
+	return fmt.Sprintf("%x", mrenclave), nil
 }
 
 // GetMRSIGNER returns the MRSIGNER measurement from environment

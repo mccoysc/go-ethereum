@@ -50,27 +50,43 @@ func (a *GramineAttestor) GenerateQuote(data []byte) ([]byte, error) {
 }
 
 // GetMREnclave retrieves the current enclave's MRENCLAVE
+// Uses Gramine pseudo filesystem - NOT RA_TLS_MRENCLAVE (which is for peer verification)
 func (a *GramineAttestor) GetMREnclave() ([]byte, error) {
-	// Read from Gramine environment
-	mrenclaveHex := os.Getenv("RA_TLS_MRENCLAVE")
-	if mrenclaveHex == "" {
-		mrenclaveHex = os.Getenv("SGX_MRENCLAVE")
+	// Method 1: Read from /dev/attestation/my_target_info (Gramine pseudo-fs)
+	targetInfoPath := "/dev/attestation/my_target_info"
+	data, err := os.ReadFile(targetInfoPath)
+	if err == nil && len(data) >= 32 {
+		// MRENCLAVE is first 32 bytes of TARGETINFO
+		return data[0:32], nil
 	}
 	
-	if mrenclaveHex == "" {
-		// MRENCLAVE环境变量缺失 → 可以退出（用户可以设置）
-		return nil, fmt.Errorf("MRENCLAVE not available in environment. " +
-			"For Gramine: this should be set automatically. " +
-			"For testing: export RA_TLS_MRENCLAVE=<64-char-hex> or SGX_MRENCLAVE=<64-char-hex>")
+	// Method 2: Generate quote and extract MRENCLAVE
+	// Write dummy report data
+	userReportDataPath := "/dev/attestation/user_report_data"
+	dummyData := make([]byte, 64)
+	if err := os.WriteFile(userReportDataPath, dummyData, 0600); err == nil {
+		// Read generated quote
+		quotePath := "/dev/attestation/quote"
+		quote, err := os.ReadFile(quotePath)
+		if err == nil && len(quote) >= 144 {
+			// MRENCLAVE is at offset 112 in SGX quote
+			return quote[112:144], nil
+		}
 	}
 	
-	// Convert hex string to bytes
-	mrenclave := make([]byte, 32)
-	for i := 0; i < 32 && i*2+1 < len(mrenclaveHex); i++ {
-		fmt.Sscanf(mrenclaveHex[i*2:i*2+2], "%02x", &mrenclave[i])
+	// Method 3 (testing only): Use TEST_MRENCLAVE
+	testMREnclave := os.Getenv("TEST_MRENCLAVE")
+	if testMREnclave != "" {
+		mrenclave := make([]byte, 32)
+		if _, err := hex.DecodeString(testMREnclave); err == nil {
+			hex.Decode(mrenclave, []byte(testMREnclave))
+			return mrenclave, nil
+		}
 	}
 	
-	return mrenclave, nil
+	return nil, fmt.Errorf("SECURITY: Cannot retrieve current enclave MRENCLAVE. " +
+		"Tried: /dev/attestation/my_target_info, quote generation. " +
+		"For testing: export TEST_MRENCLAVE=<64-char-hex>")
 }
 
 // GetMRSigner retrieves the MRSIGNER value
