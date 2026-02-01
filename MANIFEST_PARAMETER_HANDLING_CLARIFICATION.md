@@ -1,53 +1,53 @@
-# Manifest 参数处理机制澄清
+# Manifest 参数处理机制
 
-## 问题
+## 设计规范
 
-模块启动时读 manifest 并以 manifest 为准，是否应直接忽略命令行传入的同名参数，无需比对？
+Manifest 参数为权威来源，启动时直接使用，忽略 CLI 同名参数。
 
-## 结论
+### 处理流程
 
-是。Manifest 参数直接作为最终值，CLI 同名参数被忽略。
+1. 加载 Manifest 环境变量参数
+2. 加载 CLI 命令行参数  
+3. 合并：Manifest 参数直接作为最终值，CLI 同名参数被忽略
 
-## 方案对比
+### 实现要求
 
-**方案 A（文档原描述）**：加载 Manifest → 加载 CLI → 比对不一致则退出
-
-**方案 B（修正后采用）**：加载 Manifest → 加载 CLI → Manifest 覆盖，忽略 CLI 同名参数
-
-理由：Manifest 参数嵌入 enclave 镜像，影响 MRENCLAVE，外部无法篡改。无需比对用户输入。
-
-## 主要修改
-
-### MergeAndValidate 函数
-
-修正前：
 ```go
-if ok && cliValue != manifestValue {
-    return fmt.Errorf("SECURITY VIOLATION: ...")
+// MergeAndValidate 实现
+func (pv *ParamValidator) MergeAndValidate() error {
+    // Manifest 参数优先
+    for name, value := range pv.manifestParams {
+        pv.mergedParams[name] = value
+    }
+    
+    // 处理 CLI 参数
+    for cliFlag, cliValue := range pv.cliParams {
+        for _, param := range SecurityParams {
+            if param.CliFlag == cliFlag {
+                if _, exists := pv.manifestParams[param.Name]; exists {
+                    // Manifest 已定义，忽略 CLI
+                    goto nextParam
+                }
+                pv.mergedParams[param.Name] = cliValue
+                goto nextParam
+            }
+        }
+        pv.mergedParams[cliFlag] = cliValue
+    nextParam:
+    }
+    return nil
 }
 ```
 
-修正后：
-```go
-if _, exists := pv.manifestParams[param.Name]; exists {
-    goto nextParam  // 直接忽略 CLI 参数
-}
-```
+### 技术依据
 
-### 术语调整
+Manifest 参数嵌入 enclave 镜像，影响 MRENCLAVE 度量值，外部无法篡改。
 
-- "参数校验" → "参数处理"
-- "不一致则退出进程" → "忽略 CLI 同名参数"
+## 文档修正说明
 
-## 影响范围
+模块 06 文档 `/docs/modules/06-data-storage-sync.md` 原描述为参数比对机制（比对 Manifest 与 CLI，不一致则退出），现已修正为参数覆盖机制（Manifest 直接覆盖 CLI 同名参数）。
 
-**文档修正**：`/docs/modules/06-data-storage-sync.md`
-
-**代码**：无。本次仅修正文档设计描述。
-
-## 实现要求
-
-待实现代码需遵循：Manifest 参数直接覆盖 CLI 同名参数，无比对，无退出。
+术语统一："参数校验" 修正为 "参数处理"。
 
 ---
 
