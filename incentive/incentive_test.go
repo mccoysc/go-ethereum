@@ -1122,3 +1122,37 @@ func TestConfigDefaults(t *testing.T) {
 		}
 	})
 }
+
+// Mock StateDB for storage tests
+type mockStateDB struct {
+	mu      sync.RWMutex
+	storage map[common.Address]map[common.Hash]common.Hash
+}
+
+func newMockStateDB() *mockStateDB {
+	return &mockStateDB{
+		storage: make(map[common.Address]map[common.Hash]common.Hash),
+	}
+}
+
+func (m *mockStateDB) SetState(addr common.Address, key, value common.Hash) common.Hash {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	
+	if m.storage[addr] == nil {
+		m.storage[addr] = make(map[common.Hash]common.Hash)
+	}
+	old := m.storage[addr][key]
+	m.storage[addr][key] = value
+	return old
+}
+
+func (m *mockStateDB) GetState(addr common.Address, key common.Hash) common.Hash {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	
+	if m.storage[addr] == nil {
+		return common.Hash{}
+	}
+	return m.storage[addr][key]
+}
