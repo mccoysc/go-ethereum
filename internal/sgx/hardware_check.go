@@ -65,8 +65,8 @@ func GetSGXInfo() (*SGXInfo, error) {
 
 // SGXInfo contains information about the SGX environment
 type SGXInfo struct {
-	MRENCLAVE      []byte // Enclave measurement
-	MRSIGNER       []byte // Signer measurement
+	MRENCLAVE       []byte // Enclave measurement
+	MRSIGNER        []byte // Signer measurement
 	IsInsideEnclave bool   // Whether running inside an enclave
 }
 
@@ -85,8 +85,8 @@ func IsSGXAvailable() bool {
 // GetMockSGXInfo returns mock SGX info for testing without SGX hardware
 func GetMockSGXInfo() *SGXInfo {
 	return &SGXInfo{
-		MRENCLAVE:      make([]byte, 32), // Zero-filled for mock
-		MRSIGNER:       make([]byte, 32), // Zero-filled for mock
+		MRENCLAVE:       make([]byte, 32), // Zero-filled for mock
+		MRSIGNER:        make([]byte, 32), // Zero-filled for mock
 		IsInsideEnclave: false,
 	}
 }
