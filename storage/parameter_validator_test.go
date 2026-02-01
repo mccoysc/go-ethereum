@@ -32,9 +32,9 @@ func TestValidateManifestParams(t *testing.T) {
 
 	// Test with all required parameters
 	manifestParams := map[string]string{
-		"XCHAIN_ENCRYPTED_PATH":          "/data/encrypted",
-		"XCHAIN_SECRET_PATH":             "/data/secrets",
-		"XCHAIN_GOVERNANCE_CONTRACT":     "0x1234567890abcdef1234567890abcdef12345678",
+		"XCHAIN_ENCRYPTED_PATH":           "/data/encrypted",
+		"XCHAIN_SECRET_PATH":              "/data/secrets",
+		"XCHAIN_GOVERNANCE_CONTRACT":      "0x1234567890abcdef1234567890abcdef12345678",
 		"XCHAIN_SECURITY_CONFIG_CONTRACT": "0xabcdef1234567890abcdef1234567890abcdef12",
 	}
 
@@ -63,9 +63,9 @@ func TestValidateChainParams(t *testing.T) {
 	validator := NewParameterValidator()
 
 	chainParams := map[string]interface{}{
-		"allowed_mrenclaves":     []string{"abc123", "def456"},
+		"allowed_mrenclaves":      []string{"abc123", "def456"},
 		"key_migration_threshold": 3,
-		"admission_strict":       true,
+		"admission_strict":        true,
 	}
 
 	err := validator.ValidateChainParams(chainParams)
@@ -79,9 +79,9 @@ func TestMergeAndValidate_Priority(t *testing.T) {
 
 	// Test priority: Manifest > Chain > CLI
 	manifestParams := map[string]string{
-		"XCHAIN_ENCRYPTED_PATH":          "/manifest/encrypted",
-		"XCHAIN_SECRET_PATH":             "/manifest/secrets",
-		"XCHAIN_GOVERNANCE_CONTRACT":     "0x1111111111111111111111111111111111111111",
+		"XCHAIN_ENCRYPTED_PATH":           "/manifest/encrypted",
+		"XCHAIN_SECRET_PATH":              "/manifest/secrets",
+		"XCHAIN_GOVERNANCE_CONTRACT":      "0x1111111111111111111111111111111111111111",
 		"XCHAIN_SECURITY_CONFIG_CONTRACT": "0x2222222222222222222222222222222222222222",
 	}
 
@@ -121,9 +121,9 @@ func TestMergeAndValidate_SecurityParamPriority(t *testing.T) {
 
 	// Manifest sets encrypted path
 	manifestParams := map[string]string{
-		"XCHAIN_ENCRYPTED_PATH":          "/manifest/encrypted",
-		"XCHAIN_SECRET_PATH":             "/manifest/secrets",
-		"XCHAIN_GOVERNANCE_CONTRACT":     "0x1111111111111111111111111111111111111111",
+		"XCHAIN_ENCRYPTED_PATH":           "/manifest/encrypted",
+		"XCHAIN_SECRET_PATH":              "/manifest/secrets",
+		"XCHAIN_GOVERNANCE_CONTRACT":      "0x1111111111111111111111111111111111111111",
 		"XCHAIN_SECURITY_CONFIG_CONTRACT": "0x2222222222222222222222222222222222222222",
 	}
 
@@ -149,9 +149,9 @@ func TestMergeAndValidate_ChainOverridesCLI(t *testing.T) {
 	validator := NewParameterValidator()
 
 	manifestParams := map[string]string{
-		"XCHAIN_ENCRYPTED_PATH":          "/manifest/encrypted",
-		"XCHAIN_SECRET_PATH":             "/manifest/secrets",
-		"XCHAIN_GOVERNANCE_CONTRACT":     "0x1111111111111111111111111111111111111111",
+		"XCHAIN_ENCRYPTED_PATH":           "/manifest/encrypted",
+		"XCHAIN_SECRET_PATH":              "/manifest/secrets",
+		"XCHAIN_GOVERNANCE_CONTRACT":      "0x1111111111111111111111111111111111111111",
 		"XCHAIN_SECURITY_CONFIG_CONTRACT": "0x2222222222222222222222222222222222222222",
 	}
 
@@ -198,9 +198,9 @@ func TestCheckSecurityParams(t *testing.T) {
 	validator := NewParameterValidator()
 
 	manifestParams := map[string]string{
-		"XCHAIN_ENCRYPTED_PATH":          "/manifest/encrypted",
-		"XCHAIN_SECRET_PATH":             "/manifest/secrets",
-		"XCHAIN_GOVERNANCE_CONTRACT":     "0x1111111111111111111111111111111111111111",
+		"XCHAIN_ENCRYPTED_PATH":           "/manifest/encrypted",
+		"XCHAIN_SECRET_PATH":              "/manifest/secrets",
+		"XCHAIN_GOVERNANCE_CONTRACT":      "0x1111111111111111111111111111111111111111",
 		"XCHAIN_SECURITY_CONFIG_CONTRACT": "0x2222222222222222222222222222222222222222",
 	}
 
@@ -238,9 +238,9 @@ func TestGetMergedParams(t *testing.T) {
 	validator := NewParameterValidator()
 
 	manifestParams := map[string]string{
-		"XCHAIN_ENCRYPTED_PATH":          "/manifest/encrypted",
-		"XCHAIN_SECRET_PATH":             "/manifest/secrets",
-		"XCHAIN_GOVERNANCE_CONTRACT":     "0x1111111111111111111111111111111111111111",
+		"XCHAIN_ENCRYPTED_PATH":           "/manifest/encrypted",
+		"XCHAIN_SECRET_PATH":              "/manifest/secrets",
+		"XCHAIN_GOVERNANCE_CONTRACT":      "0x1111111111111111111111111111111111111111",
 		"XCHAIN_SECURITY_CONFIG_CONTRACT": "0x2222222222222222222222222222222222222222",
 	}
 
@@ -270,9 +270,9 @@ func TestConcurrentAccess(t *testing.T) {
 	validator := NewParameterValidator()
 
 	manifestParams := map[string]string{
-		"XCHAIN_ENCRYPTED_PATH":          "/manifest/encrypted",
-		"XCHAIN_SECRET_PATH":             "/manifest/secrets",
-		"XCHAIN_GOVERNANCE_CONTRACT":     "0x1111111111111111111111111111111111111111",
+		"XCHAIN_ENCRYPTED_PATH":           "/manifest/encrypted",
+		"XCHAIN_SECRET_PATH":              "/manifest/secrets",
+		"XCHAIN_GOVERNANCE_CONTRACT":      "0x1111111111111111111111111111111111111111",
 		"XCHAIN_SECURITY_CONFIG_CONTRACT": "0x2222222222222222222222222222222222222222",
 	}
 

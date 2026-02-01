@@ -27,11 +27,7 @@ import (
 
 func TestNewEncryptedPartition(t *testing.T) {
 	// Create a temporary directory
-	tmpDir, err := os.MkdirTemp("", "encrypted-partition-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	// Test successful creation
 	partition, err := NewEncryptedPartition(tmpDir)
@@ -57,11 +53,7 @@ func TestNewEncryptedPartition_NonExistentPath(t *testing.T) {
 }
 
 func TestWriteAndReadSecret(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "encrypted-partition-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -91,11 +83,7 @@ func TestWriteAndReadSecret(t *testing.T) {
 }
 
 func TestDeleteSecret(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "encrypted-partition-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -125,11 +113,7 @@ func TestDeleteSecret(t *testing.T) {
 }
 
 func TestListSecrets(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "encrypted-partition-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -174,11 +158,7 @@ func TestListSecrets(t *testing.T) {
 }
 
 func TestSecureDelete(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "encrypted-partition-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -208,11 +188,7 @@ func TestSecureDelete(t *testing.T) {
 }
 
 func TestConcurrentWriteAndRead(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "encrypted-partition-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
