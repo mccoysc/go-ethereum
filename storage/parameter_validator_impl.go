@@ -117,8 +117,40 @@ func (pv *ParameterValidatorImpl) ValidateChainParams(chainParams map[string]int
 
 	pv.chainParams = chainParams
 
-	// Validate chain parameters (basic validation)
-	// In production, would validate specific parameter types and ranges
+	// Validate chain parameters
+	// These are security-critical parameters read from SecurityConfigContract
+	
+	// Validate MRENCLAVE whitelist if present
+	if whitelist, ok := chainParams["mrenclave_whitelist"]; ok {
+		if whitelist == nil {
+			return fmt.Errorf("mrenclave_whitelist cannot be nil")
+		}
+	}
+
+	// Validate MRSIGNER whitelist if present
+	if signerList, ok := chainParams["mrsigner_whitelist"]; ok {
+		if signerList == nil {
+			return fmt.Errorf("mrsigner_whitelist cannot be nil")
+		}
+	}
+
+	// Validate migration threshold if present
+	if threshold, ok := chainParams["key_migration_threshold"]; ok {
+		if thresholdVal, ok := threshold.(int); ok {
+			if thresholdVal < 0 {
+				return fmt.Errorf("key_migration_threshold must be non-negative")
+			}
+		}
+	}
+
+	// Validate voting threshold if present
+	if threshold, ok := chainParams["voting_threshold"]; ok {
+		if thresholdVal, ok := threshold.(int); ok {
+			if thresholdVal < 0 || thresholdVal > 100 {
+				return fmt.Errorf("voting_threshold must be between 0 and 100")
+			}
+		}
+	}
 
 	return nil
 }

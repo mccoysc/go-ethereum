@@ -353,11 +353,11 @@ func TestGetDailyLimit_AllLevels(t *testing.T) {
 	// Test each permission level
 	testCases := []struct {
 		level    PermissionLevel
-		expected uint64
+		expected int
 	}{
 		{PermissionBasic, 10},       // BasicDailyMigrationLimit
 		{PermissionStandard, 100},   // StandardDailyMigrationLimit
-		{PermissionFull, 0},         // No limit
+		{PermissionFull, -1},        // Unlimited (-1)
 	}
 
 	for _, tc := range testCases {

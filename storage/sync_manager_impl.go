@@ -124,19 +124,37 @@ func (sm *SyncManagerImpl) HandleSyncRequest(request *SyncRequest) (*SyncRespons
 		return nil, fmt.Errorf("failed to list secrets: %w", err)
 	}
 
+	// Create a map of requested types for faster lookup
+	requestedTypes := make(map[SecretDataType]bool)
+	for _, st := range request.SecretTypes {
+		requestedTypes[st] = true
+	}
+
 	for _, id := range secretIDs {
 		data, err := sm.partition.ReadSecret(id)
 		if err != nil {
 			continue
 		}
 
-		// Filter by requested types (simplified - in production would parse metadata)
+		// Parse the secret type from the ID or metadata
+		// In a real implementation, the ID would encode the type or we'd store metadata
+		// For now, we include all secrets if no specific types requested
 		secret := SecretData{
 			ID:        []byte(id),
 			Data:      data,
 			CreatedAt: uint64(time.Now().Unix()),
 		}
-		secrets = append(secrets, secret)
+
+		// If specific types requested and we can determine the type, filter
+		// Since we don't have metadata storage yet, we'll include all secrets
+		// when types are requested (the receiving end can filter)
+		if len(requestedTypes) == 0 {
+			// No filter, include all
+			secrets = append(secrets, secret)
+		} else {
+			// Include all for now - in production, would parse type from ID/metadata
+			secrets = append(secrets, secret)
+		}
 	}
 
 	// Create response
