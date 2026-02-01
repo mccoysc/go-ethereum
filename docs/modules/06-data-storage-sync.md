@@ -57,7 +57,7 @@
 - 新 MRENCLAVE 添加时具有渐进式权限：
   - `Basic`（7 天）：日迁移限制 10 次
   - `Standard`（30 天）：日迁移限制 100 次
-  - `Full`（永久）：无迁移限制
+  - `Full`（永久）：无限制
 - AutoMigrationManager 实现权限级别检查和迁移频率限制
 
 **升级协调机制**
@@ -221,7 +221,7 @@ var SecurityParams = []ParamDefinition{
 
 type ParamValidator struct {
     manifestParams map[string]string
-    chainParams    map[string]interface{}
+    chainParams    map[string]interface{}  // 从 SecurityConfigContract 合约动态读取的链上安全参数
     cliParams      map[string]string
     mergedParams   map[string]interface{}
 }
@@ -352,9 +352,15 @@ import (
 type PermissionLevel uint8
 
 const (
-    PermissionBasic    PermissionLevel = 0x01  // 基础权限（7天），日限10次
-    PermissionStandard PermissionLevel = 0x02  // 标准权限（30天），日限100次
-    PermissionFull     PermissionLevel = 0x03  // 完全权限（永久），无限制
+    PermissionBasic    PermissionLevel = 0x01  // 基础权限（7天）
+    PermissionStandard PermissionLevel = 0x02  // 标准权限（30天）
+    PermissionFull     PermissionLevel = 0x03  // 完全权限（永久）
+)
+
+// 权限级别对应的迁移限制
+const (
+    BasicDailyMigrationLimit    = 10   // Basic 权限每日迁移限制
+    StandardDailyMigrationLimit = 100  // Standard 权限每日迁移限制
 )
 
 type AutoMigrationManager interface {
@@ -611,11 +617,11 @@ data, _ := os.ReadFile("/data/encrypted/key.bin")
 func (am *AutoMigration) getDailyLimit(level PermissionLevel) int {
     switch level {
     case PermissionBasic:
-        return 10   // 日限10次
+        return BasicDailyMigrationLimit    // 10次
     case PermissionStandard:
-        return 100  // 日限100次
+        return StandardDailyMigrationLimit // 100次
     case PermissionFull:
-        return -1   // 无限制
+        return -1  // 无限制
     }
     return 0
 }
