@@ -25,6 +25,7 @@ import (
 // MockSGXVerifier is a mock implementation of SGXVerifier for testing
 type MockSGXVerifier struct {
 	shouldFailVerify       bool
+	shouldFailExtract      bool // For ExtractMREnclave
 	shouldFailExtractMR    bool
 	shouldFailExtractHW    bool
 	mrenclaveToReturn      [32]byte
@@ -39,7 +40,7 @@ func (m *MockSGXVerifier) VerifyQuote(quote []byte) error {
 }
 
 func (m *MockSGXVerifier) ExtractMREnclave(quote []byte) ([32]byte, error) {
-	if m.shouldFailExtractMR {
+	if m.shouldFailExtractMR || m.shouldFailExtract {
 		return [32]byte{}, ErrInvalidMREnclave
 	}
 	return m.mrenclaveToReturn, nil

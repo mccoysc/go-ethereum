@@ -24,9 +24,10 @@ import (
 
 // MockVotingManager is a mock implementation of VotingManager for testing
 type MockVotingManager struct {
-	proposals     map[common.Hash]*Proposal
-	createError   error
-	lastProposalID common.Hash
+	proposals       map[common.Hash]*Proposal
+	createError     error
+	shouldFailCreate bool
+	lastProposalID  common.Hash
 }
 
 func NewMockVotingManager() *MockVotingManager {
@@ -38,6 +39,9 @@ func NewMockVotingManager() *MockVotingManager {
 func (m *MockVotingManager) CreateProposal(proposal *Proposal) (common.Hash, error) {
 	if m.createError != nil {
 		return common.Hash{}, m.createError
+	}
+	if m.shouldFailCreate {
+		return common.Hash{}, ErrProposalNotFound // Generic error for testing
 	}
 	
 	id := common.BytesToHash([]byte{byte(len(m.proposals))})

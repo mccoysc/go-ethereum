@@ -572,3 +572,17 @@ func TestVotingManager_EmergencyUpgrade_StricterVeto(t *testing.T) {
 		t.Errorf("emergency upgrade should be vetoed by 50%% community, got %v", retrieved.Status)
 	}
 }
+
+func TestVotingManager_boolToBytes(t *testing.T) {
+// Test true case
+result := boolToBytes(true)
+if len(result) != 1 || result[0] != 1 {
+t.Error("boolToBytes(true) should return [1]")
+}
+
+// Test false case
+result = boolToBytes(false)
+if len(result) != 1 || result[0] != 0 {
+t.Error("boolToBytes(false) should return [0]")
+}
+}
