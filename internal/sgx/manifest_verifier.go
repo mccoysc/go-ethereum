@@ -329,25 +329,25 @@ func VerifyCurrentManifestFile() error {
 func ValidateManifestIntegrity() error {
 	log.Info("=== Validating Manifest Integrity ===")
 	
-	// Step 1: 检查运行环境
+	// Step 1: 检查运行环境 - 必须在Gramine下
 	gramineVersion := os.Getenv("GRAMINE_VERSION")
-	if gramineVersion != "" {
-		log.Info("Running under Gramine", "version", gramineVersion)
-	} else {
-		log.Info("Not running under Gramine - verifying manifest anyway")
+	if gramineVersion == "" {
+		return fmt.Errorf("SECURITY: GRAMINE_VERSION not set - manifest verification requires Gramine environment. " +
+			"For testing: export GRAMINE_VERSION=test")
 	}
+	log.Info("Running under Gramine", "version", gramineVersion)
 	
-	// Step 2: 检查MRENCLAVE（如果可用）
+	// Step 2: 检查MRENCLAVE - 必须存在
 	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
 	if mrenclave == "" {
 		mrenclave = os.Getenv("SGX_MRENCLAVE")
 	}
-	if mrenclave != "" {
-		log.Info("MRENCLAVE available for verification", "MRENCLAVE", mrenclave[:min(16, len(mrenclave))]+"...")
-	} else {
-		log.Warn("MRENCLAVE not found in environment")
-		// 注意：验证时如果需要MRENCLAVE但没有，会失败
+	if mrenclave == "" {
+		return fmt.Errorf("SECURITY: MRENCLAVE not found in environment (RA_TLS_MRENCLAVE or SGX_MRENCLAVE). " +
+			"MRENCLAVE is REQUIRED for manifest verification. " +
+			"For testing: export RA_TLS_MRENCLAVE=<64-char-hex>")
 	}
+	log.Info("MRENCLAVE available for verification", "MRENCLAVE", mrenclave[:min(16, len(mrenclave))]+"...")
 	
 	// Step 3: 定位manifest文件（必须存在）
 	log.Info("Step 1: Locating manifest file...")

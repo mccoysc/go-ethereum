@@ -83,29 +83,22 @@ func New(config *Config, attestor Attestor, verifier Verifier) *SGXEngine {
 func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine {
 	log.Info("=== Initializing SGX Consensus Engine ===")
 	
-	// Check environment
+	// Check environment - MUST be running under Gramine
 	gramineVersion := os.Getenv("GRAMINE_VERSION")
-	isGramine := gramineVersion != ""
-	
-	if isGramine {
-		log.Info("Running under Gramine", "version", gramineVersion)
-	} else {
-		log.Warn("⚠️  Not running under Gramine - using file-based test mode")
-		log.Warn("⚠️  This mode reads test data from files (testdata/sgx/)")
-		log.Warn("⚠️  Production deployment MUST use Gramine")
+	if gramineVersion == "" {
+		log.Crit("SECURITY: GRAMINE_VERSION environment variable not set. " +
+			"SGX consensus engine REQUIRES Gramine environment. " +
+			"For testing: export GRAMINE_VERSION=test")
 	}
+	log.Info("Running under Gramine", "version", gramineVersion)
 	
 	// Step 1: Validate manifest integrity (signature verification)
+	// 必须验证，无论任何情况
 	log.Info("Step 1: Validating manifest integrity...")
 	if err := internalsgx.ValidateManifestIntegrity(); err != nil {
-		if isGramine {
-			log.Crit("Manifest validation FAILED in Gramine environment", "error", err)
-		} else {
-			log.Warn("Manifest validation skipped (test mode, not in Gramine)", "error", err)
-		}
-	} else {
-		log.Info("✓ Manifest signature verified")
+		log.Crit("Manifest validation FAILED", "error", err)
 	}
+	log.Info("✓ Manifest signature verified")
 	
 	// Step 2: Read contract addresses from manifest environment variables
 	// 关键：必须先验证manifest签名，然后才能读取配置
