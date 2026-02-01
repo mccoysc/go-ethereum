@@ -1,0 +1,41 @@
+# Test Gramine manifest for E2E testing
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint = "{{ entrypoint }}"
+
+loader.log_level = "{{ log_level }}"
+
+loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr/{{ arch_libdir }}"
+
+# Contract addresses for testing
+loader.env.XCHAIN_GOVERNANCE_CONTRACT = "0x0000000000000000000000000000000000001001"
+loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "0x0000000000000000000000000000000000001002"
+loader.env.XCHAIN_INCENTIVE_CONTRACT = "0x0000000000000000000000000000000000001003"
+
+# SGX configuration
+sgx.debug = true
+sgx.enclave_size = "1G"
+sgx.max_threads = 32
+
+# File system mounts
+fs.mounts = [
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
+  { path = "/usr{{ arch_libdir }}", uri = "file:/usr{{ arch_libdir }}" },
+  { path = "/etc", uri = "file:/etc" },
+  { type = "tmpfs", path = "/tmp" },
+]
+
+# Allowed files
+sgx.allowed_files = [
+  "file:/etc/hosts",
+  "file:/etc/resolv.conf",
+]
+
+# Trusted files (will be part of MRENCLAVE)
+sgx.trusted_files = [
+  "file:{{ entrypoint }}",
+  "file:{{ gramine.libos }}",
+  "file:{{ gramine.runtimedir() }}/",
+  "file:{{ arch_libdir }}/",
+  "file:/usr{{ arch_libdir }}/",
+]
