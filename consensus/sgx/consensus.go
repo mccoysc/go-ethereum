@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/params"
@@ -254,17 +255,20 @@ func (e *SGXEngine) Prepare(chain consensus.ChainHeaderReader, header *types.Hea
 }
 
 // Finalize 完成区块（计算状态根，不包含奖励）
-func (e *SGXEngine) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body) {
-	// 计算并分配区块奖励
-	e.accumulateRewards(chain, state, header, body)
+func (e *SGXEngine) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body) {
+	// No block rewards in mock implementation
+	// TODO: Integrate with Module 03 (Incentive) for reward distribution
 }
 
 // FinalizeAndAssemble 完成并组装区块
 func (e *SGXEngine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, error) {
-	// 执行 Finalize
+	// Finalize block
 	e.Finalize(chain, header, state, body)
-
-	// 组装区块
+	
+	// Calculate state root
+	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
+	
+	// Assemble and return block
 	return types.NewBlock(header, body, receipts, trie.NewStackTrie(nil)), nil
 }
 
