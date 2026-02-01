@@ -23,7 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// PenaltyType 惩罚类型
+// PenaltyType represents the penalty type.
 type PenaltyType uint8
 
 const (
@@ -33,7 +33,7 @@ const (
 	PenaltyMalicious    PenaltyType = 0x04
 )
 
-// PenaltyRecord 惩罚记录
+// PenaltyRecord represents a penalty record.
 type PenaltyRecord struct {
 	NodeAddress common.Address
 	Type        PenaltyType
@@ -44,13 +44,13 @@ type PenaltyRecord struct {
 	Evidence    []byte
 }
 
-// PenaltyManager 惩罚管理器
+// PenaltyManager is the penalty manager.
 type PenaltyManager struct {
 	config  *PenaltyConfig
 	records []*PenaltyRecord
 }
 
-// NewPenaltyManager 创建惩罚管理器
+// NewPenaltyManager creates a new penalty manager.
 func NewPenaltyManager(config *PenaltyConfig) *PenaltyManager {
 	return &PenaltyManager{
 		config:  config,
@@ -58,71 +58,71 @@ func NewPenaltyManager(config *PenaltyConfig) *PenaltyManager {
 	}
 }
 
-// CalculateDoubleSignPenalty 计算双重签名惩罚
+// CalculateDoubleSignPenalty calculates the double signing penalty.
 //
-// 双重签名是最严重的恶意行为之一，罚没节点质押金额的一定比例
+// Double signing is one of the most serious malicious behaviors, resulting in slashing a certain percentage of the node's staked amount.
 //
-// 参数：
-//   - nodeBalance: 节点当前余额
+// Parameters:
+//   - nodeBalance: Node's current balance
 //
-// 返回值：
-//   - 惩罚金额（节点余额的百分比）
+// Returns:
+//   - Penalty amount (percentage of node's balance)
 func (pm *PenaltyManager) CalculateDoubleSignPenalty(nodeBalance *big.Int) *big.Int {
 	penalty := new(big.Int).Mul(nodeBalance, big.NewInt(int64(pm.config.DoubleSignPenaltyPercent)))
 	penalty.Div(penalty, big.NewInt(100))
 	return penalty
 }
 
-// CalculateOfflinePenalty 计算离线惩罚
+// CalculateOfflinePenalty calculates the offline penalty.
 //
-// 节点长期离线会受到惩罚，按小时计算
+// Nodes that remain offline for extended periods will be penalized, calculated on an hourly basis.
 //
-// 参数：
-//   - offlineHours: 离线小时数
+// Parameters:
+//   - offlineHours: Number of hours offline
 //
-// 返回值：
-//   - 惩罚金额（每小时固定金额）
+// Returns:
+//   - Penalty amount (fixed amount per hour)
 func (pm *PenaltyManager) CalculateOfflinePenalty(offlineHours uint64) *big.Int {
 	penalty := new(big.Int).Mul(pm.config.OfflinePenaltyPerHour, big.NewInt(int64(offlineHours)))
 	return penalty
 }
 
-// CalculateInvalidBlockPenalty 计算无效区块惩罚
+// CalculateInvalidBlockPenalty calculates the invalid block penalty.
 //
-// 生产无效区块会受到固定金额的惩罚
+// Producing invalid blocks will result in a fixed penalty amount.
 //
-// 返回值：
-//   - 惩罚金额（固定金额）
+// Returns:
+//   - Penalty amount (fixed amount)
 func (pm *PenaltyManager) CalculateInvalidBlockPenalty() *big.Int {
 	return new(big.Int).Set(pm.config.InvalidBlockPenalty)
 }
 
-// CalculateMaliciousPenalty 计算恶意行为惩罚
+// CalculateMaliciousPenalty calculates the malicious behavior penalty.
 //
-// 其他恶意行为（如数据篡改、拒绝服务攻击等）会受到严厉惩罚
+// Other malicious behaviors (such as data tampering, denial of service attacks, etc.) will result in severe penalties.
 //
-// 参数：
-//   - nodeBalance: 节点当前余额
+// Parameters:
+//   - nodeBalance: Node's current balance
 //
-// 返回值：
-//   - 惩罚金额（节点余额的百分比，可能是全部）
+// Returns:
+//   - Penalty amount (percentage of node's balance, potentially all of it)
 func (pm *PenaltyManager) CalculateMaliciousPenalty(nodeBalance *big.Int) *big.Int {
 	penalty := new(big.Int).Mul(nodeBalance, big.NewInt(int64(pm.config.MaliciousPenaltyPercent)))
 	penalty.Div(penalty, big.NewInt(100))
 	return penalty
 }
 
-// CalculatePenalty 计算惩罚金额（通用方法）
+// CalculatePenalty calculates the penalty amount (generic method).
 //
-// 根据惩罚类型和相关信息计算惩罚金额
+// Calculates the penalty amount based on the penalty type and related information.
 //
-// 参数：
-//   - penaltyType: 惩罚类型
-//   - nodeBalance: 节点余额
-//   - additionalInfo: 额外信息（如离线小时数）
+// Parameters:
+//   - penaltyType: Penalty type
+//   - nodeBalance: Node balance
+//   - additionalInfo: Additional information (such as offline hours)
 //
-// 返回值：
-//   - 惩罚金额
+// Returns:
+//   - Penalty amount
 func (pm *PenaltyManager) CalculatePenalty(
 	penaltyType PenaltyType,
 	nodeBalance *big.Int,
@@ -150,12 +150,12 @@ func (pm *PenaltyManager) CalculatePenalty(
 	}
 }
 
-// RecordPenalty 记录惩罚
+// RecordPenalty records a penalty.
 func (pm *PenaltyManager) RecordPenalty(record *PenaltyRecord) {
 	pm.records = append(pm.records, record)
 }
 
-// GetPenaltyHistory 获取节点的惩罚历史
+// GetPenaltyHistory retrieves the node's penalty history.
 func (pm *PenaltyManager) GetPenaltyHistory(addr common.Address) []*PenaltyRecord {
 	var history []*PenaltyRecord
 	for _, record := range pm.records {
@@ -166,7 +166,7 @@ func (pm *PenaltyManager) GetPenaltyHistory(addr common.Address) []*PenaltyRecor
 	return history
 }
 
-// GetTotalPenalty 获取节点的总惩罚金额
+// GetTotalPenalty retrieves the node's total penalty amount.
 func (pm *PenaltyManager) GetTotalPenalty(addr common.Address) *big.Int {
 	total := big.NewInt(0)
 	for _, record := range pm.records {
@@ -177,7 +177,7 @@ func (pm *PenaltyManager) GetTotalPenalty(addr common.Address) *big.Int {
 	return total
 }
 
-// GetPenaltyCount 获取节点的惩罚次数
+// GetPenaltyCount retrieves the node's penalty count.
 func (pm *PenaltyManager) GetPenaltyCount(addr common.Address) int {
 	count := 0
 	for _, record := range pm.records {
@@ -188,7 +188,7 @@ func (pm *PenaltyManager) GetPenaltyCount(addr common.Address) int {
 	return count
 }
 
-// GetPenaltyByType 获取节点特定类型的惩罚次数
+// GetPenaltyByType retrieves the node's penalty count for a specific type.
 func (pm *PenaltyManager) GetPenaltyByType(addr common.Address, penaltyType PenaltyType) int {
 	count := 0
 	for _, record := range pm.records {

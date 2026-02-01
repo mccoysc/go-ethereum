@@ -23,7 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// CompetitionDimension 竞争维度
+// CompetitionDimension represents the competition dimension.
 type CompetitionDimension uint8
 
 const (
@@ -33,7 +33,7 @@ const (
 	DimensionServiceQuality CompetitionDimension = 0x04
 )
 
-// NodeMetrics 节点指标
+// NodeMetrics represents the node metrics.
 type NodeMetrics struct {
 	Address        common.Address
 	Reputation     uint64
@@ -42,7 +42,7 @@ type NodeMetrics struct {
 	ServiceQuality uint64
 }
 
-// CompetitionManager 竞争管理器
+// CompetitionManager is the competition manager.
 type CompetitionManager struct {
 	config             *CompetitionConfig
 	reputationMgr      *ReputationManager
@@ -50,7 +50,7 @@ type CompetitionManager struct {
 	blockQualityScorer *BlockQualityScorer
 }
 
-// NewCompetitionManager 创建竞争管理器
+// NewCompetitionManager creates a new competition manager.
 func NewCompetitionManager(
 	config *CompetitionConfig,
 	reputationMgr *ReputationManager,
@@ -65,23 +65,23 @@ func NewCompetitionManager(
 	}
 }
 
-// CalculateComprehensiveScore 计算综合得分
+// CalculateComprehensiveScore calculates the comprehensive score.
 //
-// 综合得分基于四个维度：
-// 1. 声誉得分（权重 30%）
-// 2. 在线率得分（权重 25%）
-// 3. 区块质量得分（权重 25%）
-// 4. 服务质量得分（权重 20%）
+// The comprehensive score is based on four dimensions:
+// 1. Reputation score (weight 30%)
+// 2. Uptime ratio score (weight 25%)
+// 3. Block quality score (weight 25%)
+// 4. Service quality score (weight 20%)
 //
-// 参数：
-//   - metrics: 节点指标
+// Parameters:
+//   - metrics: Node metrics
 //
-// 返回值：
-//   - 综合得分（0-100）
+// Returns:
+//   - Comprehensive score (0-100)
 func (cm *CompetitionManager) CalculateComprehensiveScore(metrics *NodeMetrics) uint64 {
 	score := uint64(0)
 
-	// 声誉得分（归一化到 0-100）
+	// Reputation score (normalized to 0-100)
 	normalizedReputation := metrics.Reputation
 	if normalizedReputation > 100 {
 		normalizedReputation = 100
@@ -89,30 +89,30 @@ func (cm *CompetitionManager) CalculateComprehensiveScore(metrics *NodeMetrics) 
 	reputationScore := normalizedReputation * uint64(cm.config.ReputationWeight*100) / 100
 	score += reputationScore
 
-	// 在线率得分（0-100）
+	// Uptime ratio score (0-100)
 	uptimeScore := uint64(metrics.UptimeRatio*100) * uint64(cm.config.UptimeWeight*100) / 100
 	score += uptimeScore
 
-	// 区块质量得分（0-100）
+	// Block quality score (0-100)
 	qualityScore := metrics.BlockQuality * uint64(cm.config.BlockQualityWeight*100) / 100
 	score += qualityScore
 
-	// 服务质量得分（0-100）
+	// Service quality score (0-100)
 	serviceScore := metrics.ServiceQuality * uint64(cm.config.ServiceQualityWeight*100) / 100
 	score += serviceScore
 
 	return score
 }
 
-// RankNodes 对节点进行排名
+// RankNodes ranks the nodes.
 //
-// 根据综合得分对节点进行排名，得分高的排在前面
+// Ranks nodes based on their comprehensive score, with higher scores ranked first.
 //
-// 参数：
-//   - nodes: 节点指标列表
+// Parameters:
+//   - nodes: List of node metrics
 //
-// 返回值：
-//   - 排序后的节点列表
+// Returns:
+//   - Sorted list of nodes
 func (cm *CompetitionManager) RankNodes(nodes []*NodeMetrics) []*NodeMetrics {
 	type scoredNode struct {
 		metrics *NodeMetrics
@@ -127,12 +127,12 @@ func (cm *CompetitionManager) RankNodes(nodes []*NodeMetrics) []*NodeMetrics {
 		}
 	}
 
-	// 按得分排序（从高到低）
+	// Sort by score (from high to low)
 	sort.Slice(scored, func(i, j int) bool {
 		return scored[i].score > scored[j].score
 	})
 
-	// 返回排序后的节点
+	// Return sorted nodes
 	result := make([]*NodeMetrics, len(nodes))
 	for i, s := range scored {
 		result[i] = s.metrics
@@ -141,17 +141,17 @@ func (cm *CompetitionManager) RankNodes(nodes []*NodeMetrics) []*NodeMetrics {
 	return result
 }
 
-// DistributeRankingRewards 分配排名奖励
+// DistributeRankingRewards distributes ranking rewards.
 //
-// 根据排名分配奖励给前 10 名节点
-// 奖励比例：30%, 20%, 15%, 10%, 10%, 5%, 5%, 3%, 1%, 1%
+// Distributes rewards to the top 10 nodes based on their ranking.
+// Reward ratios: 30%, 20%, 15%, 10%, 10%, 5%, 5%, 3%, 1%, 1%
 //
-// 参数：
-//   - totalReward: 总奖励池
-//   - rankedNodes: 已排名的节点列表
+// Parameters:
+//   - totalReward: Total reward pool
+//   - rankedNodes: List of ranked nodes
 //
-// 返回值：
-//   - 节点地址到奖励金额的映射
+// Returns:
+//   - Mapping from node address to reward amount
 func (cm *CompetitionManager) DistributeRankingRewards(
 	totalReward *big.Int,
 	rankedNodes []*NodeMetrics,
@@ -173,29 +173,29 @@ func (cm *CompetitionManager) DistributeRankingRewards(
 	return rewards
 }
 
-// GetNodeMetrics 获取节点的多维度指标
+// GetNodeMetrics retrieves the node's multi-dimensional metrics.
 //
-// 从各个管理器收集节点的指标数据
+// Collects the node's metric data from various managers.
 //
-// 参数：
-//   - addr: 节点地址
-//   - blockQuality: 区块质量评分
-//   - serviceQuality: 服务质量评分
+// Parameters:
+//   - addr: Node address
+//   - blockQuality: Block quality score
+//   - serviceQuality: Service quality score
 //
-// 返回值：
-//   - 节点指标
+// Returns:
+//   - Node metrics
 func (cm *CompetitionManager) GetNodeMetrics(
 	addr common.Address,
 	blockQuality uint64,
 	serviceQuality uint64,
 ) *NodeMetrics {
-	// 获取声誉分数
+	// Get reputation score
 	reputation := cm.reputationMgr.GetReputationScore(addr)
 	if reputation < 0 {
 		reputation = 0
 	}
 
-	// 获取在线率
+	// Get uptime ratio
 	uptimeRatio := cm.onlineRewardMgr.GetUptimeRatio(addr)
 
 	return &NodeMetrics{
@@ -207,14 +207,14 @@ func (cm *CompetitionManager) GetNodeMetrics(
 	}
 }
 
-// GetTopNodes 获取排名前 N 的节点
+// GetTopNodes retrieves the top N ranked nodes.
 //
-// 参数：
-//   - nodes: 节点指标列表
-//   - n: 返回的节点数量
+// Parameters:
+//   - nodes: List of node metrics
+//   - n: Number of nodes to return
 //
-// 返回值：
-//   - 排名前 N 的节点列表
+// Returns:
+//   - List of top N nodes
 func (cm *CompetitionManager) GetTopNodes(nodes []*NodeMetrics, n int) []*NodeMetrics {
 	ranked := cm.RankNodes(nodes)
 	if len(ranked) > n {

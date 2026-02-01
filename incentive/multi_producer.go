@@ -25,13 +25,13 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// MultiProducerRewardCalculator 多生产者奖励计算器
+// MultiProducerRewardCalculator is the multi-producer reward calculator.
 type MultiProducerRewardCalculator struct {
 	config        *MultiProducerRewardConfig
 	qualityScorer *BlockQualityScorer
 }
 
-// NewMultiProducerRewardCalculator 创建计算器
+// NewMultiProducerRewardCalculator creates a new calculator.
 func NewMultiProducerRewardCalculator(config *MultiProducerRewardConfig, qualityScorer *BlockQualityScorer) *MultiProducerRewardCalculator {
 	return &MultiProducerRewardCalculator{
 		config:        config,
@@ -39,7 +39,7 @@ func NewMultiProducerRewardCalculator(config *MultiProducerRewardConfig, quality
 	}
 }
 
-// BlockCandidate 区块候选
+// BlockCandidate represents a candidate block.
 type BlockCandidate struct {
 	Block        *types.Block
 	Producer     common.Address
@@ -53,7 +53,7 @@ type BlockCandidate struct {
 	Rank         int
 }
 
-// BlockQuality 区块质量详情
+// BlockQuality represents the block quality details.
 type BlockQuality struct {
 	TxCount          uint64
 	BlockSize        uint64
@@ -63,7 +63,7 @@ type BlockQuality struct {
 	RewardMultiplier float64
 }
 
-// CandidateReward 候选区块收益
+// CandidateReward represents the reward for a candidate block.
 type CandidateReward struct {
 	Candidate       *BlockCandidate
 	SpeedRatio      float64
@@ -72,15 +72,15 @@ type CandidateReward struct {
 	Reward          *big.Int
 }
 
-// CalculateRewards 计算多生产者奖励分配
+// CalculateRewards calculates the multi-producer reward distribution.
 //
-// 前三名收益分配机制：
+// Top 3 reward distribution mechanism:
 //
-//	第 1 名: 速度基础奖励 100% × 区块质量倍数
-//	第 2 名: 速度基础奖励  60% × 区块质量倍数
-//	第 3 名: 速度基础奖励  30% × 区块质量倍数
+//	1st place: Speed base reward 100% × block quality multiplier
+//	2nd place: Speed base reward  60% × block quality multiplier
+//	3rd place: Speed base reward  30% × block quality multiplier
 //
-// 重要改进：只有包含新交易的候选区块才能获得收益
+// Important improvement: Only candidate blocks containing new transactions can receive rewards.
 func (c *MultiProducerRewardCalculator) CalculateRewards(
 	candidates []*BlockCandidate,
 	totalFees *big.Int,
@@ -89,12 +89,12 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
 		return nil
 	}
 
-	// 1. 按收到时间排序（确定速度排名）
+	// 1. Sort by received time (determine speed ranking)
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].ReceivedAt.Before(candidates[j].ReceivedAt)
 	})
 
-	// 2. 计算每个候选的质量评分，并检查是否有新交易
+	// 2. Calculate quality score for each candidate and check for new transactions
 	firstCandidateTxSet := make(map[common.Hash]bool)
 	for _, tx := range candidates[0].Block.Transactions() {
 		firstCandidateTxSet[tx.Hash()] = true
@@ -104,7 +104,7 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
 		candidate.Rank = i + 1
 		candidate.Quality = c.qualityScorer.CalculateQuality(candidate.Block)
 
-		// 计算该候选区块包含的新交易数（第一名之外的交易）
+		// Calculate the number of new transactions in this candidate block (transactions not in the first place)
 		if i > 0 {
 			newTxCount := 0
 			for _, tx := range candidate.Block.Transactions() {
@@ -114,12 +114,12 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
 			}
 			candidate.Quality.NewTxCount = uint64(newTxCount)
 		} else {
-			// 第一名的所有交易都是"新"交易
+			// All transactions in the first place are considered "new"
 			candidate.Quality.NewTxCount = candidate.Quality.TxCount
 		}
 	}
 
-	// 3. 计算收益（只有包含新交易的候选才能获得收益）
+	// 3. Calculate rewards (only candidates with new transactions can receive rewards)
 	rewards := make([]*CandidateReward, 0, len(candidates))
 	totalMultiplier := 0.0
 
@@ -128,16 +128,16 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
 			break
 		}
 
-		// 关键改进：如果后续候选没有新交易，不分配收益
+		// Key improvement: If a subsequent candidate has no new transactions, do not distribute rewards
 		if i > 0 && candidate.Quality.NewTxCount == 0 {
-			// 该候选的所有交易都已被第一名包含，不分配收益
+			// All transactions in this candidate have already been included in the first place, no reward distribution
 			continue
 		}
 
 		speedRatio := c.config.SpeedRewardRatios[i]
 		qualityMulti := candidate.Quality.RewardMultiplier
 
-		// 对于后续候选，收益按新交易比例调整
+		// For subsequent candidates, adjust rewards proportionally to new transactions
 		if i > 0 && candidate.Quality.TxCount > 0 {
 			newTxRatio := float64(candidate.Quality.NewTxCount) / float64(candidate.Quality.TxCount)
 			qualityMulti *= newTxRatio
@@ -155,7 +155,7 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
 		totalMultiplier += finalMulti
 	}
 
-	// 4. 按比例分配总交易费
+	// 4. Distribute total transaction fees proportionally
 	if totalMultiplier > 0 {
 		for _, reward := range rewards {
 			share := reward.FinalMultiplier / totalMultiplier
@@ -170,11 +170,11 @@ func (c *MultiProducerRewardCalculator) CalculateRewards(
 	return rewards
 }
 
-// calculateScores 计算综合得分
+// calculateScores calculates the comprehensive score.
 func (c *MultiProducerRewardCalculator) calculateScores(candidates []*BlockCandidate) []uint64 {
 	scores := make([]uint64, len(candidates))
 
-	// 找出最早时间戳
+	// Find the earliest timestamp
 	minTimestamp := candidates[0].Timestamp
 	for _, cand := range candidates {
 		if cand.Timestamp < minTimestamp {
@@ -183,14 +183,14 @@ func (c *MultiProducerRewardCalculator) calculateScores(candidates []*BlockCandi
 	}
 
 	for i, cand := range candidates {
-		// 质量得分（0-100）
+		// Quality score (0-100)
 		qualityScore := cand.QualityScore
 
-		// 时间得分（越早越高）
+		// Time score (earlier is better)
 		timeDiff := cand.Timestamp - minTimestamp
 		timeScore := uint64(100)
 		if timeDiff > 0 {
-			// 每延迟 100ms 扣 1 分
+			// Deduct 1 point for every 100ms delay
 			penalty := timeDiff / 100
 			if penalty > 100 {
 				penalty = 100
@@ -198,7 +198,7 @@ func (c *MultiProducerRewardCalculator) calculateScores(candidates []*BlockCandi
 			timeScore = 100 - penalty
 		}
 
-		// 综合得分
+		// Comprehensive score
 		scores[i] = (qualityScore*c.config.QualityScoreWeight +
 			timeScore*c.config.TimestampWeight) / 100
 	}

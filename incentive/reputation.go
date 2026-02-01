@@ -23,14 +23,14 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// ReputationManager 声誉管理器
+// ReputationManager is the reputation manager.
 type ReputationManager struct {
 	config      *ReputationConfig
 	mu          sync.RWMutex
 	reputations map[common.Address]*NodeReputation
 }
 
-// NodeReputation 节点声誉
+// NodeReputation represents the node's reputation.
 type NodeReputation struct {
 	Address         common.Address
 	Score           int64
@@ -46,7 +46,7 @@ type NodeReputation struct {
 	LastOnlineCheck time.Time
 }
 
-// NewReputationManager 创建声誉管理器
+// NewReputationManager creates a new reputation manager.
 func NewReputationManager(config *ReputationConfig) *ReputationManager {
 	return &ReputationManager{
 		config:      config,
@@ -54,7 +54,7 @@ func NewReputationManager(config *ReputationConfig) *ReputationManager {
 	}
 }
 
-// GetReputation 获取节点声誉
+// GetReputation retrieves the node's reputation.
 func (rm *ReputationManager) GetReputation(addr common.Address) *NodeReputation {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
@@ -70,17 +70,17 @@ func (rm *ReputationManager) GetReputation(addr common.Address) *NodeReputation 
 	return rep
 }
 
-// RecordBlockSuccess 记录成功出块
+// RecordBlockSuccess records a successful block production.
 func (rm *ReputationManager) RecordBlockSuccess(addr common.Address) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	rep := rm.getOrCreateReputation(addr)
 
-	// 应用衰减
+	// Apply decay
 	rm.applyDecay(rep)
 
-	// 增加声誉
+	// Increase reputation
 	rep.Score += rm.config.SuccessBonus
 	if rep.Score > rm.config.MaxReputation {
 		rep.Score = rm.config.MaxReputation
@@ -91,17 +91,17 @@ func (rm *ReputationManager) RecordBlockSuccess(addr common.Address) {
 	rep.LastUpdateTime = time.Now()
 }
 
-// RecordBlockFailure 记录出块失败
+// RecordBlockFailure records a block production failure.
 func (rm *ReputationManager) RecordBlockFailure(addr common.Address) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	rep := rm.getOrCreateReputation(addr)
 
-	// 应用衰减
+	// Apply decay
 	rm.applyDecay(rep)
 
-	// 减少声誉
+	// Decrease reputation
 	rep.Score -= rm.config.FailurePenalty
 	if rep.Score < rm.config.MinReputation {
 		rep.Score = rm.config.MinReputation
@@ -112,14 +112,14 @@ func (rm *ReputationManager) RecordBlockFailure(addr common.Address) {
 	rep.LastUpdateTime = time.Now()
 }
 
-// RecordMaliciousBehavior 记录恶意行为
+// RecordMaliciousBehavior records malicious behavior.
 func (rm *ReputationManager) RecordMaliciousBehavior(addr common.Address) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	rep := rm.getOrCreateReputation(addr)
 
-	// 大幅减少声誉
+	// Significantly decrease reputation
 	rep.Score -= rm.config.MaliciousPenalty
 	if rep.Score < rm.config.MinReputation {
 		rep.Score = rm.config.MinReputation
@@ -130,24 +130,24 @@ func (rm *ReputationManager) RecordMaliciousBehavior(addr common.Address) {
 	rep.LastUpdateTime = time.Now()
 }
 
-// RecordOffline 记录节点离线
+// RecordOffline records node offline status.
 //
-// 基于 ARCHITECTURE.md 的声誉衰减机制：
-// - 每小时离线扣除 10 分声誉
-// - 累积惩罚次数超过 MaxPenaltyCount 将被排除出网络
+// Based on the reputation decay mechanism in ARCHITECTURE.md:
+// - 10 reputation points are deducted per hour offline
+// - Nodes exceeding MaxPenaltyCount accumulated penalties will be excluded from the network
 func (rm *ReputationManager) RecordOffline(addr common.Address, duration time.Duration) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	rep := rm.getOrCreateReputation(addr)
 
-	// 计算离线小时数
+	// Calculate offline hours
 	hours := uint64(duration.Hours())
 	if hours == 0 && duration > 0 {
 		hours = 1
 	}
 
-	// 应用离线惩罚
+	// Apply offline penalty
 	penalty := int64(hours * uint64(rm.config.OfflinePenaltyPerHour))
 	rep.Score -= penalty
 	if rep.Score < rm.config.MinReputation {
@@ -160,24 +160,24 @@ func (rm *ReputationManager) RecordOffline(addr common.Address, duration time.Du
 	rep.LastOnlineCheck = time.Now()
 }
 
-// RecordOnline 记录节点在线
+// RecordOnline records node online status.
 //
-// 基于 ARCHITECTURE.md 的声誉恢复机制：
-// - 每小时在线恢复 50 分声誉（是离线惩罚的 5 倍）
-// - 帮助节点快速恢复声誉，鼓励长期稳定在线
+// Based on the reputation recovery mechanism in ARCHITECTURE.md:
+// - 50 reputation points are recovered per hour online (5x the offline penalty)
+// - Helps nodes quickly recover reputation, encouraging long-term stable online presence
 func (rm *ReputationManager) RecordOnline(addr common.Address, duration time.Duration) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
 	rep := rm.getOrCreateReputation(addr)
 
-	// 计算在线小时数
+	// Calculate online hours
 	hours := uint64(duration.Hours())
 	if hours == 0 && duration > 0 {
 		hours = 1
 	}
 
-	// 应用在线恢复奖励
+	// Apply online recovery reward
 	recovery := int64(hours * uint64(rm.config.RecoveryPerHour))
 	rep.Score += recovery
 	if rep.Score > rm.config.MaxReputation {
@@ -189,24 +189,24 @@ func (rm *ReputationManager) RecordOnline(addr common.Address, duration time.Dur
 	rep.LastOnlineCheck = time.Now()
 }
 
-// IsExcluded 检查节点是否因惩罚过多而被排除
+// IsExcluded checks if the node is excluded due to excessive penalties.
 func (rm *ReputationManager) IsExcluded(addr common.Address) bool {
 	rep := rm.GetReputation(addr)
 	return rep.PenaltyCount >= uint64(rm.config.MaxPenaltyCount)
 }
 
-// GetReputationScore 获取声誉分数
+// GetReputationScore retrieves the reputation score.
 func (rm *ReputationManager) GetReputationScore(addr common.Address) int64 {
 	rep := rm.GetReputation(addr)
 	return rep.Score
 }
 
-// IsReputationSufficient 检查声誉是否足够
+// IsReputationSufficient checks if the reputation is sufficient.
 func (rm *ReputationManager) IsReputationSufficient(addr common.Address, threshold int64) bool {
 	return rm.GetReputationScore(addr) >= threshold
 }
 
-// getOrCreateReputation 获取或创建声誉记录
+// getOrCreateReputation gets or creates a reputation record.
 func (rm *ReputationManager) getOrCreateReputation(addr common.Address) *NodeReputation {
 	rep, ok := rm.reputations[addr]
 	if !ok {
@@ -223,7 +223,7 @@ func (rm *ReputationManager) getOrCreateReputation(addr common.Address) *NodeRep
 	return rep
 }
 
-// applyDecay 应用声誉衰减
+// applyDecay applies reputation decay.
 func (rm *ReputationManager) applyDecay(rep *NodeReputation) {
 	elapsed := time.Since(rep.LastDecayTime)
 	periods := int(elapsed / (24 * time.Hour))

@@ -24,14 +24,14 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// OnlineRewardManager 在线奖励管理器
+// OnlineRewardManager is the online reward manager.
 type OnlineRewardManager struct {
 	config     *OnlineRewardConfig
 	mu         sync.RWMutex
 	nodeStatus map[common.Address]*NodeOnlineStatus
 }
 
-// NodeOnlineStatus 节点在线状态
+// NodeOnlineStatus represents the node's online status.
 type NodeOnlineStatus struct {
 	Address           common.Address
 	LastHeartbeat     time.Time
@@ -44,7 +44,7 @@ type NodeOnlineStatus struct {
 	ClaimedReward     *big.Int
 }
 
-// NewOnlineRewardManager 创建在线奖励管理器
+// NewOnlineRewardManager creates a new online reward manager.
 func NewOnlineRewardManager(config *OnlineRewardConfig) *OnlineRewardManager {
 	return &OnlineRewardManager{
 		config:     config,
@@ -52,7 +52,7 @@ func NewOnlineRewardManager(config *OnlineRewardConfig) *OnlineRewardManager {
 	}
 }
 
-// RecordHeartbeat 记录心跳
+// RecordHeartbeat records a heartbeat.
 func (orm *OnlineRewardManager) RecordHeartbeat(addr common.Address) {
 	orm.mu.Lock()
 	defer orm.mu.Unlock()
@@ -60,15 +60,15 @@ func (orm *OnlineRewardManager) RecordHeartbeat(addr common.Address) {
 	status := orm.getOrCreateStatus(addr)
 	now := time.Now()
 
-	// 检查是否从离线恢复
+	// Check if recovering from offline
 	if time.Since(status.LastHeartbeat) > orm.config.HeartbeatTimeout {
-		// 记录离线时间
+		// Record offline time
 		if !status.LastHeartbeat.IsZero() {
 			status.TotalOfflineTime += time.Since(status.LastHeartbeat)
 		}
 		status.OnlineStartTime = now
 	} else {
-		// 累计在线时间
+		// Accumulate online time
 		if !status.LastHeartbeat.IsZero() {
 			status.TotalOnlineTime += time.Since(status.LastHeartbeat)
 		}
@@ -78,7 +78,7 @@ func (orm *OnlineRewardManager) RecordHeartbeat(addr common.Address) {
 	status.HeartbeatCount++
 }
 
-// CalculateReward 计算在线奖励
+// CalculateReward calculates the online reward.
 func (orm *OnlineRewardManager) CalculateReward(addr common.Address) *big.Int {
 	orm.mu.RLock()
 	defer orm.mu.RUnlock()
@@ -88,12 +88,12 @@ func (orm *OnlineRewardManager) CalculateReward(addr common.Address) *big.Int {
 		return big.NewInt(0)
 	}
 
-	// 检查最小在线时长
+	// Check minimum online duration
 	if status.TotalOnlineTime < orm.config.MinOnlineDuration {
 		return big.NewInt(0)
 	}
 
-	// 计算在线率
+	// Calculate uptime ratio
 	totalTime := status.TotalOnlineTime + status.TotalOfflineTime
 	if totalTime == 0 {
 		return big.NewInt(0)
@@ -104,18 +104,18 @@ func (orm *OnlineRewardManager) CalculateReward(addr common.Address) *big.Int {
 		return big.NewInt(0)
 	}
 
-	// 计算奖励
+	// Calculate reward
 	hours := int64(status.TotalOnlineTime / time.Hour)
 	reward := new(big.Int).Mul(orm.config.HourlyReward, big.NewInt(hours))
 
-	// 应用在线率加成
+	// Apply uptime ratio bonus
 	bonus := new(big.Int).Mul(reward, big.NewInt(int64(uptimeRatio*100)))
 	bonus.Div(bonus, big.NewInt(100))
 
 	return bonus
 }
 
-// GetUptimeRatio 获取在线率
+// GetUptimeRatio retrieves the uptime ratio.
 func (orm *OnlineRewardManager) GetUptimeRatio(addr common.Address) float64 {
 	orm.mu.RLock()
 	defer orm.mu.RUnlock()
@@ -133,7 +133,7 @@ func (orm *OnlineRewardManager) GetUptimeRatio(addr common.Address) float64 {
 	return float64(status.TotalOnlineTime) / float64(totalTime)
 }
 
-// IsOnline 检查节点是否在线
+// IsOnline checks if the node is online.
 func (orm *OnlineRewardManager) IsOnline(addr common.Address) bool {
 	orm.mu.RLock()
 	defer orm.mu.RUnlock()
@@ -146,7 +146,7 @@ func (orm *OnlineRewardManager) IsOnline(addr common.Address) bool {
 	return time.Since(status.LastHeartbeat) <= orm.config.HeartbeatTimeout
 }
 
-// GetOnlineTime 获取在线时长
+// GetOnlineTime retrieves the online duration.
 func (orm *OnlineRewardManager) GetOnlineTime(addr common.Address) time.Duration {
 	orm.mu.RLock()
 	defer orm.mu.RUnlock()
@@ -159,7 +159,7 @@ func (orm *OnlineRewardManager) GetOnlineTime(addr common.Address) time.Duration
 	return status.TotalOnlineTime
 }
 
-// GetOfflineTime 获取离线时长
+// GetOfflineTime retrieves the offline duration.
 func (orm *OnlineRewardManager) GetOfflineTime(addr common.Address) time.Duration {
 	orm.mu.RLock()
 	defer orm.mu.RUnlock()
@@ -172,7 +172,7 @@ func (orm *OnlineRewardManager) GetOfflineTime(addr common.Address) time.Duratio
 	return status.TotalOfflineTime
 }
 
-// getOrCreateStatus 获取或创建状态
+// getOrCreateStatus gets or creates a status.
 func (orm *OnlineRewardManager) getOrCreateStatus(addr common.Address) *NodeOnlineStatus {
 	status, ok := orm.nodeStatus[addr]
 	if !ok {

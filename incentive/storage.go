@@ -38,19 +38,19 @@ var (
 	blockQualityPrefix    = []byte("blockQuality")
 )
 
-// StorageManager 状态存储管理器
+// StorageManager is the state storage manager.
 type StorageManager struct {
 	contractAddr common.Address
 }
 
-// NewStorageManager 创建存储管理器
+// NewStorageManager creates a new storage manager.
 func NewStorageManager(contractAddr common.Address) *StorageManager {
 	return &StorageManager{
 		contractAddr: contractAddr,
 	}
 }
 
-// SaveReputation 保存节点声誉到 StateDB
+// SaveReputation saves the node's reputation to StateDB.
 func (sm *StorageManager) SaveReputation(stateDB *state.StateDB, addr common.Address, rep *NodeReputation) error {
 	key := sm.makeKey(reputationPrefix, addr.Bytes())
 
@@ -77,7 +77,7 @@ func (sm *StorageManager) SaveReputation(stateDB *state.StateDB, addr common.Add
 	return nil
 }
 
-// LoadReputation 从 StateDB 加载节点声誉
+// LoadReputation loads the node's reputation from StateDB.
 func (sm *StorageManager) LoadReputation(stateDB *state.StateDB, addr common.Address) (*NodeReputation, error) {
 	key := sm.makeKey(reputationPrefix, addr.Bytes())
 	value := stateDB.GetState(sm.contractAddr, key)
@@ -107,7 +107,7 @@ func (sm *StorageManager) LoadReputation(stateDB *state.StateDB, addr common.Add
 	}, nil
 }
 
-// SaveOnlineStatus 保存在线状态到 StateDB
+// SaveOnlineStatus saves the online status to StateDB.
 func (sm *StorageManager) SaveOnlineStatus(stateDB *state.StateDB, addr common.Address, status *NodeOnlineStatus) error {
 	key := sm.makeKey(onlineStatusPrefix, addr.Bytes())
 
@@ -131,7 +131,7 @@ func (sm *StorageManager) SaveOnlineStatus(stateDB *state.StateDB, addr common.A
 	return nil
 }
 
-// LoadOnlineStatus 从 StateDB 加载在线状态
+// LoadOnlineStatus loads the online status from StateDB.
 func (sm *StorageManager) LoadOnlineStatus(stateDB *state.StateDB, addr common.Address) (*NodeOnlineStatus, error) {
 	key := sm.makeKey(onlineStatusPrefix, addr.Bytes())
 	value := stateDB.GetState(sm.contractAddr, key)
@@ -158,9 +158,9 @@ func (sm *StorageManager) LoadOnlineStatus(stateDB *state.StateDB, addr common.A
 	}, nil
 }
 
-// SavePenaltyRecord 保存惩罚记录到 StateDB
+// SavePenaltyRecord saves the penalty record to StateDB.
 func (sm *StorageManager) SavePenaltyRecord(stateDB *state.StateDB, record *PenaltyRecord) error {
-	// 使用组合键：地址 + 时间戳
+	// Use composite key: address + timestamp
 	keyData := append(record.NodeAddress.Bytes(), sm.uint64ToBytes(uint64(record.Timestamp.Unix()))...)
 	key := sm.makeKey(penaltyRecordPrefix, keyData)
 
@@ -182,7 +182,7 @@ func (sm *StorageManager) SavePenaltyRecord(stateDB *state.StateDB, record *Pena
 	return nil
 }
 
-// SaveBlockQuality 保存区块质量评分到 StateDB
+// SaveBlockQuality saves the block quality score to StateDB.
 func (sm *StorageManager) SaveBlockQuality(stateDB *state.StateDB, blockHash common.Hash, quality *BlockQuality) error {
 	key := sm.makeKey(blockQualityPrefix, blockHash.Bytes())
 
@@ -204,7 +204,7 @@ func (sm *StorageManager) SaveBlockQuality(stateDB *state.StateDB, blockHash com
 	return nil
 }
 
-// LoadBlockQuality 从 StateDB 加载区块质量评分
+// LoadBlockQuality loads the block quality score from StateDB.
 func (sm *StorageManager) LoadBlockQuality(stateDB *state.StateDB, blockHash common.Hash) (*BlockQuality, error) {
 	key := sm.makeKey(blockQualityPrefix, blockHash.Bytes())
 	value := stateDB.GetState(sm.contractAddr, key)
@@ -228,20 +228,20 @@ func (sm *StorageManager) LoadBlockQuality(stateDB *state.StateDB, blockHash com
 	}, nil
 }
 
-// makeKey 生成存储键
+// makeKey generates a storage key.
 func (sm *StorageManager) makeKey(prefix []byte, data []byte) common.Hash {
 	combined := append(prefix, data...)
 	return crypto.Keccak256Hash(combined)
 }
 
-// uint64ToBytes 将 uint64 转换为字节数组
+// uint64ToBytes converts uint64 to byte array.
 func (sm *StorageManager) uint64ToBytes(val uint64) []byte {
 	buf := make([]byte, 8)
 	binary.BigEndian.PutUint64(buf, val)
 	return buf
 }
 
-// float64ToBytes 将 float64 转换为字节数组
+// float64ToBytes converts float64 to byte array.
 func (sm *StorageManager) float64ToBytes(val float64) []byte {
 	buf := new(bytes.Buffer)
 	if err := binary.Write(buf, binary.BigEndian, val); err != nil {
@@ -250,7 +250,7 @@ func (sm *StorageManager) float64ToBytes(val float64) []byte {
 	return buf.Bytes()
 }
 
-// bytesToFloat64 将字节数组转换为 float64
+// bytesToFloat64 converts byte array to float64.
 func (sm *StorageManager) bytesToFloat64(b []byte) float64 {
 	var val float64
 	buf := bytes.NewReader(b)

@@ -21,41 +21,41 @@ import (
 	"time"
 )
 
-// RewardConfig 奖励配置
+// RewardConfig represents the reward configuration.
 type RewardConfig struct {
-	// 基础区块奖励
+	// BaseBlockReward is the base block reward
 	BaseBlockReward *big.Int
 	
-	// 奖励衰减周期（区块数）
+	// DecayPeriod is the reward decay period (in blocks)
 	DecayPeriod uint64
 	
-	// 衰减率（百分比）
+	// DecayRate is the decay rate (percentage)
 	DecayRate uint64
 	
-	// 最小区块奖励
+	// MinBlockReward is the minimum block reward
 	MinBlockReward *big.Int
 	
-	// 多生产者奖励配置
+	// MultiProducerConfig is the multi-producer reward configuration
 	MultiProducerConfig *MultiProducerRewardConfig
 	
-	// 在线奖励配置
+	// OnlineRewardConfig is the online reward configuration
 	OnlineRewardConfig *OnlineRewardConfig
 	
-	// 声誉配置
+	// ReputationConfig is the reputation configuration
 	ReputationConfig *ReputationConfig
 	
-	// 惩罚配置
+	// PenaltyConfig is the penalty configuration
 	PenaltyConfig *PenaltyConfig
 	
-	// 竞争配置
+	// CompetitionConfig is the competition configuration
 	CompetitionConfig *CompetitionConfig
 }
 
-// DefaultRewardConfig 默认奖励配置
+// DefaultRewardConfig returns the default reward configuration.
 func DefaultRewardConfig() *RewardConfig {
 	return &RewardConfig{
 		BaseBlockReward:     big.NewInt(2e18),  // 2 X
-		DecayPeriod:         4_000_000,         // 约 1 年
+		DecayPeriod:         4_000_000,         // approximately 1 year
 		DecayRate:           10,                // 10%
 		MinBlockReward:      big.NewInt(1e17),  // 0.1 X
 		MultiProducerConfig: DefaultMultiProducerRewardConfig(),
@@ -66,54 +66,54 @@ func DefaultRewardConfig() *RewardConfig {
 	}
 }
 
-// MultiProducerRewardConfig 多生产者奖励配置
+// MultiProducerRewardConfig represents the multi-producer reward configuration.
 type MultiProducerRewardConfig struct {
-	// 速度基础奖励比例（第1名=100%, 第2名=60%, 第3名=30%）
+	// SpeedRewardRatios defines the speed-based reward ratios (1st=100%, 2nd=60%, 3rd=30%)
 	SpeedRewardRatios []float64
 	
-	// 候选区块收集窗口（收到第一个区块后等待多久收集其他候选）
+	// CandidateWindow is the candidate block collection window (how long to wait for other candidates after receiving the first block)
 	CandidateWindow time.Duration
 	
-	// 最大候选区块数
+	// MaxCandidates is the maximum number of candidate blocks
 	MaxCandidates int
 	
-	// 质量评分权重
+	// QualityScoreWeight is the quality score weight
 	QualityScoreWeight uint64
 	
-	// 时间戳权重
+	// TimestampWeight is the timestamp weight
 	TimestampWeight uint64
 }
 
-// DefaultMultiProducerRewardConfig 默认多生产者配置
+// DefaultMultiProducerRewardConfig returns the default multi-producer configuration.
 func DefaultMultiProducerRewardConfig() *MultiProducerRewardConfig {
 	return &MultiProducerRewardConfig{
 		SpeedRewardRatios:  []float64{1.0, 0.6, 0.3}, // 100%, 60%, 30%
-		CandidateWindow:    500 * time.Millisecond,   // 500ms 窗口
+		CandidateWindow:    500 * time.Millisecond,   // 500ms window
 		MaxCandidates:      3,
 		QualityScoreWeight: 60,
 		TimestampWeight:    40,
 	}
 }
 
-// OnlineRewardConfig 在线奖励配置
+// OnlineRewardConfig represents the online reward configuration.
 type OnlineRewardConfig struct {
-	// 心跳间隔
+	// HeartbeatInterval is the heartbeat interval
 	HeartbeatInterval time.Duration
 	
-	// 心跳超时（标记为离线）
+	// HeartbeatTimeout is the heartbeat timeout (after which a node is marked as offline)
 	HeartbeatTimeout time.Duration
 	
-	// 每小时在线奖励
+	// HourlyReward is the online reward per hour
 	HourlyReward *big.Int
 	
-	// 最小在线时长要求（小时）
+	// MinOnlineDuration is the minimum online duration requirement (in hours)
 	MinOnlineDuration time.Duration
 	
-	// 最小在线率要求（百分比）
+	// MinUptimeRatio is the minimum uptime ratio requirement (percentage)
 	MinUptimeRatio float64
 }
 
-// DefaultOnlineRewardConfig 默认在线奖励配置
+// DefaultOnlineRewardConfig returns the default online reward configuration.
 func DefaultOnlineRewardConfig() *OnlineRewardConfig {
 	return &OnlineRewardConfig{
 		HeartbeatInterval: 30 * time.Second,
@@ -124,40 +124,40 @@ func DefaultOnlineRewardConfig() *OnlineRewardConfig {
 	}
 }
 
-// ReputationConfig 声誉配置
+// ReputationConfig represents the reputation configuration.
 type ReputationConfig struct {
-	// 初始声誉值
+	// InitialReputation is the initial reputation value
 	InitialReputation int64
 	
-	// 最大声誉值
+	// MaxReputation is the maximum reputation value
 	MaxReputation int64
 	
-	// 最小声誉值
+	// MinReputation is the minimum reputation value
 	MinReputation int64
 	
-	// 成功出块奖励
+	// SuccessBonus is the reward for successful block production
 	SuccessBonus int64
 	
-	// 出块失败惩罚
+	// FailurePenalty is the penalty for block production failure
 	FailurePenalty int64
 	
-	// 恶意行为惩罚
+	// MaliciousPenalty is the penalty for malicious behavior
 	MaliciousPenalty int64
 	
-	// 离线惩罚（每小时）
+	// OfflinePenaltyPerHour is the offline penalty (per hour)
 	OfflinePenaltyPerHour int64
 	
-	// 恢复速度（每小时）
+	// RecoveryPerHour is the recovery rate (per hour)
 	RecoveryPerHour int64
 	
-	// 最大惩罚次数（超过后排除）
+	// MaxPenaltyCount is the maximum penalty count (after which the node is excluded)
 	MaxPenaltyCount int
 	
-	// 衰减率（每 24 小时）
+	// DecayRate is the decay rate (per 24 hours)
 	DecayRate float64
 }
 
-// DefaultReputationConfig 默认声誉配置
+// DefaultReputationConfig returns the default reputation configuration.
 func DefaultReputationConfig() *ReputationConfig {
 	return &ReputationConfig{
 		InitialReputation:     1000,
@@ -173,22 +173,22 @@ func DefaultReputationConfig() *ReputationConfig {
 	}
 }
 
-// PenaltyConfig 惩罚配置
+// PenaltyConfig represents the penalty configuration.
 type PenaltyConfig struct {
-	// 双重签名惩罚（余额的百分比）
+	// DoubleSignPenaltyPercent is the double signing penalty (percentage of balance)
 	DoubleSignPenaltyPercent int
 	
-	// 离线惩罚（每小时）
+	// OfflinePenaltyPerHour is the offline penalty (per hour)
 	OfflinePenaltyPerHour *big.Int
 	
-	// 无效区块惩罚（固定金额）
+	// InvalidBlockPenalty is the invalid block penalty (fixed amount)
 	InvalidBlockPenalty *big.Int
 	
-	// 恶意行为惩罚（余额的百分比）
+	// MaliciousPenaltyPercent is the malicious behavior penalty (percentage of balance)
 	MaliciousPenaltyPercent int
 }
 
-// DefaultPenaltyConfig 默认惩罚配置
+// DefaultPenaltyConfig returns the default penalty configuration.
 func DefaultPenaltyConfig() *PenaltyConfig {
 	return &PenaltyConfig{
 		DoubleSignPenaltyPercent: 50,                  // 50%
@@ -198,25 +198,25 @@ func DefaultPenaltyConfig() *PenaltyConfig {
 	}
 }
 
-// CompetitionConfig 竞争配置
+// CompetitionConfig represents the competition configuration.
 type CompetitionConfig struct {
-	// 声誉权重
+	// ReputationWeight is the reputation weight
 	ReputationWeight float64
 	
-	// 在线率权重
+	// UptimeWeight is the uptime ratio weight
 	UptimeWeight float64
 	
-	// 区块质量权重
+	// BlockQualityWeight is the block quality weight
 	BlockQualityWeight float64
 	
-	// 服务质量权重
+	// ServiceQualityWeight is the service quality weight
 	ServiceQualityWeight float64
 	
-	// 排名奖励分配比例（前 10 名）
+	// RankingRewards defines the reward distribution ratios for ranking (top 10)
 	RankingRewards []float64
 }
 
-// DefaultCompetitionConfig 默认竞争配置
+// DefaultCompetitionConfig returns the default competition configuration.
 func DefaultCompetitionConfig() *CompetitionConfig {
 	return &CompetitionConfig{
 		ReputationWeight:     0.30,
@@ -227,39 +227,39 @@ func DefaultCompetitionConfig() *CompetitionConfig {
 	}
 }
 
-// BlockQualityConfig 区块质量评分配置
+// BlockQualityConfig represents the block quality scoring configuration.
 type BlockQualityConfig struct {
-	// 交易数量权重 (默认 40%)
+	// TxCountWeight is the transaction count weight (default 40%)
 	TxCountWeight uint8
 	
-	// 区块大小权重 (默认 30%)
+	// BlockSizeWeight is the block size weight (default 30%)
 	BlockSizeWeight uint8
 	
-	// Gas 利用率权重 (默认 20%)
+	// GasUtilizationWeight is the gas utilization weight (default 20%)
 	GasUtilizationWeight uint8
 	
-	// 交易多样性权重 (默认 10%)
+	// TxDiversityWeight is the transaction diversity weight (default 10%)
 	TxDiversityWeight uint8
 	
-	// 最小交易数阈值（低于此值收益大幅降低）
+	// MinTxThreshold is the minimum transaction count threshold (below which rewards are significantly reduced)
 	MinTxThreshold uint64
 	
-	// 目标区块大小（字节）
+	// TargetBlockSize is the target block size (in bytes)
 	TargetBlockSize uint64
 	
-	// 目标 Gas 利用率
+	// TargetGasUtilization is the target gas utilization ratio
 	TargetGasUtilization float64
 }
 
-// DefaultBlockQualityConfig 默认区块质量配置
+// DefaultBlockQualityConfig returns the default block quality configuration.
 func DefaultBlockQualityConfig() *BlockQualityConfig {
 	return &BlockQualityConfig{
 		TxCountWeight:        40,
 		BlockSizeWeight:      30,
 		GasUtilizationWeight: 20,
 		TxDiversityWeight:    10,
-		MinTxThreshold:       5,           // 至少 5 笔交易
+		MinTxThreshold:       5,           // at least 5 transactions
 		TargetBlockSize:      1024 * 1024, // 1MB
-		TargetGasUtilization: 0.8,         // 80% Gas 利用率
+		TargetGasUtilization: 0.8,         // 80% gas utilization
 	}
 }

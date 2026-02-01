@@ -21,39 +21,39 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// BlockQualityScorer 区块质量评分器
+// BlockQualityScorer is the block quality scorer.
 type BlockQualityScorer struct {
 	config *BlockQualityConfig
 }
 
-// NewBlockQualityScorer 创建评分器
+// NewBlockQualityScorer creates a new scorer.
 func NewBlockQualityScorer(config *BlockQualityConfig) *BlockQualityScorer {
 	return &BlockQualityScorer{config: config}
 }
 
-// ScoreBlock 评估区块质量
+// ScoreBlock evaluates the block quality.
 //
-// 区块质量评分考虑多个维度：
-// 1. 交易数量：更多交易意味着更高的网络效用
-// 2. 区块大小：接近目标大小的区块得分更高
-// 3. Gas 利用率：接近目标利用率（80%）得分最高
-// 4. 交易多样性：不同类型的交易提高得分
+// Block quality scoring considers multiple dimensions:
+// 1. Transaction count: More transactions mean higher network utility
+// 2. Block size: Blocks closer to the target size get higher scores
+// 3. Gas utilization: Blocks closer to the target utilization (80%) get the highest score
+// 4. Transaction diversity: Different types of transactions improve the score
 //
-// 返回值范围：0-100
+// Return value range: 0-100
 func (s *BlockQualityScorer) ScoreBlock(block *types.Block, gasLimit uint64) uint64 {
-	// 1. 交易数量得分
+	// 1. Transaction count score
 	txCountScore := s.scoreTxCount(len(block.Transactions()))
 
-	// 2. 区块大小得分
+	// 2. Block size score
 	blockSizeScore := s.scoreBlockSize(block.Size())
 
-	// 3. Gas 利用率得分
+	// 3. Gas utilization score
 	gasUtilScore := s.scoreGasUtilization(block.GasUsed(), gasLimit)
 
-	// 4. 交易多样性得分
+	// 4. Transaction diversity score
 	diversityScore := s.scoreTxDiversity(block.Transactions())
 
-	// 综合得分（权重总和为 100）
+	// Comprehensive score (weights sum to 100)
 	totalScore := (txCountScore*uint64(s.config.TxCountWeight) +
 		blockSizeScore*uint64(s.config.BlockSizeWeight) +
 		gasUtilScore*uint64(s.config.GasUtilizationWeight) +
@@ -62,12 +62,12 @@ func (s *BlockQualityScorer) ScoreBlock(block *types.Block, gasLimit uint64) uin
 	return totalScore
 }
 
-// CalculateQuality 计算区块质量详情（用于多生产者奖励）
+// CalculateQuality calculates detailed block quality (for multi-producer rewards).
 func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality {
 	gasLimit := block.GasLimit()
 	qualityScore := s.ScoreBlock(block, gasLimit)
 
-	// 统计不同发送者
+	// Count unique senders
 	txs := block.Transactions()
 	senders := make(map[common.Address]bool)
 	for _, tx := range txs {
@@ -78,10 +78,10 @@ func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality 
 		senders[from] = true
 	}
 
-	// 质量倍数：质量分数映射到奖励倍数
-	// 质量分数 100 -> 倍数 2.0
-	// 质量分数 50  -> 倍数 1.0
-	// 质量分数 0   -> 倍数 0.5
+	// Quality multiplier: Map quality score to reward multiplier
+	// Quality score 100 -> multiplier 2.0
+	// Quality score 50  -> multiplier 1.0
+	// Quality score 0   -> multiplier 0.5
 	multiplier := 0.5 + (float64(qualityScore) / 100.0 * 1.5)
 
 	return &BlockQuality{
@@ -93,13 +93,13 @@ func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality 
 	}
 }
 
-// scoreTxCount 交易数量得分
+// scoreTxCount scores the transaction count.
 //
-// 评分策略：
-// - 0 笔交易：0 分
-// - 1-10 笔：线性增长（每笔 10 分）
-// - 11-100 笔：继续增长但速度放缓
-// - 100+ 笔：满分 100
+// Scoring strategy:
+// - 0 transactions: 0 points
+// - 1-10 transactions: Linear growth (10 points per transaction)
+// - 11-100 transactions: Continue to grow but at a slower pace
+// - 100+ transactions: Full score of 100
 func (s *BlockQualityScorer) scoreTxCount(txCount int) uint64 {
 	if txCount == 0 {
 		return 0
@@ -110,16 +110,16 @@ func (s *BlockQualityScorer) scoreTxCount(txCount int) uint64 {
 	if txCount <= 10 {
 		return uint64(txCount * 10)
 	}
-	// 10-100 笔之间，逐渐增长但速度放缓
+	// Between 10-100 transactions, gradually increase but at a slower pace
 	return uint64(10 + (txCount - 10))
 }
 
-// scoreGasUtilization Gas 利用率得分
+// scoreGasUtilization scores the gas utilization.
 //
-// 评分策略（以目标利用率 80% 为最优）：
-// - 利用率 = 目标（80%）：满分 100
-// - 偏离目标：按偏离程度扣分
-// - 过低或过高利用率都会降低得分
+// Scoring strategy (with target utilization at 80% being optimal):
+// - Utilization = target (80%): Full score of 100
+// - Deviation from target: Deduct points based on deviation
+// - Both too low and too high utilization reduce the score
 func (s *BlockQualityScorer) scoreGasUtilization(gasUsed, gasLimit uint64) uint64 {
 	if gasLimit == 0 {
 		return 0
@@ -128,7 +128,7 @@ func (s *BlockQualityScorer) scoreGasUtilization(gasUsed, gasLimit uint64) uint6
 	utilization := gasUsed * 100 / gasLimit
 	target := uint64(s.config.TargetGasUtilization * 100)
 
-	// 计算偏离度
+	// Calculate deviation
 	var deviation uint64
 	if utilization >= target {
 		deviation = utilization - target
@@ -136,9 +136,9 @@ func (s *BlockQualityScorer) scoreGasUtilization(gasUsed, gasLimit uint64) uint6
 		deviation = target - utilization
 	}
 
-	// 偏离越大，扣分越多
-	// 偏离 20% 以内：扣分较少
-	// 偏离超过 20%：大幅扣分
+	// The greater the deviation, the more points are deducted
+	// Within 20% deviation: Fewer points deducted
+	// Over 20% deviation: Significant point deduction
 	if deviation <= 20 {
 		score := uint64(100)
 		penalty := deviation * 2
@@ -155,12 +155,12 @@ func (s *BlockQualityScorer) scoreGasUtilization(gasUsed, gasLimit uint64) uint6
 	return score - penalty
 }
 
-// scoreBlockSize 区块大小得分
+// scoreBlockSize scores the block size.
 //
-// 评分策略（以目标区块大小为最优）：
-// - 区块大小 = 目标（1MB）：满分 100
-// - 偏离目标：按偏离程度扣分
-// - 过小说明交易不足，过大可能影响传播
+// Scoring strategy (with target block size being optimal):
+// - Block size = target (1MB): Full score of 100
+// - Deviation from target: Deduct points based on deviation
+// - Too small indicates insufficient transactions, too large may affect propagation
 func (s *BlockQualityScorer) scoreBlockSize(blockSize uint64) uint64 {
 	if blockSize == 0 {
 		return 0
@@ -168,7 +168,7 @@ func (s *BlockQualityScorer) scoreBlockSize(blockSize uint64) uint64 {
 
 	target := s.config.TargetBlockSize
 
-	// 计算比例（百分比）
+	// Calculate ratio (percentage)
 	var ratio uint64
 	if blockSize >= target {
 		ratio = blockSize * 100 / target
@@ -176,13 +176,13 @@ func (s *BlockQualityScorer) scoreBlockSize(blockSize uint64) uint64 {
 		ratio = blockSize * 100 / target
 	}
 
-	// 最优范围：目标的 70%-130%
+	// Optimal range: 70%-130% of target
 	if ratio >= 70 && ratio <= 130 {
-		// 在最优范围内，得满分或接近满分
+		// Within optimal range, get full score or close to full score
 		if ratio >= 90 && ratio <= 110 {
 			return 100
 		}
-		// 稍微偏离，轻微扣分
+		// Slight deviation, minor point deduction
 		var deviation uint64
 		if ratio < 90 {
 			deviation = 90 - ratio
@@ -196,13 +196,13 @@ func (s *BlockQualityScorer) scoreBlockSize(blockSize uint64) uint64 {
 		return 100 - penalty
 	}
 
-	// 偏离较大
+	// Larger deviation
 	if ratio < 70 {
-		// 过小，按比例扣分
+		// Too small, deduct points proportionally
 		return ratio * 100 / 70
 	}
 
-	// 过大，扣分更多
+	// Too large, deduct more points
 	deviation := ratio - 130
 	score := uint64(100)
 	if deviation > score {
@@ -211,12 +211,12 @@ func (s *BlockQualityScorer) scoreBlockSize(blockSize uint64) uint64 {
 	return score - deviation
 }
 
-// scoreTxDiversity 交易多样性得分
+// scoreTxDiversity scores the transaction diversity.
 //
-// 评分策略：
-// - 单一类型交易：基础分
-// - 多种类型交易：额外加分
-// - 包含合约交互：额外加分
+// Scoring strategy:
+// - Single type of transaction: Base score
+// - Multiple types of transactions: Additional points
+// - Contains contract interactions: Additional points
 func (s *BlockQualityScorer) scoreTxDiversity(txs []*types.Transaction) uint64 {
 	if len(txs) == 0 {
 		return 0
@@ -240,7 +240,7 @@ func (s *BlockQualityScorer) scoreTxDiversity(txs []*types.Transaction) uint64 {
 
 	score := uint64(50)
 
-	// 有多种交易类型
+	// Multiple transaction types
 	typeCount := 0
 	if hasTransfer {
 		typeCount++
@@ -254,7 +254,7 @@ func (s *BlockQualityScorer) scoreTxDiversity(txs []*types.Transaction) uint64 {
 
 	score += uint64(typeCount * 15)
 
-	// 合约多样性（最多加 20 分）
+	// Contract diversity (maximum 20 points)
 	contractDiversity := len(uniqueContracts)
 	if contractDiversity > 10 {
 		score += 20

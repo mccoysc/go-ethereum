@@ -20,42 +20,42 @@ import (
 	"math/big"
 )
 
-// RewardCalculator 奖励计算器
+// RewardCalculator is the reward calculator.
 type RewardCalculator struct {
 	config *RewardConfig
 }
 
-// NewRewardCalculator 创建奖励计算器
+// NewRewardCalculator creates a new reward calculator.
 func NewRewardCalculator(config *RewardConfig) *RewardCalculator {
 	return &RewardCalculator{
 		config: config,
 	}
 }
 
-// CalculateBlockReward 计算区块奖励
+// CalculateBlockReward calculates the block reward.
 //
-// 奖励衰减公式：
+// Reward decay formula:
 // reward = baseReward × (1 - decayRate)^(blockNumber / decayPeriod)
 //
-// 参数：
-//   blockNumber: 当前区块号
+// Parameters:
+//   blockNumber: Current block number
 //
-// 返回值：
-//   当前区块的基础奖励
+// Returns:
+//   Base reward for the current block
 func (r *RewardCalculator) CalculateBlockReward(blockNumber uint64) *big.Int {
-	// 计算衰减周期数
+	// Calculate the number of decay periods
 	periods := blockNumber / r.config.DecayPeriod
 	
 	if periods == 0 {
-		// 未达到第一个衰减周期，返回基础奖励
+		// Has not reached the first decay period, return base reward
 		return new(big.Int).Set(r.config.BaseBlockReward)
 	}
 	
-	// 计算衰减后的奖励
+	// Calculate decayed reward
 	// reward = baseReward × (1 - decayRate/100)^periods
 	reward := new(big.Int).Set(r.config.BaseBlockReward)
 	
-	// 计算 (100 - decayRate)^periods / 100^periods
+	// Calculate (100 - decayRate)^periods / 100^periods
 	decayMultiplier := big.NewInt(int64(100 - r.config.DecayRate))
 	divisor := big.NewInt(100)
 	
@@ -64,7 +64,7 @@ func (r *RewardCalculator) CalculateBlockReward(blockNumber uint64) *big.Int {
 		reward.Div(reward, divisor)
 	}
 	
-	// 确保不低于最小奖励
+	// Ensure reward is not below the minimum
 	if reward.Cmp(r.config.MinBlockReward) < 0 {
 		reward = new(big.Int).Set(r.config.MinBlockReward)
 	}
@@ -72,14 +72,14 @@ func (r *RewardCalculator) CalculateBlockReward(blockNumber uint64) *big.Int {
 	return reward
 }
 
-// CalculateTotalReward 计算总奖励（区块奖励 + 交易费）
+// CalculateTotalReward calculates the total reward (block reward + transaction fees).
 //
-// 参数：
-//   blockNumber: 区块号
-//   totalFees: 总交易费
+// Parameters:
+//   blockNumber: Block number
+//   totalFees: Total transaction fees
 //
-// 返回值：
-//   总奖励金额
+// Returns:
+//   Total reward amount
 func (r *RewardCalculator) CalculateTotalReward(blockNumber uint64, totalFees *big.Int) *big.Int {
 	blockReward := r.CalculateBlockReward(blockNumber)
 	total := new(big.Int).Add(blockReward, totalFees)
