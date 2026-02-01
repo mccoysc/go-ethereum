@@ -1826,6 +1826,4 @@ vim ../consensus/sgx/consensus.go
 ./build-in-gramine.sh          # 重新编译（2分钟）
 ./run-local.sh                 # 测试（秒级启动）
 ```
-
-查看 `gramine/README.md` 获取更多示例。
 ```
