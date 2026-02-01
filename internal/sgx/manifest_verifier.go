@@ -221,9 +221,10 @@ func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string,
 // NOTE: In Gramine SGX, the manifest is verified at launch time by Gramine itself.
 // This function provides additional runtime verification.
 func (v *ManifestSignatureVerifier) VerifyCurrentManifest() error {
-	// In test mode, skip verification
+	// Public key must be available
 	if v.publicKey == nil {
-		return nil
+		return fmt.Errorf("SECURITY: Cannot verify manifest - no public key loaded. " +
+			"Manifest verification is REQUIRED for security.")
 	}
 
 	// Try to find the SGX manifest file

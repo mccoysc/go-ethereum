@@ -109,14 +109,17 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	securityAddr := paramsConfig.SecurityConfig
 	incentiveAddr := paramsConfig.IncentiveContract
 	
-	// 尝试从manifest文件读取合约地址（已验证签名）
+	// 必须从manifest文件读取合约地址（已验证签名）
 	manifestGov, manifestSec, err := internalsgx.ReadContractAddressesFromManifest()
 	if err != nil {
-		log.Warn("Could not read contract addresses from manifest, using genesis config", "error", err)
-		log.Info("Contract addresses from genesis",
-			"governance", governanceAddr.Hex(),
-			"security", securityAddr.Hex(),
-			"incentive", incentiveAddr.Hex())
+		// 无法读取manifest → CRITICAL ERROR
+		// 不允许降级到genesis配置，因为manifest是安全关键配置
+		log.Crit("SECURITY: Failed to read contract addresses from manifest file. " +
+			"Manifest reading is REQUIRED for security. " +
+			"Cannot fall back to genesis config.",
+			"error", err,
+			"hint", "Ensure manifest file is present and properly signed")
+		return nil, err  // This line won't be reached due to log.Crit
 	} else {
 		// Manifest读取成功，比对genesis配置
 		manifestGovAddr := common.HexToAddress(manifestGov)
@@ -192,22 +195,13 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 			log.Crit("Failed to create Gramine verifier", "error", err)
 		}
 	} else {
-		// Not in Gramine: use file-based test attestation
-		log.Warn("⚠️  Using file-based test attestation (NOT for production)")
-		
-		testDataDir := os.Getenv("SGX_TEST_DATA_DIR")
-		if testDataDir == "" {
-			testDataDir = "./testdata/sgx"
-		}
-		
-		// Create test data directory if it doesn't exist
-		if err := CreateTestDataDirectory(testDataDir); err != nil {
-			// 无法创建测试数据目录 → 可以退出（用户可以提供可写目录）
-			log.Crit("Failed to create test data directory", 
-				"path", testDataDir, 
-				"error", err,
-				"hint", "Set SGX_TEST_DATA_DIR to writable directory or ensure ./testdata/sgx is writable")
-		}
+		// Not in Gramine environment (GRAMINE_VERSION not set)
+		// 即使环境变量可以模拟，检测到非Gramine环境也必须退出
+		log.Crit("SECURITY: GRAMINE_VERSION environment variable not set. " +
+			"Application MUST run under Gramine SGX. " +
+			"Cannot proceed without Gramine runtime.",
+			"hint", "For testing: export GRAMINE_VERSION=test (but this requires proper test infrastructure)")
+		return nil, fmt.Errorf("GRAMINE_VERSION not set - must run under Gramine SGX")
 		
 		attestor, err = NewTestAttestor(testDataDir)
 		if err != nil {
