@@ -19,12 +19,14 @@ package vm
 import (
 	"bytes"
 	"crypto/rand"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 // setupTestSGXContext creates a test SGX context with temporary key storage
@@ -1063,4 +1065,169 @@ func TestEdgeCases(t *testing.T) {
 			t.Logf("Empty plaintext encryption succeeded with result length: %d", len(result))
 		}
 	})
+}
+
+// TestSGXPrecompilesConditionalActivation verifies that SGX precompiled contracts
+// are only active when SGX consensus is configured in genesis
+func TestSGXPrecompilesConditionalActivation(t *testing.T) {
+sgxAddresses := []common.Address{
+common.BytesToAddress([]byte{0x80, 0x00}), // SGXKeyCreate
+common.BytesToAddress([]byte{0x80, 0x01}), // SGXKeyGetPublic
+common.BytesToAddress([]byte{0x80, 0x02}), // SGXSign
+common.BytesToAddress([]byte{0x80, 0x03}), // SGXVerify
+common.BytesToAddress([]byte{0x80, 0x04}), // SGXECDH
+common.BytesToAddress([]byte{0x80, 0x05}), // SGXRandom
+common.BytesToAddress([]byte{0x80, 0x06}), // SGXEncrypt
+common.BytesToAddress([]byte{0x80, 0x07}), // SGXDecrypt
+common.BytesToAddress([]byte{0x80, 0x08}), // SGXKeyDerive
+common.BytesToAddress([]byte{0x80, 0x09}), // SGXKeyDelete
+}
+
+t.Run("SGX precompiles ACTIVE with SGX consensus", func(t *testing.T) {
+// Create ChainConfig with SGX consensus
+config := &params.ChainConfig{
+ChainID: big.NewInt(762385986),
+SGX: &params.SGXConfig{
+Period:             5,
+Epoch:              30000,
+GovernanceContract: common.HexToAddress("0x1001"),
+SecurityConfig:     common.HexToAddress("0x1002"),
+IncentiveContract:  common.HexToAddress("0x1003"),
+},
+BerlinBlock: big.NewInt(0),
+}
+
+rules := config.Rules(big.NewInt(1), false, 0)
+
+// Verify IsSGX flag is set
+if !rules.IsSGX {
+t.Fatal("IsSGX should be true when SGX config exists")
+}
+
+// Get active precompiled contracts
+precompiles := ActivePrecompiledContracts(rules)
+
+// Verify ALL SGX precompiles are available
+for _, addr := range sgxAddresses {
+if precompiles[addr] == nil {
+t.Errorf("SGX precompile %s SHOULD be active with SGX consensus", addr.Hex())
+}
+}
+
+t.Logf("✓ All %d SGX precompiles are active with SGX consensus", len(sgxAddresses))
+})
+
+t.Run("SGX precompiles INACTIVE with Clique PoA", func(t *testing.T) {
+// Create ChainConfig with Clique consensus (NO SGX)
+config := &params.ChainConfig{
+ChainID: big.NewInt(1337),
+Clique: &params.CliqueConfig{
+Period: 15,
+Epoch:  30000,
+},
+BerlinBlock: big.NewInt(0),
+}
+
+rules := config.Rules(big.NewInt(1), false, 0)
+
+// Verify IsSGX flag is NOT set
+if rules.IsSGX {
+t.Fatal("IsSGX should be false when SGX config does NOT exist")
+}
+
+// Get active precompiled contracts
+precompiles := ActivePrecompiledContracts(rules)
+
+// Verify SGX precompiles are NOT available
+for _, addr := range sgxAddresses {
+if precompiles[addr] != nil {
+t.Errorf("SGX precompile %s should NOT be active with Clique consensus", addr.Hex())
+}
+}
+
+t.Logf("✓ All %d SGX precompiles are inactive with Clique PoA", len(sgxAddresses))
+})
+
+t.Run("SGX precompiles INACTIVE with Ethash PoW", func(t *testing.T) {
+// Create ChainConfig with Ethash consensus (NO SGX)
+config := &params.ChainConfig{
+ChainID:     big.NewInt(1),
+Ethash:      new(params.EthashConfig),
+BerlinBlock: big.NewInt(0),
+}
+
+rules := config.Rules(big.NewInt(1), false, 0)
+
+// Verify IsSGX flag is NOT set
+if rules.IsSGX {
+t.Fatal("IsSGX should be false when using Ethash")
+}
+
+// Get active precompiled contracts
+precompiles := ActivePrecompiledContracts(rules)
+
+// Verify SGX precompiles are NOT available
+for _, addr := range sgxAddresses {
+if precompiles[addr] != nil {
+t.Errorf("SGX precompile %s should NOT be active with Ethash consensus", addr.Hex())
+}
+}
+
+t.Logf("✓ All %d SGX precompiles are inactive with Ethash PoW", len(sgxAddresses))
+})
+
+t.Run("Standard precompiles remain available", func(t *testing.T) {
+configs := []struct {
+name   string
+config *params.ChainConfig
+}{
+{
+name: "with SGX",
+config: &params.ChainConfig{
+ChainID:        big.NewInt(762385986),
+BerlinBlock:    big.NewInt(0),
+ByzantiumBlock: big.NewInt(0),
+SGX: &params.SGXConfig{
+Period: 5,
+Epoch:  30000,
+},
+},
+},
+{
+name: "with Clique",
+config: &params.ChainConfig{
+ChainID:        big.NewInt(1337),
+BerlinBlock:    big.NewInt(0),
+ByzantiumBlock: big.NewInt(0),
+Clique: &params.CliqueConfig{
+Period: 15,
+Epoch:  30000,
+},
+},
+},
+}
+
+// Standard precompiles that should always be available
+standardAddresses := []common.Address{
+common.BytesToAddress([]byte{1}), // ECRecover
+common.BytesToAddress([]byte{2}), // SHA256
+common.BytesToAddress([]byte{3}), // RIPEMD160
+common.BytesToAddress([]byte{4}), // Identity
+}
+
+for _, tc := range configs {
+t.Run(tc.name, func(t *testing.T) {
+rules := tc.config.Rules(big.NewInt(1), false, 0)
+precompiles := ActivePrecompiledContracts(rules)
+
+for _, addr := range standardAddresses {
+if precompiles[addr] == nil {
+t.Errorf("Standard precompile %s should be available %s", addr.Hex(), tc.name)
+}
+}
+
+t.Logf("✓ All standard precompiles available %s", tc.name)
+})
+}
+})
 }
