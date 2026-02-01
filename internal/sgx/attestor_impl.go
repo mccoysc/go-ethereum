@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"time"
@@ -94,32 +95,190 @@ func (a *GramineAttestor) GenerateQuote(reportData []byte) ([]byte, error) {
 }
 
 // generateMockQuote generates a mock SGX quote for testing.
+// The mock quote follows SGX DCAP Quote v3 format to ensure compatibility with parsers.
+// Includes signature data with PPID for instance ID extraction.
 func (a *GramineAttestor) generateMockQuote(reportData []byte) ([]byte, error) {
-	// Create a minimal mock quote (432 bytes minimum)
-	quote := make([]byte, 432)
+	// Create quote body (432 bytes) + signature data
+	// Signature data includes PPID for instance ID extraction
+	quoteBody := make([]byte, 432)
 
-	// Version and sign type
-	quote[0] = 3 // Version 3 (DCAP)
-	quote[1] = 0
+	// === Quote Header (48 bytes) ===
+	// Version (2 bytes at offset 0)
+	quoteBody[0] = 3 // Version 3 (DCAP)
+	quoteBody[1] = 0
 
-	// Copy MRENCLAVE at offset 112
-	copy(quote[112:144], a.mrenclave)
+	// Attestation Key Type (2 bytes at offset 2)
+	quoteBody[2] = 2 // ECDSA-256 with P-256 curve (DCAP)
+	quoteBody[3] = 0
 
-	// Copy MRSIGNER at offset 176
-	copy(quote[176:208], a.mrsigner)
+	// Reserved (4 bytes at offset 4-7)
+	// QE SVN (2 bytes at offset 8)
+	quoteBody[8] = 1
+	quoteBody[9] = 0
 
-	// ISV Product ID at offset 304
-	quote[304] = 0
-	quote[305] = 0
+	// PCE SVN (2 bytes at offset 10)
+	quoteBody[10] = 1
+	quoteBody[11] = 0
 
-	// ISV SVN at offset 306
-	quote[306] = 1
-	quote[307] = 0
+	// QE Vendor ID (16 bytes at offset 12-27) - Intel's vendor ID
+	copy(quoteBody[12:28], []byte{0x93, 0x9a, 0x72, 0x33, 0xf7, 0x9c, 0x4c, 0xa9,
+		0x94, 0x0a, 0x0d, 0xb3, 0x95, 0x7f, 0x06, 0x07})
 
-	// Copy report data at offset 368
-	copy(quote[368:432], reportData)
+	// User Data (20 bytes at offset 28-47)
+	// Leave as zeros
 
-	return quote, nil
+	// === ISV Enclave Report (384 bytes, offset 48-431) ===
+	// CPUSVN (16 bytes at offset 48)
+	// For testing, use deterministic values
+	for i := 0; i < 16; i++ {
+		quoteBody[48+i] = byte(i) // CPUSVN
+	}
+
+	// MISCSELECT (4 bytes at offset 64)
+	quoteBody[64] = 0
+	quoteBody[65] = 0
+	quoteBody[66] = 0
+	quoteBody[67] = 0
+
+	// Reserved (28 bytes at offset 68-95)
+
+	// Attributes (16 bytes at offset 96)
+	// Set typical SGX attributes
+	quoteBody[96] = 0x07  // Flags: INIT | MODE64BIT | PROVISION_KEY
+	quoteBody[97] = 0x00
+	quoteBody[98] = 0x00
+	quoteBody[99] = 0x00
+	quoteBody[100] = 0x00
+	quoteBody[101] = 0x00
+	quoteBody[102] = 0x00
+	quoteBody[103] = 0x00
+	// XFRM (upper 8 bytes of attributes)
+	quoteBody[104] = 0x1f // Enable common features
+	quoteBody[105] = 0x00
+
+	// MRENCLAVE (32 bytes at offset 112)
+	copy(quoteBody[112:144], a.mrenclave)
+
+	// Reserved (32 bytes at offset 144-175)
+
+	// MRSIGNER (32 bytes at offset 176)
+	copy(quoteBody[176:208], a.mrsigner)
+
+	// Reserved (96 bytes at offset 208-303)
+
+	// ISV Product ID (2 bytes at offset 304)
+	quoteBody[304] = 0
+	quoteBody[305] = 0
+
+	// ISV SVN (2 bytes at offset 306)
+	quoteBody[306] = 1
+	quoteBody[307] = 0
+
+	// Reserved (60 bytes at offset 308-367)
+
+	// Report Data (64 bytes at offset 368-431)
+	if len(reportData) > 0 {
+		copyLen := len(reportData)
+		if copyLen > 64 {
+			copyLen = 64
+		}
+		copy(quoteBody[368:368+copyLen], reportData)
+	}
+
+	// === Signature Data (variable, starts at offset 432) ===
+	// Build minimal signature data with PPID
+	sigData := make([]byte, 0, 512)
+
+	// Signature length (4 bytes) - mock signature is 64 bytes
+	sigLen := uint32(64)
+	sigLenBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(sigLenBytes, sigLen)
+	sigData = append(sigData, sigLenBytes...)
+
+	// Mock signature (64 bytes)
+	mockSig := make([]byte, 64)
+	for i := range mockSig {
+		mockSig[i] = byte(i % 256)
+	}
+	sigData = append(sigData, mockSig...)
+
+	// Attestation Public Key (64 bytes for ECDSA-256)
+	mockPubKey := make([]byte, 64)
+	for i := range mockPubKey {
+		mockPubKey[i] = byte((i + 64) % 256)
+	}
+	sigData = append(sigData, mockPubKey...)
+
+	// QE Report (384 bytes) - simplified
+	qeReport := make([]byte, 384)
+	sigData = append(sigData, qeReport...)
+
+	// QE Report Signature length (4 bytes) - mock 64 bytes
+	qeReportSigLen := uint32(64)
+	qeReportSigLenBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(qeReportSigLenBytes, qeReportSigLen)
+	sigData = append(sigData, qeReportSigLenBytes...)
+
+	// QE Report Signature (64 bytes)
+	qeReportSig := make([]byte, 64)
+	sigData = append(sigData, qeReportSig...)
+
+	// QE Auth Data length (2 bytes) - no auth data
+	qeAuthDataLen := uint16(0)
+	qeAuthDataLenBytes := make([]byte, 2)
+	binary.LittleEndian.PutUint16(qeAuthDataLenBytes, qeAuthDataLen)
+	sigData = append(sigData, qeAuthDataLenBytes...)
+
+	// Cert Data Type (2 bytes) - Type 6 = PPID_Cleartext
+	certDataType := uint16(6)
+	certDataTypeBytes := make([]byte, 2)
+	binary.LittleEndian.PutUint16(certDataTypeBytes, certDataType)
+	sigData = append(sigData, certDataTypeBytes...)
+
+	// Cert Data Size (4 bytes) - PPID(16) + CPUSVN(16) + PCESVN(2) + PCEID(2) = 36
+	certDataSize := uint32(36)
+	certDataSizeBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(certDataSizeBytes, certDataSize)
+	sigData = append(sigData, certDataSizeBytes...)
+
+	// Cert Data: PPID-based
+	// PPID (16 bytes) - use deterministic value based on MRENCLAVE
+	ppid := make([]byte, 16)
+	if len(a.mrenclave) >= 16 {
+		copy(ppid, a.mrenclave[:16])
+	} else {
+		// Fallback: use sequential bytes
+		for i := range ppid {
+			ppid[i] = byte(i + 200)
+		}
+	}
+	sigData = append(sigData, ppid...)
+
+	// CPUSVN (16 bytes) - same as in report
+	cpusvn := make([]byte, 16)
+	for i := range cpusvn {
+		cpusvn[i] = byte(i)
+	}
+	sigData = append(sigData, cpusvn...)
+
+	// PCESVN (2 bytes)
+	pcesvn := uint16(1)
+	pcesvnBytes := make([]byte, 2)
+	binary.LittleEndian.PutUint16(pcesvnBytes, pcesvn)
+	sigData = append(sigData, pcesvnBytes...)
+
+	// PCEID (2 bytes)
+	pceid := uint16(0)
+	pceidBytes := make([]byte, 2)
+	binary.LittleEndian.PutUint16(pceidBytes, pceid)
+	sigData = append(sigData, pceidBytes...)
+
+	// Combine quote body and signature data
+	fullQuote := make([]byte, 0, len(quoteBody)+len(sigData))
+	fullQuote = append(fullQuote, quoteBody...)
+	fullQuote = append(fullQuote, sigData...)
+
+	return fullQuote, nil
 }
 
 // GenerateCertificate generates an RA-TLS certificate with an embedded SGX Quote.

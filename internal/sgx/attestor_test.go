@@ -169,7 +169,7 @@ func TestGetMRSigner(t *testing.T) {
 }
 
 func TestMockAttestor(t *testing.T) {
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create mock attestor: %v", err)
 	}
@@ -181,8 +181,25 @@ func TestMockAttestor(t *testing.T) {
 		t.Fatalf("Mock GenerateQuote failed: %v", err)
 	}
 
-	if len(quote) != 432 {
-		t.Errorf("Mock quote length incorrect: expected 432, got %d", len(quote))
+	// Mock quote now includes signature data with PPID
+	// Minimum: 432 (body) + signature data (~600 bytes)
+	if len(quote) < 432 {
+		t.Errorf("Mock quote too short: expected at least 432, got %d", len(quote))
+	}
+
+	// Verify quote can be parsed
+	_, err = ParseQuote(quote)
+	if err != nil {
+		t.Errorf("Failed to parse mock quote: %v", err)
+	}
+
+	// Verify instance ID can be extracted
+	instanceID, err := ExtractInstanceID(quote)
+	if err != nil {
+		t.Errorf("Failed to extract instance ID: %v", err)
+	}
+	if len(instanceID.CPUInstanceID) == 0 {
+		t.Error("Instance ID is empty")
 	}
 
 	// Test certificate generation
