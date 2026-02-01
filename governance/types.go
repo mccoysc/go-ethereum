@@ -159,6 +159,7 @@ type NodePermission struct {
 type WhitelistConfig struct {
 	CoreValidatorThreshold      uint64 // 核心验证者投票阈值（百分比，默认 67 表示 2/3）
 	CommunityValidatorThreshold uint64 // 社区验证者投票阈值（百分比，默认 51）
+	CommunityVetoThreshold      uint64 // 社区验证者否决阈值（百分比，默认 34 表示 1/3）
 	VotingPeriod                uint64 // 投票期限（区块数，默认 40320）
 	ExecutionDelay              uint64 // 执行延迟（区块数，默认 5760）
 	MinParticipation            uint64 // 最小投票参与率（百分比，默认 50%）
@@ -169,6 +170,7 @@ func DefaultWhitelistConfig() *WhitelistConfig {
 	return &WhitelistConfig{
 		CoreValidatorThreshold:      67,    // 2/3
 		CommunityValidatorThreshold: 51,    // 简单多数
+		CommunityVetoThreshold:      34,    // 1/3 可否决
 		VotingPeriod:                40320, // 约 7 天（15s/块）
 		ExecutionDelay:              5760,  // 约 1 天
 		MinParticipation:            50,    // 50%

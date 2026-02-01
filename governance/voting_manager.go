@@ -194,8 +194,7 @@ func (vm *InMemoryVotingManager) CheckProposalStatus(proposalID common.Hash, cur
 	// Community validator veto check (1/3 can veto)
 	if passed && totalCommunityVotingPower > 0 {
 		communityRejectionRate := (proposal.CommunityNoVotes * 100) / totalCommunityVotingPower
-		vetoThreshold := uint64(34) // 1/3
-		if communityRejectionRate >= vetoThreshold {
+		if communityRejectionRate >= vm.config.CommunityVetoThreshold {
 			passed = false
 		}
 	}

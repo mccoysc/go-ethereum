@@ -102,7 +102,7 @@ func (wm *InMemoryWhitelistManager) ProposeAdd(proposer common.Address, mrenclav
 	wm.mu.RUnlock()
 
 	if exists {
-		return common.Hash{}, ErrMREnclaveNotFound // Already exists
+		return common.Hash{}, ErrMREnclaveNotFound // MRENCLAVE already exists, cannot add
 	}
 
 	// Create proposal
