@@ -22,7 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// SGXDecrypt 对称解密预编译合约 (0x8007)
+// SGXDecrypt is the precompiled contract for symmetric decryption (0x8007)
 type SGXDecrypt struct{}
 
 // Name returns the name of the contract
@@ -30,8 +30,8 @@ func (c *SGXDecrypt) Name() string {
 	return "SGXDecrypt"
 }
 
-// RequiredGas 计算所需 Gas
-// 输入格式: keyID (32 bytes) + ciphertext (variable)
+// RequiredGas calculates the required gas
+// Input format: keyID (32 bytes) + ciphertext (variable)
 func (c *SGXDecrypt) RequiredGas(input []byte) uint64 {
 	if len(input) < 32 {
 		return 5000
@@ -41,31 +41,31 @@ func (c *SGXDecrypt) RequiredGas(input []byte) uint64 {
 	return 5000 + (ciphertextLen * 10)
 }
 
-// Run 执行合约（需要上下文）
+// Run executes the contract (requires context)
 func (c *SGXDecrypt) Run(input []byte) ([]byte, error) {
 	return nil, errors.New("context required")
 }
 
-// RunWithContext 带上下文执行
-// 输入格式: keyID (32 bytes) + ciphertext (variable: nonce + encrypted + tag)
-// 输出格式: plaintext (variable)
+// RunWithContext executes the contract with SGX context
+// Input format: keyID (32 bytes) + ciphertext (variable: nonce + encrypted + tag)
+// Output format: plaintext (variable)
 func (c *SGXDecrypt) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 1. 解析输入
+	// 1. Parse input
 	if len(input) < 32 {
 		return nil, errors.New("invalid input: missing key ID")
 	}
 	keyID := common.BytesToHash(input[:32])
 	ciphertext := input[32:]
 	
-	// 2. 检查解密权限
+	// 2. Check decryption permission
 	if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionDecrypt, ctx.Timestamp) {
-		// 检查是否有 Admin 权限
+		// Check if caller has Admin permission
 		if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionAdmin, ctx.Timestamp) {
 			return nil, errors.New("permission denied: caller does not have Decrypt or Admin permission")
 		}
 	}
 	
-	// 3. 检查密钥元数据（确保是 AES 密钥）
+	// 3. Check key metadata (ensure it's an AES key)
 	metadata, err := ctx.KeyStore.GetMetadata(keyID)
 	if err != nil {
 		return nil, err
@@ -74,15 +74,15 @@ func (c *SGXDecrypt) RunWithContext(ctx *SGXContext, input []byte) ([]byte, erro
 		return nil, errors.New("key type must be AES256 for decryption")
 	}
 	
-	// 4. 执行解密
+	// 4. Execute decryption
 	plaintext, err := ctx.KeyStore.Decrypt(keyID, ciphertext)
 	if err != nil {
 		return nil, err
 	}
 	
-	// 5. 使用权限（增加计数）
+	// 5. Record permission usage (increment counter)
 	_ = ctx.PermissionManager.UsePermission(keyID, ctx.Caller, PermissionDecrypt)
 	
-	// 6. 返回明文
+	// 6. Return plaintext
 	return plaintext, nil
 }

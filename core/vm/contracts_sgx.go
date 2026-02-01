@@ -20,32 +20,32 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// SGXPrecompileWithContext 带上下文的预编译合约接口
+// SGXPrecompileWithContext is the precompiled contract interface with context support
 type SGXPrecompileWithContext interface {
 	PrecompiledContract
 	
-	// RunWithContext 带上下文执行
+	// RunWithContext executes the contract with SGX context
 	RunWithContext(ctx *SGXContext, input []byte) ([]byte, error)
 }
 
-// SGXContext SGX 执行上下文
+// SGXContext represents the SGX execution context
 type SGXContext struct {
-	// 调用者地址
+	// Caller address
 	Caller common.Address
 	
-	// 交易发起者
+	// Transaction originator
 	Origin common.Address
 	
-	// 区块号
+	// Block number
 	BlockNumber uint64
 	
-	// 时间戳
+	// Timestamp
 	Timestamp uint64
 	
-	// 密钥存储
+	// Key storage
 	KeyStore KeyStore
 	
-	// 权限管理器
+	// Permission manager
 	PermissionManager PermissionManager
 }
 

@@ -22,7 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// SGXKeyDerive 密钥派生预编译合约 (0x8008)
+// SGXKeyDerive is the precompiled contract for key derivation (0x8008)
 type SGXKeyDerive struct{}
 
 // Name returns the name of the contract
@@ -30,46 +30,46 @@ func (c *SGXKeyDerive) Name() string {
 	return "SGXKeyDerive"
 }
 
-// RequiredGas 计算所需 Gas
-// 输入格式: parentKeyID (32 bytes) + derivationPath (variable)
+// RequiredGas calculates the required gas
+// Input format: parentKeyID (32 bytes) + derivationPath (variable)
 func (c *SGXKeyDerive) RequiredGas(input []byte) uint64 {
 	return 10000
 }
 
-// Run 执行合约（需要上下文）
+// Run executes the contract (requires context)
 func (c *SGXKeyDerive) Run(input []byte) ([]byte, error) {
 	return nil, errors.New("context required")
 }
 
-// RunWithContext 带上下文执行
-// 输入格式: parentKeyID (32 bytes) + derivationPath (variable)
-// 输出格式: childKeyID (32 bytes)
+// RunWithContext executes the contract with SGX context
+// Input format: parentKeyID (32 bytes) + derivationPath (variable)
+// Output format: childKeyID (32 bytes)
 func (c *SGXKeyDerive) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 1. 解析输入
+	// 1. Parse input
 	if len(input) < 32 {
 		return nil, errors.New("invalid input: missing parent key ID")
 	}
 	parentKeyID := common.BytesToHash(input[:32])
 	derivationPath := input[32:]
 	
-	// 2. 检查派生权限
+	// 2. Check derivation permission
 	if !ctx.PermissionManager.CheckPermission(parentKeyID, ctx.Caller, PermissionDerive, ctx.Timestamp) {
-		// 检查是否有 Admin 权限
+		// Check if caller has Admin permission
 		if !ctx.PermissionManager.CheckPermission(parentKeyID, ctx.Caller, PermissionAdmin, ctx.Timestamp) {
 			return nil, errors.New("permission denied: caller does not have Derive or Admin permission")
 		}
 	}
 	
-	// 3. 派生子密钥
+	// 3. Derive child key
 	childKeyID, err := ctx.KeyStore.DeriveKey(parentKeyID, derivationPath)
 	if err != nil {
 		return nil, err
 	}
 	
-	// 4. 使用权限（增加计数）
+	// 4. Record permission usage (increment counter)
 	_ = ctx.PermissionManager.UsePermission(parentKeyID, ctx.Caller, PermissionDerive)
 	
-	// 5. 自动授予调用者对子密钥的 Admin 权限
+	// 5. Automatically grant Admin permission to the caller for the child key
 	err = ctx.PermissionManager.GrantPermission(childKeyID, Permission{
 		Grantee:   ctx.Caller,
 		Type:      PermissionAdmin,
@@ -81,6 +81,6 @@ func (c *SGXKeyDerive) RunWithContext(ctx *SGXContext, input []byte) ([]byte, er
 		return nil, err
 	}
 	
-	// 6. 返回子密钥 ID
+	// 6. Return child key ID
 	return childKeyID.Bytes(), nil
 }

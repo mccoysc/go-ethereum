@@ -23,7 +23,7 @@ import (
 	"io"
 )
 
-// SGXRandom 安全随机数生成预编译合约 (0x8005)
+// SGXRandom is the precompiled contract for secure random number generation (0x8005)
 type SGXRandom struct{}
 
 // Name returns the name of the contract
@@ -31,33 +31,33 @@ func (c *SGXRandom) Name() string {
 	return "SGXRandom"
 }
 
-// RequiredGas 计算所需 Gas
-// 输入格式: length (32 bytes)
+// RequiredGas calculates the required gas
+// Input format: length (32 bytes)
 func (c *SGXRandom) RequiredGas(input []byte) uint64 {
 	if len(input) < 32 {
 		return 1000
 	}
 	
-	// 解析长度
+	// Parse length
 	length := binary.BigEndian.Uint64(input[24:32])
 	
-	// 基础成本 + 每字节成本
+	// Base cost + per-byte cost
 	return 1000 + (length * 100)
 }
 
-// Run 执行合约（不需要上下文）
-// 输入格式: length (32 bytes)
-// 输出格式: randomBytes (variable length)
+// Run executes the contract (no context needed)
+// Input format: length (32 bytes)
+// Output format: randomBytes (variable length)
 func (c *SGXRandom) Run(input []byte) ([]byte, error) {
-	// 1. 解析输入
+	// 1. Parse input
 	if len(input) < 32 {
 		return nil, errors.New("invalid input: missing length")
 	}
 	
-	// 提取长度（big-endian uint256）
+	// Extract length (big-endian uint256)
 	length := binary.BigEndian.Uint64(input[24:32])
 	
-	// 2. 验证长度（限制最大 1MB）
+	// 2. Validate length (limit to max 1MB)
 	if length > 1024*1024 {
 		return nil, errors.New("requested length too large (max 1MB)")
 	}
@@ -65,12 +65,12 @@ func (c *SGXRandom) Run(input []byte) ([]byte, error) {
 		return nil, errors.New("requested length must be greater than 0")
 	}
 	
-	// 3. 生成随机数
+	// 3. Generate random bytes
 	randomBytes := make([]byte, length)
 	if _, err := io.ReadFull(rand.Reader, randomBytes); err != nil {
 		return nil, err
 	}
 	
-	// 4. 返回随机数
+	// 4. Return random bytes
 	return randomBytes, nil
 }

@@ -20,39 +20,39 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// PermissionType 权限类型
+// PermissionType represents the type of permission
 type PermissionType uint8
 
 const (
-	PermissionSign    PermissionType = 0x01 // 签名权限
-	PermissionDecrypt PermissionType = 0x02 // 解密权限
-	PermissionDerive  PermissionType = 0x04 // 派生权限
-	PermissionAdmin   PermissionType = 0x80 // 管理权限
+	PermissionSign    PermissionType = 0x01 // Signing permission
+	PermissionDecrypt PermissionType = 0x02 // Decryption permission
+	PermissionDerive  PermissionType = 0x04 // Key derivation permission
+	PermissionAdmin   PermissionType = 0x80 // Administrative permission
 )
 
-// Permission 权限定义
+// Permission defines access rights for a key
 type Permission struct {
-	Grantee   common.Address // 被授权者
-	Type      PermissionType // 权限类型
-	ExpiresAt uint64         // 过期时间（0 表示永不过期）
-	MaxUses   uint64         // 最大使用次数（0 表示无限制）
-	UsedCount uint64         // 已使用次数
+	Grantee   common.Address // Grantee address
+	Type      PermissionType // Permission type
+	ExpiresAt uint64         // Expiration timestamp (0 means never expires)
+	MaxUses   uint64         // Maximum usage count (0 means unlimited)
+	UsedCount uint64         // Current usage count
 }
 
-// PermissionManager 权限管理器接口
+// PermissionManager is the interface for managing key permissions
 type PermissionManager interface {
-	// GrantPermission 授予权限
+	// GrantPermission grants a permission to a grantee
 	GrantPermission(keyID common.Hash, permission Permission) error
 	
-	// RevokePermission 撤销权限
+	// RevokePermission revokes a permission from a grantee
 	RevokePermission(keyID common.Hash, grantee common.Address, permType PermissionType) error
 	
-	// CheckPermission 检查权限
+	// CheckPermission checks if a caller has the specified permission
 	CheckPermission(keyID common.Hash, caller common.Address, permType PermissionType, timestamp uint64) bool
 	
-	// GetPermissions 获取所有权限
+	// GetPermissions retrieves all permissions for a key
 	GetPermissions(keyID common.Hash) ([]Permission, error)
 	
-	// UsePermission 使用权限（增加计数）
+	// UsePermission records permission usage (increments counter)
 	UsePermission(keyID common.Hash, caller common.Address, permType PermissionType) error
 }

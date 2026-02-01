@@ -22,7 +22,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// SGXSign ECDSA 签名预编译合约 (0x8002)
+// SGXSign is the precompiled contract for ECDSA signing (0x8002)
 type SGXSign struct{}
 
 // Name returns the name of the contract
@@ -30,45 +30,45 @@ func (c *SGXSign) Name() string {
 	return "SGXSign"
 }
 
-// RequiredGas 计算所需 Gas
-// 输入格式: keyID (32 bytes) + hash (32 bytes)
+// RequiredGas calculates the required gas
+// Input format: keyID (32 bytes) + hash (32 bytes)
 func (c *SGXSign) RequiredGas(input []byte) uint64 {
 	return 10000
 }
 
-// Run 执行合约（需要上下文）
+// Run executes the contract (requires context)
 func (c *SGXSign) Run(input []byte) ([]byte, error) {
 	return nil, errors.New("context required")
 }
 
-// RunWithContext 带上下文执行
-// 输入格式: keyID (32 bytes) + hash (32 bytes)
-// 输出格式: signature (65 bytes for ECDSA, 64 bytes for Ed25519)
+// RunWithContext executes the contract with SGX context
+// Input format: keyID (32 bytes) + hash (32 bytes)
+// Output format: signature (65 bytes for ECDSA, 64 bytes for Ed25519)
 func (c *SGXSign) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 1. 解析输入
+	// 1. Parse input
 	if len(input) < 64 {
 		return nil, errors.New("invalid input: expected keyID (32 bytes) + hash (32 bytes)")
 	}
 	keyID := common.BytesToHash(input[:32])
 	hash := input[32:64]
 	
-	// 2. 检查签名权限
+	// 2. Check signing permission
 	if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionSign, ctx.Timestamp) {
-		// 检查是否有 Admin 权限
+		// Check if caller has Admin permission
 		if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionAdmin, ctx.Timestamp) {
 			return nil, errors.New("permission denied: caller does not have Sign or Admin permission")
 		}
 	}
 	
-	// 3. 执行签名
+	// 3. Execute signing
 	signature, err := ctx.KeyStore.Sign(keyID, hash)
 	if err != nil {
 		return nil, err
 	}
 	
-	// 4. 使用权限（增加计数）
+	// 4. Record permission usage (increment counter)
 	_ = ctx.PermissionManager.UsePermission(keyID, ctx.Caller, PermissionSign)
 	
-	// 5. 返回签名
+	// 5. Return signature
 	return signature, nil
 }

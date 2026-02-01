@@ -23,7 +23,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// SGXVerify 签名验证预编译合约 (0x8003)
+// SGXVerify is the precompiled contract for signature verification (0x8003)
 type SGXVerify struct{}
 
 // Name returns the name of the contract
@@ -31,39 +31,39 @@ func (c *SGXVerify) Name() string {
 	return "SGXVerify"
 }
 
-// RequiredGas 计算所需 Gas
-// 输入格式: hash (32 bytes) + signature (65 bytes) + publicKey (64 bytes)
+// RequiredGas calculates the required gas
+// Input format: hash (32 bytes) + signature (65 bytes) + publicKey (64 bytes)
 func (c *SGXVerify) RequiredGas(input []byte) uint64 {
 	return 5000
 }
 
-// Run 执行合约（不需要上下文，纯计算）
-// 输入格式: hash (32 bytes) + signature (variable) + publicKey (variable)
-// 输出格式: result (1 byte: 0x01 for valid, 0x00 for invalid)
+// Run executes the contract (no context needed, pure computation)
+// Input format: hash (32 bytes) + signature (variable) + publicKey (variable)
+// Output format: result (1 byte: 0x01 for valid, 0x00 for invalid)
 func (c *SGXVerify) Run(input []byte) ([]byte, error) {
-	// ECDSA 验证: hash (32) + sig (65) + pubkey (64) = 161 bytes
-	// Ed25519 验证: hash (32) + sig (64) + pubkey (32) = 128 bytes
+	// ECDSA verification: hash (32) + sig (65) + pubkey (64) = 161 bytes
+	// Ed25519 verification: hash (32) + sig (64) + pubkey (32) = 128 bytes
 	
 	if len(input) == 161 {
-		// ECDSA 验证
+		// ECDSA verification
 		hash := input[:32]
 		signature := input[32:97]
 		pubKey := input[97:161]
 		
-		// 恢复公钥
+		// Recover public key from signature
 		recoveredPubKey, err := crypto.SigToPub(hash, signature)
 		if err != nil {
 			return []byte{0x00}, nil
 		}
 		
-		// 比较公钥
+		// Compare public keys
 		recoveredPubKeyBytes := crypto.FromECDSAPub(recoveredPubKey)
-		// 去除前缀 0x04
+		// Remove 0x04 prefix
 		if len(recoveredPubKeyBytes) > 0 && recoveredPubKeyBytes[0] == 0x04 {
 			recoveredPubKeyBytes = recoveredPubKeyBytes[1:]
 		}
 		
-		// 比较
+		// Compare
 		if len(recoveredPubKeyBytes) != len(pubKey) {
 			return []byte{0x00}, nil
 		}
@@ -76,7 +76,7 @@ func (c *SGXVerify) Run(input []byte) ([]byte, error) {
 		return []byte{0x01}, nil
 		
 	} else if len(input) == 128 {
-		// Ed25519 验证
+		// Ed25519 verification
 		hash := input[:32]
 		signature := input[32:96]
 		pubKey := input[96:128]

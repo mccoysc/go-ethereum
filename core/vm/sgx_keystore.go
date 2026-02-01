@@ -20,7 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// KeyType 密钥类型
+// KeyType represents the cryptographic key type
 type KeyType uint8
 
 const (
@@ -29,42 +29,42 @@ const (
 	KeyTypeAES256  KeyType = 0x03 // AES-256
 )
 
-// KeyMetadata 密钥元数据
+// KeyMetadata holds metadata about a cryptographic key
 type KeyMetadata struct {
-	KeyID       common.Hash    // 密钥 ID
-	Owner       common.Address // 所有者
-	KeyType     KeyType        // 密钥类型
-	CreatedAt   uint64         // 创建时间
-	CreatedBy   common.Address // 创建者
-	Permissions []Permission   // 权限列表
+	KeyID       common.Hash    // Key identifier
+	Owner       common.Address // Key owner
+	KeyType     KeyType        // Key type
+	CreatedAt   uint64         // Creation timestamp
+	CreatedBy   common.Address // Creator address
+	Permissions []Permission   // Permission list
 }
 
-// KeyStore 密钥存储接口
+// KeyStore is the interface for cryptographic key storage and operations
 type KeyStore interface {
-	// CreateKey 创建新密钥
+	// CreateKey creates a new cryptographic key
 	CreateKey(owner common.Address, keyType KeyType) (common.Hash, error)
 	
-	// GetPublicKey 获取公钥
+	// GetPublicKey retrieves the public key for a given key ID
 	GetPublicKey(keyID common.Hash) ([]byte, error)
 	
-	// Sign 使用密钥签名
+	// Sign signs data using the specified key
 	Sign(keyID common.Hash, hash []byte) ([]byte, error)
 	
-	// ECDH 执行 ECDH 密钥交换
+	// ECDH performs ECDH key exchange
 	ECDH(keyID common.Hash, peerPubKey []byte) ([]byte, error)
 	
-	// Encrypt 加密数据
+	// Encrypt encrypts data using the specified key
 	Encrypt(keyID common.Hash, plaintext []byte) ([]byte, error)
 	
-	// Decrypt 解密数据
+	// Decrypt decrypts data using the specified key
 	Decrypt(keyID common.Hash, ciphertext []byte) ([]byte, error)
 	
-	// DeriveKey 派生子密钥
+	// DeriveKey derives a child key from a parent key
 	DeriveKey(keyID common.Hash, path []byte) (common.Hash, error)
 	
-	// GetMetadata 获取密钥元数据
+	// GetMetadata retrieves key metadata
 	GetMetadata(keyID common.Hash) (*KeyMetadata, error)
 	
-	// DeleteKey 删除密钥
+	// DeleteKey deletes a key from the keystore
 	DeleteKey(keyID common.Hash) error
 }
