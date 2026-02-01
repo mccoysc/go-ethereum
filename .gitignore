@@ -71,3 +71,8 @@ gramine/MRSIGNER.txt
 test-data/
 MRENCLAVE.txt
 .dockerfile-build-temp
+
+# 测试数据
+test-node/
+test/integration/*.log
+test/integration/gramine_test_output.txt
