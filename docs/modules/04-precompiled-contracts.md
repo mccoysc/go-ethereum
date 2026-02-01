@@ -240,7 +240,7 @@ type SGXKeyCreate struct {
 // 输出格式: keyID (32 bytes)
 
 func (c *SGXKeyCreate) RequiredGas(input []byte) uint64 {
-    return 100000 // 密钥生成消耗较多 Gas
+    return 50000 // 密钥生成消耗较多 Gas
 }
 
 func (c *SGXKeyCreate) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
@@ -392,7 +392,7 @@ type SGXVerify struct{}
 // 输出格式: valid (1 byte: 0x01 = valid, 0x00 = invalid)
 
 func (c *SGXVerify) RequiredGas(input []byte) uint64 {
-    return 3000
+    return 5000
 }
 
 func (c *SGXVerify) Run(input []byte) ([]byte, error) {
@@ -448,7 +448,7 @@ type SGXECDH struct {
 // 输出格式: sharedSecret (32 bytes)
 
 func (c *SGXECDH) RequiredGas(input []byte) uint64 {
-    return 15000
+    return 20000
 }
 
 func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
@@ -500,7 +500,7 @@ const MaxRandomLength = 1024 // 最大随机数长度
 
 func (c *SGXRandom) RequiredGas(input []byte) uint64 {
     if len(input) < 32 {
-        return 100
+        return 1000
     }
     
     // 根据请求长度计算 Gas
@@ -509,7 +509,7 @@ func (c *SGXRandom) RequiredGas(input []byte) uint64 {
         length = MaxRandomLength
     }
     
-    return 100 + length*10
+    return 1000 + length*100
 }
 
 func (c *SGXRandom) Run(input []byte) ([]byte, error) {
@@ -677,7 +677,7 @@ type SGXKeyDerive struct {
 // 输出格式: childKeyID (32 bytes)
 
 func (c *SGXKeyDerive) RequiredGas(input []byte) uint64 {
-    return 50000
+    return 10000
 }
 
 func (c *SGXKeyDerive) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
@@ -1353,18 +1353,18 @@ public_path = "/app/public"
 
 # Gas 配置
 [precompile.sgx.gas]
-key_create = 100000
+key_create = 50000
 key_get_public = 3000
 sign = 10000
-verify = 3000
-ecdh = 15000
-random_base = 100
-random_per_byte = 10
+verify = 5000
+ecdh = 20000
+random_base = 1000
+random_per_byte = 100
 encrypt_base = 5000
 encrypt_per_byte = 10
 decrypt_base = 5000
 decrypt_per_byte = 10
-key_derive = 50000
+key_derive = 10000
 
 # 限制
 [precompile.sgx.limits]
