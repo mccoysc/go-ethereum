@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"math/big"
+	"os"
 	"sync"
 	"time"
 
@@ -119,26 +120,25 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 			"Cannot fall back to genesis config.",
 			"error", err,
 			"hint", "Ensure manifest file is present and properly signed")
-		return nil, err  // This line won't be reached due to log.Crit
+	} 
+	
+	// Manifest读取成功，比对genesis配置
+	manifestGovAddr := common.HexToAddress(manifestGov)
+	manifestSecAddr := common.HexToAddress(manifestSec)
+	
+	if manifestGovAddr != governanceAddr {
+		log.Error("SECURITY WARNING: Manifest governance address differs from genesis!",
+			"manifest", manifestGov,
+			"genesis", governanceAddr.Hex())
+		// 使用genesis地址（更可信）
 	} else {
-		// Manifest读取成功，比对genesis配置
-		manifestGovAddr := common.HexToAddress(manifestGov)
-		manifestSecAddr := common.HexToAddress(manifestSec)
-		
-		if manifestGovAddr != governanceAddr {
-			log.Error("SECURITY WARNING: Manifest governance address differs from genesis!",
-				"manifest", manifestGov,
-				"genesis", governanceAddr.Hex())
-			// 使用genesis地址（更可信）
-		} else {
-			log.Info("✓ Manifest addresses match genesis config")
-		}
-		
-		if manifestSecAddr != securityAddr {
-			log.Error("SECURITY WARNING: Manifest security config address differs from genesis!",
-				"manifest", manifestSec,
-				"genesis", securityAddr.Hex())
-		}
+		log.Info("✓ Manifest addresses match genesis config")
+	}
+	
+	if manifestSecAddr != securityAddr {
+		log.Error("SECURITY WARNING: Manifest security config address differs from genesis!",
+			"manifest", manifestSec,
+			"genesis", securityAddr.Hex())
 	}
 	
 	// Convert params.SGXConfig to internal Config
@@ -177,44 +177,17 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Step 4: Create attestor and verifier
 	log.Info("Step 4: Initializing SGX attestation...")
 	
-	var attestor Attestor
-	var verifier Verifier
-	var err error
+	// Use Gramine SGX attestation (已经检查过GRAMINE_VERSION)
+	log.Info("Using Gramine SGX attestation")
+	attestor, err := NewGramineAttestor()
+	if err != nil {
+		// Gramine环境必须有正确的环境变量
+		log.Crit("Failed to create Gramine attestor", "error", err)
+	}
 	
-	if isGramine {
-		// In Gramine: use real SGX attestation
-		log.Info("Using Gramine SGX attestation (production mode)")
-		attestor, err = NewGramineAttestor()
-		if err != nil {
-			// Gramine环境必须有正确的环境变量
-			log.Crit("Failed to create Gramine attestor", "error", err)
-		}
-		
-		verifier, err = NewGramineVerifier()
-		if err != nil {
-			log.Crit("Failed to create Gramine verifier", "error", err)
-		}
-	} else {
-		// Not in Gramine environment (GRAMINE_VERSION not set)
-		// 即使环境变量可以模拟，检测到非Gramine环境也必须退出
-		log.Crit("SECURITY: GRAMINE_VERSION environment variable not set. " +
-			"Application MUST run under Gramine SGX. " +
-			"Cannot proceed without Gramine runtime.",
-			"hint", "For testing: export GRAMINE_VERSION=test (but this requires proper test infrastructure)")
-		return nil, fmt.Errorf("GRAMINE_VERSION not set - must run under Gramine SGX")
-		
-		attestor, err = NewTestAttestor(testDataDir)
-		if err != nil {
-			// 测试数据不存在 → 可以退出（用户可以提供测试数据文件）
-			log.Crit("Failed to create test attestor - test data not found", 
-				"error", err,
-				"hint", fmt.Sprintf("Provide test data in %s (mrenclave.txt, mrsigner.txt)", testDataDir))
-		}
-		
-		verifier, err = NewTestVerifier(testDataDir)
-		if err != nil {
-			log.Crit("Failed to create test verifier", "error", err)
-		}
+	verifier, err := NewGramineVerifier()
+	if err != nil {
+		log.Crit("Failed to create Gramine verifier", "error", err)
 	}
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")

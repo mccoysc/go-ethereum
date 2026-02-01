@@ -1,0 +1,18 @@
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint = "/usr/local/bin/geth"
+
+loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib:/usr/local/lib"
+loader.env.PATH = "/usr/local/bin:/usr/bin:/bin"
+
+# Contract addresses (will be read by application)
+loader.env.XCHAIN_GOVERNANCE_CONTRACT = "0x0000000000000000000000000000000000001001"
+loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "0x0000000000000000000000000000000000001002"
+loader.env.XCHAIN_INCENTIVE_CONTRACT = "0x0000000000000000000000000000000000001003"
+
+sgx.enclave_size = "2G"
+sgx.max_threads = 32
+
+fs.mounts = [
+  { type = "chroot", path = "/", uri = "file:/" },
+  { type = "encrypted", path = "/data/encrypted", uri = "file:/data/encrypted", key_name = "_sgx_mrenclave" },
+]
