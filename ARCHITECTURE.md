@@ -4292,9 +4292,24 @@ import (
 type ProposalType uint8
 
 const (
-    NormalUpgrade    ProposalType = 0x01  // 普通升级
-    EmergencyUpgrade ProposalType = 0x02  // 紧急升级
+    ProposalAddMREnclave      ProposalType = 0x01 // 添加 MRENCLAVE
+    ProposalRemoveMREnclave   ProposalType = 0x02 // 移除 MRENCLAVE
+    ProposalUpgradePermission ProposalType = 0x03 // 升级权限
+    ProposalAddValidator      ProposalType = 0x04 // 添加验证者
+    ProposalRemoveValidator   ProposalType = 0x05 // 移除验证者
+    ProposalParameterChange   ProposalType = 0x06 // 参数修改
+    ProposalNormalUpgrade     ProposalType = 0x07 // 普通升级
+    ProposalEmergencyUpgrade  ProposalType = 0x08 // 紧急升级（安全漏洞修复）
 )
+
+// 升级提案的投票规则：
+// 1. 普通升级（ProposalNormalUpgrade）：
+//    - 核心验证者：需要 2/3 通过
+//    - 社区验证者：可以行使否决权，1/3 否决即可拒绝提案
+// 2. 紧急升级（ProposalEmergencyUpgrade）：
+//    - 核心验证者：需要 100% 通过
+//    - 社区验证者：否决权阈值提高到 1/2（更高的否决门槛）
+//    - 必须附带安全漏洞详情和修复说明
 
 // ProposalStatus 提案状态
 type ProposalStatus uint8
@@ -4422,7 +4437,7 @@ func (g *WhitelistGovernance) SubmitProposal(
     }
     
     // 设置投票截止时间
-    if proposalType == EmergencyUpgrade {
+    if proposalType == ProposalEmergencyUpgrade {
         proposal.CoreVoteDeadline = time.Now().Add(6 * time.Hour)
         proposal.PublicReviewEnd = time.Now().Add(24 * time.Hour)
     } else {
@@ -4489,7 +4504,7 @@ func (g *WhitelistGovernance) checkCoreVotingResult(proposal *WhitelistProposal)
     }
     
     // 紧急升级需要 100% 同意
-    if proposal.Type == EmergencyUpgrade {
+    if proposal.Type == ProposalEmergencyUpgrade {
         if approveCount == totalCoreValidators {
             proposal.Status = ProposalPublicReview
         } else if rejectCount > 0 {
@@ -4554,7 +4569,7 @@ func (g *WhitelistGovernance) checkCommunityVetoResult(proposal *WhitelistPropos
     
     // 确定否决阈值
     var threshold float64
-    if proposal.Type == EmergencyUpgrade {
+    if proposal.Type == ProposalEmergencyUpgrade {
         threshold = 0.5  // 紧急升级需要 1/2 否决
     } else {
         threshold = g.communityConfig.VetoThreshold  // 普通升级需要 1/3 否决
