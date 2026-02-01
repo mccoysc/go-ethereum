@@ -18,6 +18,7 @@ package vm
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -81,17 +82,19 @@ func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) 
 		return nil, err
 	}
 	
-	adminPerm := Permission{
-		Grantee:   ctx.Caller,
-		Type:      PermissionAdmin,
-		ExpiresAt: 0,
-		MaxUses:   0,
-		UsedCount: 0,
-	}
-	
 	// Grant admin permission if caller is not already the owner
 	if metadata.Owner != ctx.Caller {
-		_ = ctx.PermissionManager.GrantPermission(newKeyID, adminPerm)
+		adminPerm := Permission{
+			Grantee:   ctx.Caller,
+			Type:      PermissionAdmin,
+			ExpiresAt: 0,
+			MaxUses:   0,
+			UsedCount: 0,
+		}
+		
+		if err := ctx.PermissionManager.GrantPermission(newKeyID, adminPerm); err != nil {
+			return nil, fmt.Errorf("failed to grant admin permission: %w", err)
+		}
 	}
 	
 	// 6. Return new key ID

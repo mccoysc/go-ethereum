@@ -184,12 +184,13 @@ func (ks *EncryptedKeyStore) Sign(keyID common.Hash, hash []byte) ([]byte, error
 		if !ok {
 			return nil, errors.New("invalid ECDSA key")
 		}
+		// Ensure we zero the big.Int's internal bits after use
+		defer func() {
+			if ecdsaKey.D != nil {
+				ecdsaKey.D.SetInt64(0)
+			}
+		}()
 		signature, err := crypto.Sign(hash, ecdsaKey)
-		// Zero the private key bytes
-		if ecdsaKey.D != nil {
-			keyBytes := ecdsaKey.D.Bytes()
-			defer zeroBytes(keyBytes)
-		}
 		if err != nil {
 			return nil, fmt.Errorf("failed to sign: %w", err)
 		}
@@ -231,11 +232,10 @@ func (ks *EncryptedKeyStore) ECDH(keyID common.Hash, peerPubKey []byte, kdfParam
 		return common.Hash{}, errors.New("invalid ECDSA key")
 	}
 	
-	// Zero the private key bytes after use
+	// Zero the private key big.Int after use
 	defer func() {
 		if ecdsaKey.D != nil {
-			keyBytes := ecdsaKey.D.Bytes()
-			zeroBytes(keyBytes)
+			ecdsaKey.D.SetInt64(0)
 		}
 	}()
 	
@@ -402,11 +402,12 @@ func (ks *EncryptedKeyStore) DeriveKey(keyID common.Hash, path []byte) (common.H
 		}
 		// 使用 HKDF 派生
 		derivedKey = crypto.Keccak256(ecdsaKey.D.Bytes(), path)
-		// Zero the private key bytes
-		if ecdsaKey.D != nil {
-			keyBytes := ecdsaKey.D.Bytes()
-			defer zeroBytes(keyBytes)
-		}
+		// Zero the big.Int after use
+		defer func() {
+			if ecdsaKey.D != nil {
+				ecdsaKey.D.SetInt64(0)
+			}
+		}()
 		
 	case KeyTypeEd25519:
 		ed25519Key, ok := privKey.(ed25519.PrivateKey)
