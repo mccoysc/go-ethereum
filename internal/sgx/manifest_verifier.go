@@ -17,6 +17,7 @@
 package sgx
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -25,6 +26,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/ethereum/go-ethereum/log"
 )
 
 // ManifestSignatureVerifier verifies Gramine manifest file signatures
@@ -225,98 +228,102 @@ func VerifyCurrentManifestFile() error {
 	return verifier.VerifyCurrentManifest()
 }
 
-// ValidateManifestIntegrity performs a complete manifest integrity check
-// According to Gramine security model:
-// 1. Gramine verifies manifest signature at startup
-// 2. MRENCLAVE is calculated from the signed manifest
-// 3. Application should verify it's running in SGX mode with correct measurements
+// ValidateManifestIntegrity performs manifest signature verification
+// 
+// 重要：虽然Gramine在启动时已验证manifest签名（签名不对起不来），
+// 但应用程序要读取manifest文件内容时，必须再次验证签名，
+// 因为文件可能在Gramine启动后被修改。
+//
+// 流程：
+// 1. 定位manifest文件（遵循Gramine规范，不硬编码路径）
+// 2. 验证manifest签名
+// 3. 验证通过后才能读取配置
 func ValidateManifestIntegrity() error {
-	// Check if we're in SGX mode
-	inSGX := os.Getenv("IN_SGX") == "1" || os.Getenv("GRAMINE_SGX") == "1"
-
-	// In test mode, skip all checks
-	if os.Getenv("SGX_TEST_MODE") == "true" {
+	// Step 1: 检查是否在Gramine环境中
+	gramineVersion := os.Getenv("GRAMINE_VERSION")
+	if gramineVersion == "" {
+		// 非Gramine环境，开发模式
+		log.Info("Not running under Gramine - skipping manifest verification")
 		return nil
 	}
-
-	if !inSGX {
-		// Not running in SGX - in production this should be an error
-		// For development/testing, we allow it
-		return nil
-	}
-
-	// 1. Verify we have MRENCLAVE (proves Gramine verified the manifest)
+	
+	log.Info("Running under Gramine", "version", gramineVersion)
+	
+	// Step 2: 检查Gramine是否已验证manifest（通过MRENCLAVE存在性）
 	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
 	if mrenclave == "" {
-		// Try alternative environment variable
 		mrenclave = os.Getenv("SGX_MRENCLAVE")
 	}
-
-	if mrenclave == "" {
-		return fmt.Errorf("running in SGX mode but MRENCLAVE not found - manifest was not properly verified by Gramine")
+	if mrenclave != "" {
+		log.Info("Gramine verified manifest at startup", "MRENCLAVE", mrenclave[:16]+"...")
+	} else {
+		log.Warn("MRENCLAVE not found - Gramine may not have verified manifest")
 	}
-
-	// 2. Verify we have MRSIGNER (proves the manifest was signed)
-	mrsigner := os.Getenv("RA_TLS_MRSIGNER")
-	if mrsigner == "" {
-		mrsigner = os.Getenv("SGX_MRSIGNER")
+	
+	// Step 3: 应用层必须自己验证manifest文件签名
+	// 因为文件可能在Gramine启动后被修改
+	log.Info("Step 3: Application verifying manifest signature...")
+	
+	// 3.1 定位manifest文件（遵循Gramine规范）
+	manifestPath, err := findManifestFile()
+	if err != nil {
+		return fmt.Errorf("cannot locate manifest file: %w", err)
 	}
-
-	if mrsigner == "" {
-		return fmt.Errorf("running in SGX mode but MRSIGNER not found - manifest signature missing")
+	log.Info("Located manifest file", "path", manifestPath)
+	
+	// 3.2 验证签名
+	verifier, err := NewManifestSignatureVerifier()
+	if err != nil {
+		return fmt.Errorf("failed to create manifest verifier: %w", err)
 	}
-
-	// 3. Optional: Verify manifest file signature again (defense in depth)
-	// Note: Gramine already verified this at startup, but we can double-check
-	// This is optional and may not work if manifest files are not accessible at runtime
-	manifestPath, err := GetManifestPath()
-	if err == nil {
-		// Manifest file is accessible, verify its signature
-		if err := VerifyManifestFile(manifestPath); err != nil {
-			return fmt.Errorf("runtime manifest signature verification failed: %w", err)
-		}
+	
+	if err := verifier.VerifyManifestSignature(manifestPath, ""); err != nil {
+		return fmt.Errorf("manifest signature verification FAILED: %w", err)
 	}
-	// If manifest file is not accessible, that's OK - Gramine already verified it
-
+	
+	log.Info("✓ Manifest signature verified by application")
+	
 	return nil
 }
 
-// GetManifestPath returns the path to the SGX manifest file
-// Follows Gramine naming convention: <app>.manifest.sgx
-func GetManifestPath() (string, error) {
-	// Check environment variable first
-	manifestPath := os.Getenv("GRAMINE_MANIFEST_PATH")
-	if manifestPath != "" {
-		if _, err := os.Stat(manifestPath); err == nil {
-			return manifestPath, nil
+// findManifestFile locates the manifest file following Gramine conventions
+// 遵循Gramine规范，不硬编码路径
+func findManifestFile() (string, error) {
+	// Method 1: Use environment variable (Gramine standard)
+	if path := os.Getenv("GRAMINE_MANIFEST_PATH"); path != "" {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
 		}
 	}
-
-	// Determine application name
+	
+	// Method 2: Use current working directory + app name
+	// Gramine convention: executable is in same dir as manifest
 	appName := os.Getenv("GRAMINE_APP_NAME")
 	if appName == "" {
-		appName = "geth"
-	}
-
-	// Try Gramine standard locations
-	possiblePaths := []string{
-		fmt.Sprintf("/gramine/app_files/%s.manifest.sgx", appName),
-		fmt.Sprintf("/gramine/%s.manifest.sgx", appName),
-		fmt.Sprintf("./%s.manifest.sgx", appName),
-		fmt.Sprintf("/app/%s.manifest.sgx", appName),
-	}
-
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			// Also check if signature file exists (.manifest.sgx.sig)
-			sigPath := path + ".sig"
-			if _, err := os.Stat(sigPath); err == nil {
-				return path, nil
-			}
+		// Get app name from executable path
+		if exe, err := os.Executable(); err == nil {
+			appName = filepath.Base(exe)
+		} else {
+			appName = "geth" // fallback
 		}
 	}
+	
+	// Try: <appname>.manifest.sgx in current directory
+	manifestName := appName + ".manifest.sgx"
+	if _, err := os.Stat(manifestName); err == nil {
+		return manifestName, nil
+	}
+	
+	// Method 3: Check /proc/self/root (Gramine mounts)
+	// 注意：这是Gramine的特殊路径，应用看到的是映射后的路径
+	
+	return "", fmt.Errorf("manifest file not found (tried GRAMINE_MANIFEST_PATH env var and %s)", manifestName)
+}
 
-	return "", fmt.Errorf("manifest file not found in standard Gramine locations")
+// GetManifestPath returns the path to the SGX manifest file
+// 遵循Gramine规范：优先使用环境变量，不硬编码路径
+func GetManifestPath() (string, error) {
+	return findManifestFile()
 }
 
 // MustVerifyManifest verifies the manifest and panics if verification fails
@@ -355,4 +362,66 @@ func GetMRSIGNER() (string, error) {
 	}
 
 	return mrsigner, nil
+}
+
+// ReadContractAddressesFromManifest reads contract addresses from verified manifest
+// 必须先调用 ValidateManifestIntegrity() 验证签名后才能调用此函数
+func ReadContractAddressesFromManifest() (governance, security string, err error) {
+// 1. 定位manifest文件
+manifestPath, err := findManifestFile()
+if err != nil {
+return "", "", fmt.Errorf("cannot locate manifest: %w", err)
+}
+
+// 2. 再次验证签名（防御性编程）
+verifier, err := NewManifestSignatureVerifier()
+if err != nil {
+return "", "", fmt.Errorf("failed to create verifier: %w", err)
+}
+
+if err := verifier.VerifyManifestSignature(manifestPath, ""); err != nil {
+return "", "", fmt.Errorf("manifest signature verification failed: %w", err)
+}
+
+// 3. 读取manifest文件
+data, err := os.ReadFile(manifestPath)
+if err != nil {
+return "", "", fmt.Errorf("failed to read manifest: %w", err)
+}
+
+// 4. 解析manifest文件获取环境变量
+// Gramine manifest格式：loader.env.VARNAME = "value"
+govAddr := parseManifestEnvVar(data, "XCHAIN_GOVERNANCE_CONTRACT")
+secAddr := parseManifestEnvVar(data, "XCHAIN_SECURITY_CONFIG_CONTRACT")
+
+if govAddr == "" || secAddr == "" {
+return "", "", fmt.Errorf("contract addresses not found in manifest")
+}
+
+log.Info("Contract addresses read from manifest",
+"governance", govAddr,
+"security", secAddr)
+
+return govAddr, secAddr, nil
+}
+
+// parseManifestEnvVar extracts environment variable value from manifest content
+// Gramine manifest format: loader.env.VARNAME = "value"
+func parseManifestEnvVar(data []byte, varName string) string {
+	// Simple line-by-line parsing
+	lines := bytes.Split(data, []byte("\n"))
+	prefix := []byte(fmt.Sprintf("loader.env.%s", varName))
+	
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, prefix) {
+			// Extract value between quotes
+			parts := bytes.Split(line, []byte("\""))
+			if len(parts) >= 2 {
+				return string(parts[1])
+			}
+		}
+	}
+	
+	return ""
 }

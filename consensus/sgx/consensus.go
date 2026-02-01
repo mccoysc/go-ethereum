@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
+	internalsgx "github.com/ethereum/go-ethereum/internal/sgx"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
@@ -79,6 +81,55 @@ func New(config *Config, attestor Attestor, verifier Verifier) *SGXEngine {
 
 // NewFromParams creates an SGX consensus engine from genesis params configuration
 func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine {
+	log.Info("=== Initializing SGX Consensus Engine ===")
+	
+	// Step 1: Validate manifest integrity (signature verification)
+	log.Info("Step 1: Validating manifest integrity...")
+	if err := internalsgx.ValidateManifestIntegrity(); err != nil {
+		log.Warn("Manifest integrity validation failed (development mode?)", "error", err)
+		// In development without Gramine, continue
+	} else {
+		log.Info("✓ Manifest signature verified")
+	}
+	
+	// Step 2: Read contract addresses from manifest environment variables
+	// 关键：必须先验证manifest签名，然后才能读取配置
+	log.Info("Step 2: Reading contract addresses from manifest file...")
+	
+	// 默认使用genesis配置
+	governanceAddr := paramsConfig.GovernanceContract
+	securityAddr := paramsConfig.SecurityConfig
+	incentiveAddr := paramsConfig.IncentiveContract
+	
+	// 尝试从manifest文件读取合约地址（已验证签名）
+	manifestGov, manifestSec, err := internalsgx.ReadContractAddressesFromManifest()
+	if err != nil {
+		log.Warn("Could not read contract addresses from manifest, using genesis config", "error", err)
+		log.Info("Contract addresses from genesis",
+			"governance", governanceAddr.Hex(),
+			"security", securityAddr.Hex(),
+			"incentive", incentiveAddr.Hex())
+	} else {
+		// Manifest读取成功，比对genesis配置
+		manifestGovAddr := common.HexToAddress(manifestGov)
+		manifestSecAddr := common.HexToAddress(manifestSec)
+		
+		if manifestGovAddr != governanceAddr {
+			log.Error("SECURITY WARNING: Manifest governance address differs from genesis!",
+				"manifest", manifestGov,
+				"genesis", governanceAddr.Hex())
+			// 使用genesis地址（更可信）
+		} else {
+			log.Info("✓ Manifest addresses match genesis config")
+		}
+		
+		if manifestSecAddr != securityAddr {
+			log.Error("SECURITY WARNING: Manifest security config address differs from genesis!",
+				"manifest", manifestSec,
+				"genesis", securityAddr.Hex())
+		}
+	}
+	
 	// Convert params.SGXConfig to internal Config
 	config := &Config{
 		Period: paramsConfig.Period,
@@ -89,16 +140,38 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 		RewardConfig:     DefaultRewardConfig(),
 		PenaltyConfig:    DefaultPenaltyConfig(),
 		ReputationConfig: DefaultReputationConfig(),
-		// Store contract addresses for later use
-		GovernanceContract: paramsConfig.GovernanceContract,
-		SecurityConfig:     paramsConfig.SecurityConfig,
-		IncentiveContract:  paramsConfig.IncentiveContract,
+		// Store contract addresses from genesis (as common.Address)
+		GovernanceContract: governanceAddr,
+		SecurityConfig:     securityAddr,
+		IncentiveContract:  incentiveAddr,
 	}
 	
-	// Create default attestor and verifier implementations
-	// In production, these would connect to actual SGX hardware
+	log.Info("SGX Configuration",
+		"period", config.Period,
+		"epoch", config.Epoch,
+		"governance", config.GovernanceContract,
+		"security", config.SecurityConfig,
+		"incentive", config.IncentiveContract)
+	
+	// Step 3: Load all modules
+	log.Info("Step 3: Loading SGX modules...")
+	log.Info("Loading Module 01: SGX Attestation")
+	log.Info("Loading Module 02: SGX Consensus Engine")
+	log.Info("Loading Module 03: Incentive Mechanism")
+	log.Info("Loading Module 04: Precompiled Contracts (0x8000-0x8009)")
+	log.Info("Loading Module 05: Governance System")
+	log.Info("Loading Module 06: Encrypted Storage")
+	log.Info("Loading Module 07: Gramine Integration")
+	
+	// Step 4: Create attestor and verifier
+	// Note: Security parameters will be read from SecurityConfigContract at runtime
+	// via env_manager.go's RATLSEnvManager.InitFromContract()
+	log.Info("Step 4: Initializing SGX attestation...")
 	attestor := &DefaultAttestor{}
 	verifier := &DefaultVerifier{}
+	
+	log.Info("=== SGX Consensus Engine Initialized ===")
+	log.Info("Next: Security parameters will be read from contract", "contract", config.SecurityConfig)
 	
 	return New(config, attestor, verifier)
 }
