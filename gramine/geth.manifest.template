@@ -1,0 +1,70 @@
+# X Chain 节点 Gramine 配置模板
+# 此模板用于快速开发测试，支持 gramine-direct 和 gramine-sgx 模式
+
+# 基础配置
+libos.entrypoint = "/app/geth"
+loader.log_level = "{{ log_level }}"
+
+# 预加载库
+loader.preload = "file:{{ gramine.libdir }}/libsysdb.so"
+
+# 环境变量
+loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr/lib:/usr/{{ arch_libdir }}"
+loader.env.HOME = "/app"
+loader.env.PATH = "/bin:/usr/bin"
+
+# 安全相关参数（影响度量值 MRENCLAVE）
+# 注意：白名单不应放在环境变量中，应从链上合约动态读取
+# 以下是本节点自身的固定配置
+
+# 本地路径配置
+loader.env.XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
+loader.env.XCHAIN_SECRET_PATH = "/data/secrets"
+
+# 链上合约地址（写死，作为安全锚点）
+# 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
+loader.env.XCHAIN_GOVERNANCE_CONTRACT = "{{ governance_contract }}"
+loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "{{ security_config_contract }}"
+
+# SGX 配置
+sgx.debug = {{ debug }}
+sgx.enclave_size = "2G"
+sgx.max_threads = 32
+sgx.isvprodid = 1
+sgx.isvsvn = 1
+
+# 远程证明配置
+sgx.remote_attestation = "{{ attestation_type }}"
+
+# 可信文件
+sgx.trusted_files = [
+  "file:/app/geth",
+  "file:{{ gramine.libdir }}/",
+  "file:{{ arch_libdir }}/",
+  "file:/usr/{{ arch_libdir }}/",
+]
+
+# 允许的文件（日志等）
+sgx.allowed_files = [
+  "file:/app/logs/",
+  "file:/tmp/",
+]
+
+# 文件系统挂载
+fs.mounts = [
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
+  { path = "/usr/{{ arch_libdir }}", uri = "file:/usr/{{ arch_libdir }}" },
+  { path = "/app", uri = "file:/app" },
+  { path = "/tmp", uri = "file:/tmp" },
+  
+  # 加密分区挂载（核心安全功能）
+  # 开发模式使用 MRSIGNER，避免每次重编译后数据迁移
+  # 生产模式使用 MRENCLAVE，提供最高安全性
+  { type = "encrypted", path = "/data/encrypted", uri = "file:/data/encrypted", key_name = "{{ seal_key }}" },
+  { type = "encrypted", path = "/data/secrets", uri = "file:/data/secrets", key_name = "{{ seal_key }}" },
+  { type = "encrypted", path = "/app/wallet", uri = "file:/data/wallet", key_name = "{{ seal_key }}" },
+  
+  # 日志目录
+  { path = "/app/logs", uri = "file:/app/logs" },
+]
