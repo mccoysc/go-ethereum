@@ -22,6 +22,7 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"os"
@@ -185,17 +186,10 @@ func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string,
 	
 	log.Info("MRENCLAVE from manifest signature", "mrenclave", fmt.Sprintf("%x", manifestMREnclave))
 	
-	// Get current enclave's MRENCLAVE
-	currentMREnclave := os.Getenv("RA_TLS_MRENCLAVE")
-	if currentMREnclave == "" {
-		// Try alternative environment variable
-		currentMREnclave = os.Getenv("GRAMINE_MRENCLAVE")
-	}
-	
-	if currentMREnclave == "" {
-		log.Warn("Cannot verify MRENCLAVE: not available in environment")
-		// In production this should be an error, but for now we log a warning
-		return fmt.Errorf("MRENCLAVE not available - cannot verify manifest integrity")
+	// Get current enclave's MRENCLAVE from Gramine pseudo filesystem
+	currentMREnclaveBytes, err := getCurrentMREnclaveFromGramine()
+	if err != nil {
+		return fmt.Errorf("SECURITY: Cannot retrieve current enclave MRENCLAVE: %w", err)
 	}
 	
 	log.Info("Current enclave MRENCLAVE", "mrenclave", currentMREnclave)
@@ -512,4 +506,73 @@ func parseManifestEnvVar(data []byte, varName string) string {
 	}
 	
 	return ""
+}
+
+// getCurrentMREnclaveFromGramine retrieves the MRENCLAVE of the currently running enclave
+// Uses Gramine pseudo filesystem - NOT RA_TLS_MRENCLAVE which is for peer verification
+func getCurrentMREnclaveFromGramine() ([]byte, error) {
+	// Method 1: Read from /dev/attestation/my_target_info (Gramine pseudo-fs)
+	// This file contains TARGETINFO structure where MRENCLAVE is at offset 0
+	targetInfoPath := "/dev/attestation/my_target_info"
+	data, err := os.ReadFile(targetInfoPath)
+	if err == nil && len(data) >= 32 {
+		// MRENCLAVE is first 32 bytes of TARGETINFO
+		mrenclave := data[0:32]
+		log.Info("Retrieved current enclave MRENCLAVE from /dev/attestation/my_target_info", 
+			"mrenclave", fmt.Sprintf("%x", mrenclave))
+		return mrenclave, nil
+	}
+	
+	log.Warn("Cannot read /dev/attestation/my_target_info, trying quote method", "error", err)
+	
+	// Method 2: Generate a quote and extract MRENCLAVE from it  
+	// SGX quote structure has MRENCLAVE at offset 112
+	quote, err := generateQuoteForMREnclave()
+	if err == nil && len(quote) >= 144 {
+		// MRENCLAVE is at offset 112 in SGX quote structure
+		mrenclave := quote[112:144]
+		log.Info("Retrieved current enclave MRENCLAVE from generated quote", 
+			"mrenclave", fmt.Sprintf("%x", mrenclave))
+		return mrenclave, nil
+	}
+	
+	log.Warn("Cannot generate quote for MRENCLAVE extraction", "error", err)
+	
+	// Method 3 (testing fallback): Use TEST_MRENCLAVE environment variable
+	// NOTE: This is ONLY for testing when Gramine pseudo-fs is mocked
+	testMREnclave := os.Getenv("TEST_MRENCLAVE")
+	if testMREnclave != "" {
+		log.Warn("⚠️  Using TEST_MRENCLAVE from environment (TESTING ONLY)",
+			"mrenclave", testMREnclave)
+		mrenclaveBytes := make([]byte, 32)
+		_, err := hex.DecodeString(testMREnclave)
+		if err == nil {
+			hex.Decode(mrenclaveBytes, []byte(testMREnclave))
+			return mrenclaveBytes, nil
+		}
+	}
+	
+	return nil, fmt.Errorf("SECURITY: Cannot retrieve current enclave MRENCLAVE. " +
+		"Tried: /dev/attestation/my_target_info (Gramine pseudo-fs), quote generation. " +
+		"This is required to verify manifest corresponds to current enclave. " +
+		"For testing: export TEST_MRENCLAVE=<64-char-hex>")
+}
+
+// generateQuoteForMREnclave generates a minimal quote just to extract current MRENCLAVE
+func generateQuoteForMREnclave() ([]byte, error) {
+	// Write dummy report data to trigger quote generation
+	userReportDataPath := "/dev/attestation/user_report_data"
+	dummyData := make([]byte, 64) // SGX report data is 64 bytes
+	if err := os.WriteFile(userReportDataPath, dummyData, 0600); err != nil {
+		return nil, fmt.Errorf("cannot write to %s: %w", userReportDataPath, err)
+	}
+	
+	// Read generated quote
+	quotePath := "/dev/attestation/quote"
+	quote, err := os.ReadFile(quotePath)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read from %s: %w", quotePath, err)
+	}
+	
+	return quote, nil
 }
