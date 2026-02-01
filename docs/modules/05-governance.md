@@ -681,7 +681,18 @@ const (
     ProposalAddValidator    ProposalType = 0x04 // 添加验证者
     ProposalRemoveValidator ProposalType = 0x05 // 移除验证者
     ProposalParameterChange ProposalType = 0x06 // 参数修改
+    ProposalNormalUpgrade   ProposalType = 0x07 // 普通升级
+    ProposalEmergencyUpgrade ProposalType = 0x08 // 紧急升级（安全漏洞修复）
 )
+
+// 升级提案的投票规则：
+// 1. 普通升级（ProposalNormalUpgrade）：
+//    - 核心验证者：需要 2/3 通过
+//    - 社区验证者：可以行使否决权，1/3 否决即可拒绝提案
+// 2. 紧急升级（ProposalEmergencyUpgrade）：
+//    - 核心验证者：需要 100% 通过
+//    - 社区验证者：否决权阈值提高到 1/2（更高的否决门槛）
+//    - 必须附带安全漏洞详情和修复说明
 
 // Proposal 提案
 type Proposal struct {
@@ -768,8 +779,9 @@ const (
 )
 
 // StakingConfig 质押配置
+// 所有配置参数存储在 SecurityConfigContract 中，可以通过 GovernanceContract 投票修改
 type StakingConfig struct {
-    // 最小质押金额
+    // 最小质押金额（存储在合约中，可通过治理投票修改）
     MinStakeAmount *big.Int
     
     // 解除质押锁定期（区块数）
@@ -783,12 +795,13 @@ type StakingConfig struct {
 }
 
 // DefaultStakingConfig 默认配置
+// 注意：这些是初始值，实际值从 SecurityConfigContract 中读取，可以通过治理投票修改
 func DefaultStakingConfig() *StakingConfig {
     return &StakingConfig{
-        MinStakeAmount:    big.NewInt(1000e18), // 1000 X
-        UnstakeLockPeriod: 40320,               // 约 7 天
-        AnnualRewardRate:  5,                   // 5%
-        SlashingRate:      10,                  // 10%
+        MinStakeAmount:    big.NewInt(10000e18), // 初始值：10000 X（可通过治理合约修改）
+        UnstakeLockPeriod: 40320,                // 约 7 天
+        AnnualRewardRate:  5,                    // 5%
+        SlashingRate:      10,                   // 10%
     }
 }
 ```
@@ -1909,6 +1922,35 @@ func TestAdmissionControl(t *testing.T) {
 
 ## 配置参数
 
+**重要说明**：以下配置参数的值存储在 **SecurityConfigContract** 中，可以通过 **GovernanceContract** 的投票机制进行修改。代码中的默认值仅用于创世区块初始化，实际运行时必须从合约中读取最新配置。
+
+### 参数修改流程
+
+```
+参数修改投票流程
+================
+
+1. 提案阶段
+   ├── 核心验证者提交参数修改提案
+   ├── 提案类型：ProposalParameterChange
+   └── 包含：参数名、新值、修改理由
+
+2. 投票阶段
+   ├── 核心验证者投票（需要 2/3 通过）
+   └── 社区验证者可以行使否决权（1/3 否决）
+
+3. 执行阶段
+   ├── 投票通过后进入执行延迟期
+   ├── GovernanceContract 调用 SecurityConfigContract.SetParameter()
+   └── 参数更新生效
+
+4. 生效机制
+   ├── 所有节点从 SecurityConfigContract 读取最新配置
+   └── 下一个区块开始使用新参数
+```
+
+### 配置示例
+
 ```toml
 # config.toml
 [governance]
@@ -1928,8 +1970,8 @@ execution_delay = 5760
 min_participation = 50
 
 [governance.staking]
-# 最小质押金额
-min_stake_amount = "1000000000000000000000"  # 1000 X
+# 最小质押金额（初始值，可通过治理投票修改）
+min_stake_amount = "10000000000000000000000"  # 初始值：10000 X
 
 # 解除质押锁定期（区块数）
 unstake_lock_period = 40320

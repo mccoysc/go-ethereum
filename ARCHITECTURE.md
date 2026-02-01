@@ -4108,10 +4108,19 @@ X Chain 的安全参数从链上合约读取，但首次运行时还没有链。
 1. 治理合约和安全配置合约在创世区块中预部署
 2. 合约地址是确定性的（基于部署者地址和 nonce），可以预先计算
 3. Manifest 中写死这个预计算的合约地址
-4. 引导阶段：前 N 个（如 5 个）运行正确 MRENCLAVE 的节点自动成为创始管理者
+4. 引导阶段：前 N 个（如 5 个）不同 SGX Instance ID 的节点自动成为创始管理者
 5. 正常阶段：新管理者必须通过现有管理者投票添加
 
-创始管理者由 **MRENCLAVE** 决定，而不是由具体地址决定。任何运行正确 MRENCLAVE 的节点可以在引导阶段自动成为创始管理者，达到上限后引导阶段自动结束。
+**创始管理者选择机制：**
+
+除了升级硬分叉期间，所有节点的 MRENCLAVE 都是完全相同的。区分不同节点的是 **SGX Instance ID**（硬件唯一标识），而不是 MRENCLAVE。
+
+创始管理者的选择基于：
+- **MRENCLAVE 验证**：确保运行的是正确的代码（所有节点相同）
+- **Instance ID 去重**：每个物理 CPU 只能注册一个创始管理者
+- **先到先得**：前 N 个注册的不同硬件实例成为创始管理者
+
+这确保了创始管理者来自不同的物理硬件，防止单个实体通过多个软件实例控制网络引导过程。
 
 #### 6.1.0.0.3 分层验证者治理机制
 
@@ -4198,7 +4207,7 @@ type CoreValidatorConfig struct {
 // CommunityValidatorConfig 社区验证者配置
 type CommunityValidatorConfig struct {
     MinUptime        time.Duration // 最小运行时间 (默认 30 天)
-    MinStake         *big.Int      // 最小质押量 (默认 10,000 X)
+    MinStake         *big.Int      // 最小质押量 (初始值 10,000 X，可通过治理投票修改)
     VetoThreshold    float64       // 否决阈值 (默认 1/3)
 }
 
@@ -4212,10 +4221,11 @@ func DefaultCoreValidatorConfig() *CoreValidatorConfig {
 }
 
 // DefaultCommunityValidatorConfig 默认社区验证者配置
+// 注意：这些是创世区块的初始值，实际值从 SecurityConfigContract 中读取
 func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
     return &CommunityValidatorConfig{
         MinUptime:     30 * 24 * time.Hour, // 30 天
-        MinStake:      big.NewInt(10000),   // 10,000 X
+        MinStake:      big.NewInt(10000 * 1e18),   // 初始值：10,000 X（可通过治理投票修改）
         VetoThreshold: 0.334,               // 1/3
     }
 }
@@ -5733,7 +5743,7 @@ type RemovalConfig struct {
     MinVotingParticipation float64       // 最低投票参与率 (默认 50%)
     
     // 质押量要求
-    MinStakeAmount         *big.Int      // 最低质押量 (默认 10,000 X)
+    MinStakeAmount         *big.Int      // 最低质押量 (初始值 10,000 X，可通过治理投票修改)
     StakeGracePeriod       time.Duration // 质押不足宽限期 (默认 7 天)
     
     // 恶意行为惩罚
@@ -5744,11 +5754,12 @@ type RemovalConfig struct {
 }
 
 // DefaultRemovalConfig 默认剔除配置
+// 注意：MinStakeAmount 的实际值从 SecurityConfigContract 中读取
 func DefaultRemovalConfig() *RemovalConfig {
     return &RemovalConfig{
         MaxInactiveDays:        30,
         MinVotingParticipation: 0.5,
-        MinStakeAmount:         big.NewInt(10000 * 1e18),  // 10,000 X
+        MinStakeAmount:         big.NewInt(10000 * 1e18),  // 初始值：10,000 X（可通过治理投票修改）
         StakeGracePeriod:       7 * 24 * time.Hour,
         MaliciousSlashRate:     50,
         SGXRevalidationPeriod:  30 * 24 * time.Hour,
