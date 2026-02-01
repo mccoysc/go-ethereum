@@ -2,7 +2,39 @@
 
 ## 模块概述
 
-Gramine 集成模块负责 X Chain 节点在 Intel SGX 环境中的部署和运行。该模块管理 Gramine manifest 配置、安全参数嵌入、加密文件系统挂载、以及 Docker 镜像构建流程。
+**Gramine 集成模块是将所有 01～06 模块以及整体 Geth 集成到 Gramine SGX 环境中运行的完整集成方案**。该模块不仅提供 SGX 运行环境配置，更重要的是定义了各个模块如何在 Gramine 环境中协同工作，形成完整的 X Chain 节点。
+
+### 集成方案核心职责
+
+1. **环境准备**：配置 Gramine manifest，使 Geth 及所有模块能在 SGX enclave 中运行
+2. **模块整合**：将 SGX 证明、共识引擎、预编译合约、治理、激励、存储等模块整合为统一的运行时
+3. **安全保障**：通过加密分区、参数固化、MRENCLAVE 绑定等机制确保整体安全性
+4. **部署方案**：提供从 Docker 镜像构建到节点启动的完整部署流程
+5. **验证机制**：确保各模块在 SGX 环境中正常协作
+
+### 模块集成关系
+
+```
+                     Gramine 集成模块 (07)
+                    /       |        \
+                   /        |         \
+                  /         |          \
+          模块01-06     整体Geth    SGX环境
+              |            |            |
+              v            v            v
+        ┌─────────────────────────────────────────┐
+        │   完整的 X Chain 节点 (SGX Enclave)     │
+        │                                         │
+        │  01-SGX证明 ──> P2P RA-TLS 握手        │
+        │  02-共识引擎 ──> PoA-SGX 出块          │
+        │  03-激励机制 ──> 交易费分配            │
+        │  04-预编译合约 ──> 密钥管理            │
+        │  05-治理模块 ──> 白名单管理            │
+        │  06-存储模块 ──> 加密分区访问          │
+        │                                         │
+        │  Geth 核心 ──> EVM + StateDB + P2P    │
+        └─────────────────────────────────────────┘
+```
 
 此外，该模块与 SGX 共识引擎、RA-TLS 通道密切协作，并支持整体架构中的加密分区功能，确保了系统安全性与数据一致性。
 
@@ -43,26 +75,82 @@ Gramine 集成模块负责 X Chain 节点在 Intel SGX 环境中的部署和运�
 
 ## 模块职责
 
-1. Gramine manifest 模板配置
-2. 安全参数嵌入（影响度量值）
-3. 加密文件系统配置
-4. Docker 镜像构建流程
-5. 启动脚本和部署配置
-6. SGX 硬件支持检测
+作为集成方案，本模块的核心职责包括：
+
+### 1. 环境配置与准备
+- Gramine manifest 模板配置
+- 安全参数嵌入（影响度量值 MRENCLAVE）
+- 加密文件系统配置
+- SGX 硬件支持检测
+
+### 2. 模块整合与集成
+- **整合 01-SGX 证明模块**：配置 RA-TLS 库和证书验证
+- **整合 02-共识引擎模块**：确保 PoA-SGX 共识在 enclave 中运行
+- **整合 03-激励机制模块**：支持激励计算在 TEE 中执行
+- **整合 04-预编译合约模块**：配置加密分区存储私钥
+- **整合 05-治理模块**：固化治理合约地址，读取链上白名单
+- **整合 06-数据存储模块**：实现三层参数校验机制
+
+### 3. 部署与运维
+- Docker 镜像构建流程
+- 启动脚本和部署配置
+- 节点运行状态监控
+- 模块功能验证机制
+
+### 4. 安全保障
+- MRENCLAVE 度量值绑定
+- 合约地址固化防篡改
+- 参数优先级控制（Manifest > 链上 > 命令行）
+- 端到端集成测试
 
 ## 依赖关系
 
+### 作为集成方案的依赖结构
+
 ```
-+----------------------+
-|   Gramine 集成模块   |
-+----------------------+
-        |
-        +---> SGX 证明模块（RA-TLS 配置）
-        |
-        +---> 数据存储模块（加密分区）
-        |
-        +---> 治理模块（度量值白名单）
+                 +--------------------------------+
+                 |   Gramine 集成模块 (07)         |
+                 |   - Manifest 配置              |
+                 |   - Docker 构建                |
+                 |   - 启动流程                   |
+                 +--------------------------------+
+                        |      |      |
+        +---------------+      |      +----------------+
+        |                      |                       |
+        v                      v                       v
++----------------+    +----------------+    +------------------+
+| 01-SGX证明模块  |    | 02-共识引擎     |    | 03-激励机制       |
+| (RA-TLS)       |    | (PoA-SGX)      |    | (奖励分配)        |
++----------------+    +----------------+    +------------------+
+        |                      |                       |
+        +----------------------+------------------------+
+                               |
+        +----------------------+------------------------+
+        |                      |                       |
+        v                      v                       v
++----------------+    +----------------+    +------------------+
+| 04-预编译合约   |    | 05-治理模块     |    | 06-存储模块       |
+| (密钥管理)     |    | (白名单管理)    |    | (加密分区)        |
++----------------+    +----------------+    +------------------+
+        |                      |                       |
+        +----------------------+------------------------+
+                               |
+                               v
+                 +--------------------------------+
+                 |     完整的 X Chain 节点         |
+                 | (所有模块在 Gramine 中运行)     |
+                 +--------------------------------+
 ```
+
+### 集成依赖说明
+
+**07 模块整合所有模块**：
+- **SGX 证明模块（01）**：配置 RA-TLS 库路径、环境变量
+- **共识引擎模块（02）**：固化共识参数、确保在 enclave 中执行
+- **激励机制模块（03）**：支持激励计算的可信执行
+- **预编译合约模块（04）**：配置加密分区以存储私钥
+- **治理模块（05）**：固化治理合约地址、读取链上配置
+- **数据存储模块（06）**：实现三层参数校验、加密分区管理
 
 ### 上游依赖
 - Intel SGX SDK/PSW
@@ -130,5 +218,1077 @@ libgcc = "file:{{ arch_libdir }}/libgcc_s.so.1"
 libstdc = "file:/usr/lib/x86_64-linux-gnu/libstdc++.so.6"
 
 # 文件系统挂载
-[fs.mounts]...
+[[fs.mounts]]
+type = "chroot"
+path = "/lib"
+uri = "file:{{ gramine.runtimedir() }}"
+
+[[fs.mounts]]
+type = "chroot"
+path = "{{ arch_libdir }}"
+uri = "file:{{ arch_libdir }}"
+
+[[fs.mounts]]
+type = "chroot"
+path = "/usr/{{ arch_libdir }}"
+uri = "file:/usr/{{ arch_libdir }}"
+
+[[fs.mounts]]
+type = "chroot"
+path = "/app"
+uri = "file:/app"
+
+# 加密分区挂载（核心安全功能）
+[[fs.mounts]]
+type = "encrypted"
+path = "/data/encrypted"
+uri = "file:/data/encrypted"
+key_name = "_sgx_mrenclave"  # 使用 MRENCLAVE 进行数据封装
+
+[[fs.mounts]]
+type = "encrypted"
+path = "/data/secrets"
+uri = "file:/data/secrets"
+key_name = "_sgx_mrenclave"
+
+# 区块链数据目录
+[[fs.mounts]]
+type = "encrypted"
+path = "/app/wallet"
+uri = "file:/data/wallet"
+key_name = "_sgx_mrenclave"
+
+# 允许写入的日志目录
+[[fs.mounts]]
+type = "chroot"
+path = "/app/logs"
+uri = "file:/app/logs"
+```
+
+### MRENCLAVE vs MRSIGNER 封装策略
+
+| 特性 | MRENCLAVE sealing | MRSIGNER sealing |
+|------|-------------------|------------------|
+| 安全性 | 更高（代码绑定） | 较低（签名者绑定） |
+| 升级便利性 | 需要数据迁移 | 无需迁移 |
+| 适用场景 | 高安全要求 | 频繁升级场景 |
+| 回滚风险 | 低 | 旧版本可访问新数据 |
+
+**推荐策略**：
+- **生产环境**：使用 MRENCLAVE sealing + 数据迁移机制
+- **测试环境**：可使用 MRSIGNER sealing 简化升级流程
+- **混合策略**：核心私钥使用 MRENCLAVE，临时数据使用 MRSIGNER
+
+### RA-TLS 配置
+
+```toml
+# RA-TLS 环境变量配置
+loader.env.RA_TLS_MRENCLAVE = "{{ mrenclave }}"
+loader.env.RA_TLS_MRSIGNER = "{{ mrsigner }}"
+loader.env.RA_TLS_ISV_PROD_ID = "1"
+loader.env.RA_TLS_ISV_SVN = "1"
+
+# RA-TLS 库路径
+loader.env.RA_TLS_ALLOW_OUTDATED_TCB_INSECURE = "0"
+loader.env.RA_TLS_ALLOW_DEBUG_ENCLAVE_INSECURE = "0"
+```
+
+## Docker 镜像构建
+
+### Dockerfile 示例
+
+```dockerfile
+# Dockerfile.xchain
+FROM ubuntu:22.04
+
+# 安装基础依赖
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    wget \
+    gnupg2 \
+    software-properties-common
+
+# 安装 SGX 驱动和 DCAP
+RUN wget -qO - https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | apt-key add - && \
+    add-apt-repository "deb https://download.01.org/intel-sgx/sgx_repo/ubuntu $(lsb_release -cs) main" && \
+    apt-get update && \
+    apt-get install -y \
+        sgx-aesm-service \
+        libsgx-dcap-ql \
+        libsgx-dcap-default-qpl
+
+# 安装 Gramine
+RUN wget -qO - https://packages.gramineproject.io/gramine-keyring.gpg | apt-key add - && \
+    add-apt-repository "deb https://packages.gramineproject.io/ $(lsb_release -cs) main" && \
+    apt-get update && \
+    apt-get install -y gramine
+
+# 复制编译好的 geth 二进制
+COPY ./build/bin/geth /app/geth
+
+# 复制 Gramine manifest 模板
+COPY ./gramine/geth.manifest.template /app/geth.manifest.template
+
+# 生成 manifest
+WORKDIR /app
+RUN gramine-manifest \
+    -Dlog_level=error \
+    -Darch_libdir=/lib/x86_64-linux-gnu \
+    -Dgovernance_contract=0x0000000000000000000000000000000000001001 \
+    -Dsecurity_config_contract=0x0000000000000000000000000000000000001002 \
+    geth.manifest.template geth.manifest
+
+# 签名 manifest（生成 MRENCLAVE）
+RUN gramine-sgx-sign \
+    --manifest geth.manifest \
+    --output geth.manifest.sgx \
+    --key /path/to/signing-key.pem
+
+# 创建数据目录
+RUN mkdir -p /data/encrypted /data/secrets /data/wallet /app/logs
+
+# 启动脚本
+COPY ./gramine/start-xchain.sh /app/start-xchain.sh
+RUN chmod +x /app/start-xchain.sh
+
+EXPOSE 8545 8546 30303
+
+ENTRYPOINT ["/app/start-xchain.sh"]
+```
+
+### 构建流程
+
+```bash
+#!/bin/bash
+# build-docker.sh
+
+set -e
+
+# 1. 编译 geth
+echo "Building geth..."
+make geth
+
+# 2. 确定合约地址（从创世配置计算）
+GOVERNANCE_CONTRACT="0x0000000000000000000000000000000000001001"
+SECURITY_CONFIG_CONTRACT="0x0000000000000000000000000000000000001002"
+
+echo "Governance Contract: ${GOVERNANCE_CONTRACT}"
+echo "Security Config Contract: ${SECURITY_CONFIG_CONTRACT}"
+
+# 3. 构建 Docker 镜像
+echo "Building Docker image..."
+docker build \
+    --build-arg GOVERNANCE_CONTRACT=${GOVERNANCE_CONTRACT} \
+    --build-arg SECURITY_CONFIG_CONTRACT=${SECURITY_CONFIG_CONTRACT} \
+    -t xchain-node:latest \
+    -f Dockerfile.xchain \
+    .
+
+# 4. 提取 MRENCLAVE（用于白名单配置）
+echo "Extracting MRENCLAVE..."
+MRENCLAVE=$(docker run --rm xchain-node:latest gramine-sgx-sigstruct-view geth.manifest.sgx | grep MRENCLAVE | awk '{print $2}')
+echo "MRENCLAVE: ${MRENCLAVE}"
+
+# 保存 MRENCLAVE 到文件
+echo ${MRENCLAVE} > mrenclave.txt
+echo "MRENCLAVE saved to mrenclave.txt"
+
+echo "Build complete!"
+```
+
+## 部署和启动
+
+### 启动脚本
+
+```bash
+#!/bin/bash
+# start-xchain.sh
+
+set -e
+
+echo "Starting X Chain node in SGX enclave..."
+
+# 检查 SGX 硬件支持
+if [ ! -c /dev/sgx_enclave ]; then
+    echo "ERROR: SGX device not found. Please ensure:"
+    echo "  1. CPU supports SGX"
+    echo "  2. SGX is enabled in BIOS"
+    echo "  3. SGX driver is installed"
+    exit 1
+fi
+
+# 启动 AESM 服务（如果未运行）
+if ! pgrep -x "aesm_service" > /dev/null; then
+    echo "Starting AESM service..."
+    /opt/intel/sgx-aesm-service/aesm/aesm_service &
+    sleep 2
+fi
+
+# 从环境变量读取配置参数
+NETWORK_ID=${XCHAIN_NETWORK_ID:-762385986}
+DATA_DIR=${XCHAIN_DATA_DIR:-/data/wallet/chaindata}
+RPC_PORT=${XCHAIN_RPC_PORT:-8545}
+WS_PORT=${XCHAIN_WS_PORT:-8546}
+P2P_PORT=${XCHAIN_P2P_PORT:-30303}
+
+echo "Configuration:"
+echo "  Network ID: ${NETWORK_ID}"
+echo "  Data Dir: ${DATA_DIR}"
+echo "  RPC Port: ${RPC_PORT}"
+echo "  WS Port: ${WS_PORT}"
+echo "  P2P Port: ${P2P_PORT}"
+
+# 在 SGX enclave 中启动 geth
+exec gramine-sgx geth \
+    --datadir ${DATA_DIR} \
+    --networkid ${NETWORK_ID} \
+    --syncmode full \
+    --gcmode archive \
+    --http \
+    --http.addr 0.0.0.0 \
+    --http.port ${RPC_PORT} \
+    --http.api eth,net,web3,sgx \
+    --http.corsdomain "*" \
+    --ws \
+    --ws.addr 0.0.0.0 \
+    --ws.port ${WS_PORT} \
+    --ws.api eth,net,web3,sgx \
+    --ws.origins "*" \
+    --port ${P2P_PORT} \
+    --maxpeers 50 \
+    --verbosity 3
+```
+
+### Docker Compose 配置
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  xchain-node:
+    image: xchain-node:latest
+    container_name: xchain-node
+    devices:
+      - /dev/sgx_enclave:/dev/sgx_enclave
+      - /dev/sgx_provision:/dev/sgx_provision
+    volumes:
+      - ./data/encrypted:/data/encrypted
+      - ./data/secrets:/data/secrets
+      - ./data/wallet:/data/wallet
+      - ./logs:/app/logs
+      - /var/run/aesmd:/var/run/aesmd
+    ports:
+      - "8545:8545"  # RPC
+      - "8546:8546"  # WebSocket
+      - "30303:30303"  # P2P
+    environment:
+      - XCHAIN_NETWORK_ID=762385986
+      - XCHAIN_DATA_DIR=/data/wallet/chaindata
+      - XCHAIN_RPC_PORT=8545
+      - XCHAIN_WS_PORT=8546
+      - XCHAIN_P2P_PORT=30303
+    restart: unless-stopped
+    networks:
+      - xchain-network
+
+networks:
+  xchain-network:
+    driver: bridge
+```
+
+### 部署步骤
+
+```bash
+# 1. 构建镜像
+./build-docker.sh
+
+# 2. 初始化数据目录
+mkdir -p data/encrypted data/secrets data/wallet logs
+
+# 3. 初始化创世区块（首次部署）
+docker run --rm \
+    -v $(pwd)/genesis.json:/app/genesis.json \
+    -v $(pwd)/data/wallet:/data/wallet \
+    xchain-node:latest \
+    geth init /app/genesis.json --datadir /data/wallet/chaindata
+
+# 4. 启动节点
+docker-compose up -d
+
+# 5. 查看日志
+docker-compose logs -f
+```
+
+## SGX 硬件检测
+
+### 检测脚本
+
+```bash
+#!/bin/bash
+# check-sgx.sh
+
+echo "Checking SGX hardware support..."
+
+# 检查 CPU 型号
+echo "CPU Model:"
+lscpu | grep "Model name"
+
+# 检查 SGX 支持
+if cpuid | grep -q SGX; then
+    echo "✓ CPU supports SGX"
+else
+    echo "✗ CPU does not support SGX"
+    exit 1
+fi
+
+# 检查 SGX 设备
+if [ -c /dev/sgx_enclave ]; then
+    echo "✓ SGX enclave device found"
+else
+    echo "✗ SGX enclave device not found"
+    echo "  Please install SGX driver"
+    exit 1
+fi
+
+if [ -c /dev/sgx_provision ]; then
+    echo "✓ SGX provision device found"
+else
+    echo "✗ SGX provision device not found"
+    exit 1
+fi
+
+# 检查 AESM 服务
+if pgrep -x "aesm_service" > /dev/null; then
+    echo "✓ AESM service is running"
+else
+    echo "✗ AESM service is not running"
+    echo "  Please start: sudo systemctl start aesmd"
+    exit 1
+fi
+
+# 检查 SGX 驱动版本
+if command -v sgx-detect &> /dev/null; then
+    echo ""
+    echo "SGX Detection Report:"
+    sgx-detect
+else
+    echo "  (sgx-detect not installed, skipping detailed report)"
+fi
+
+# 检查 Gramine
+if command -v gramine-sgx &> /dev/null; then
+    echo "✓ Gramine is installed"
+    gramine-sgx --version
+else
+    echo "✗ Gramine is not installed"
+    exit 1
+fi
+
+echo ""
+echo "All checks passed! System is ready for X Chain deployment."
+```
+
+### Go 实现的硬件检测
+
+```go
+// internal/sgx/hardware_check.go
+package sgx
+
+import (
+    "fmt"
+    "os"
+)
+
+// CheckSGXHardware 检查 SGX 硬件支持
+func CheckSGXHardware() error {
+    // 检查 enclave 设备
+    if _, err := os.Stat("/dev/sgx_enclave"); os.IsNotExist(err) {
+        return fmt.Errorf("SGX enclave device not found: %w", err)
+    }
+    
+    // 检查 provision 设备
+    if _, err := os.Stat("/dev/sgx_provision"); os.IsNotExist(err) {
+        return fmt.Errorf("SGX provision device not found: %w", err)
+    }
+    
+    // 检查 attestation 接口（Gramine 提供）
+    if _, err := os.Stat("/dev/attestation"); os.IsNotExist(err) {
+        return fmt.Errorf("Gramine attestation device not found: %w", err)
+    }
+    
+    return nil
+}
+
+// GetSGXInfo 获取 SGX 信息
+func GetSGXInfo() (*SGXInfo, error) {
+    info := &SGXInfo{}
+    
+    // 读取本地 MRENCLAVE
+    attestor := NewAttestor()
+    info.MRENCLAVE = attestor.GetMREnclave()
+    info.MRSIGNER = attestor.GetMRSigner()
+    
+    // 检查是否在 SGX 环境中运行
+    info.IsInsideEnclave = isInsideEnclave()
+    
+    return info, nil
+}
+
+// SGXInfo SGX 环境信息
+type SGXInfo struct {
+    MRENCLAVE      []byte
+    MRSIGNER       []byte
+    IsInsideEnclave bool
+}
+
+// isInsideEnclave 检查是否在 enclave 中运行
+func isInsideEnclave() bool {
+    // Gramine 在 enclave 中会设置特定环境变量
+    _, exists := os.LookupEnv("SGX_AESM_ADDR")
+    return exists
+}
+```
+
+## 参数校验机制
+
+### 三层参数架构
+
+X Chain 的参数系统分为三层，优先级从高到低：
+
+1. **Manifest 固定参数**（影响 MRENCLAVE，不可修改）
+2. **链上安全参数**（从 SecurityConfigContract 读取）
+3. **命令行参数**（运行时配置）
+
+### 参数校验流程
+
+```go
+// internal/config/validator.go
+package config
+
+import (
+    "fmt"
+    "os"
+    
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// ValidateParameters 验证参数一致性
+func ValidateParameters(cliConfig *CLIConfig) error {
+    // 1. 从 Manifest 环境变量读取固定参数
+    manifestConfig := loadManifestConfig()
+    
+    // 2. 验证路径参数一致性
+    if cliConfig.EncryptedPath != "" && 
+       cliConfig.EncryptedPath != manifestConfig.EncryptedPath {
+        return fmt.Errorf(
+            "encrypted path mismatch: CLI=%s, Manifest=%s. "+
+            "Manifest parameters cannot be overridden",
+            cliConfig.EncryptedPath,
+            manifestConfig.EncryptedPath,
+        )
+    }
+    
+    // 3. 验证合约地址一致性
+    if cliConfig.GovernanceContract != (common.Address{}) &&
+       cliConfig.GovernanceContract != manifestConfig.GovernanceContract {
+        return fmt.Errorf(
+            "governance contract mismatch: CLI=%s, Manifest=%s. "+
+            "Contract addresses are fixed in manifest",
+            cliConfig.GovernanceContract.Hex(),
+            manifestConfig.GovernanceContract.Hex(),
+        )
+    }
+    
+    // 4. 使用 Manifest 参数覆盖 CLI 参数
+    cliConfig.EncryptedPath = manifestConfig.EncryptedPath
+    cliConfig.SecretPath = manifestConfig.SecretPath
+    cliConfig.GovernanceContract = manifestConfig.GovernanceContract
+    cliConfig.SecurityConfigContract = manifestConfig.SecurityConfigContract
+    
+    return nil
+}
+
+// ManifestConfig Manifest 中的固定参数
+type ManifestConfig struct {
+    EncryptedPath          string
+    SecretPath             string
+    GovernanceContract     common.Address
+    SecurityConfigContract common.Address
+}
+
+// loadManifestConfig 从环境变量加载 Manifest 配置
+func loadManifestConfig() *ManifestConfig {
+    return &ManifestConfig{
+        EncryptedPath: os.Getenv("XCHAIN_ENCRYPTED_PATH"),
+        SecretPath:    os.Getenv("XCHAIN_SECRET_PATH"),
+        GovernanceContract: common.HexToAddress(
+            os.Getenv("XCHAIN_GOVERNANCE_CONTRACT"),
+        ),
+        SecurityConfigContract: common.HexToAddress(
+            os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT"),
+        ),
+    }
+}
+
+// CLIConfig 命令行配置
+type CLIConfig struct {
+    EncryptedPath          string
+    SecretPath             string
+    GovernanceContract     common.Address
+    SecurityConfigContract common.Address
+    // ... 其他运行时参数
+}
+```
+
+### 启动时参数处理
+
+```go
+// cmd/geth/main.go (伪代码示例)
+func startNode(ctx *cli.Context) error {
+    // 1. 读取命令行参数
+    cliConfig := loadCLIConfig(ctx)
+    
+    // 2. 验证参数一致性（Manifest 优先级最高）
+    if err := config.ValidateParameters(cliConfig); err != nil {
+        return fmt.Errorf("parameter validation failed: %w", err)
+    }
+    
+    // 3. 从链上读取安全参数
+    chainConfig, err := loadChainConfig(cliConfig.SecurityConfigContract)
+    if err != nil {
+        return fmt.Errorf("failed to load chain config: %w", err)
+    }
+    
+    // 4. 合并配置（优先级：Manifest > Chain > CLI）
+    finalConfig := mergeConfigs(cliConfig, chainConfig)
+    
+    // 5. 启动节点
+    return runNode(finalConfig)
+}
+```
+
+详细的参数校验机制参见 [数据存储与同步模块](06-data-storage-sync.md)。
+
+## 实现要点
+
+### Gramine 透明加密
+
+**重要**：Gramine 提供**透明加密**功能，应用无需处理加解密操作。
+
+```go
+// 应用代码示例 - 完全透明
+package main
+
+import "os"
+
+func storePrivateKey(keyData []byte) error {
+    // 写入加密分区 - Gramine 自动加密
+    return os.WriteFile("/data/encrypted/key.bin", keyData, 0600)
+}
+
+func loadPrivateKey() ([]byte, error) {
+    // 读取加密分区 - Gramine 自动解密
+    return os.ReadFile("/data/encrypted/key.bin")
+}
+
+// 应用无需：
+// - 管理加密密钥
+// - 调用加密 API
+// - 处理密钥派生
+// Gramine 在底层透明处理所有加密操作
+```
+
+### RA-TLS 集成
+
+RA-TLS 功能由 Gramine 提供，应用直接使用：
+
+```go
+// internal/sgx/ratls.go
+package sgx
+
+import (
+    "crypto/tls"
+    "crypto/x509"
+)
+
+// #cgo LDFLAGS: -lra_tls_attest -lra_tls_verify
+// #include <ra_tls.h>
+import "C"
+
+// CreateRATLSCertificate 创建 RA-TLS 证书
+func CreateRATLSCertificate() (*tls.Certificate, error) {
+    // 调用 Gramine RA-TLS 库
+    // 详见 01-sgx-attestation.md
+    return nil, nil
+}
+
+// VerifyRATLSCertificate 验证 RA-TLS 证书
+func VerifyRATLSCertificate(cert *x509.Certificate) error {
+    // 调用 Gramine RA-TLS 库
+    // 详见 01-sgx-attestation.md
+    return nil
+}
+```
+
+详细 RA-TLS 实现参见 [SGX 证明模块](01-sgx-attestation.md)。
+
+## 模块集成实现
+
+### 模块整合架构
+
+Gramine 集成模块的核心任务是将 01～06 模块整合为完整的 X Chain 节点。以下是各模块在 Gramine 环境中的集成方式：
+
+#### 01-SGX 证明模块集成
+
+**功能**：提供 RA-TLS 双向认证，确保 P2P 通信安全
+
+**集成方式**：
+```toml
+# Manifest 配置 - RA-TLS 库
+[sgx.trusted_files]
+ra_tls_attest = "file:/usr/lib/x86_64-linux-gnu/libra_tls_attest.so"
+ra_tls_verify = "file:/usr/lib/x86_64-linux-gnu/libra_tls_verify.so"
+
+# RA-TLS 环境变量
+loader.env.RA_TLS_MRENCLAVE = "{{ mrenclave }}"
+loader.env.RA_TLS_MRSIGNER = "{{ mrsigner }}"
+```
+
+**运行时验证**：
+```bash
+# 节点启动后验证 RA-TLS 功能
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "admin.peers" | grep "ratls"
+```
+
+#### 02-共识引擎模块集成
+
+**功能**：实现 PoA-SGX 共识机制
+
+**集成方式**：
+- 共识引擎代码编译到 geth 二进制中
+- Manifest 固化共识参数（防止运行时篡改）
+
+```toml
+# 共识相关环境变量（影响 MRENCLAVE）
+loader.env.XCHAIN_CONSENSUS_ENGINE = "sgx"
+loader.env.XCHAIN_BLOCK_INTERVAL = "15"
+```
+
+**运行时验证**：
+```bash
+# 验证共识引擎类型
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.getBlock('latest').extraData"
+```
+
+#### 03-激励机制模块集成
+
+**功能**：计算和分发节点奖励
+
+**集成方式**：
+- 激励计算逻辑在 enclave 内执行
+- 奖励状态存储在加密分区
+
+```go
+// 激励机制在 Finalize 阶段调用
+func (s *SGXConsensus) Finalize(...) {
+    // 计算奖励（enclave 内部，不可篡改）
+    incentive.CalculateRewards(state, header)
+}
+```
+
+**运行时验证**：
+```bash
+# 验证激励合约状态
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.getBalance('0x激励合约地址')"
+```
+
+#### 04-预编译合约模块集成
+
+**功能**：提供密钥管理和密码学操作
+
+**集成方式**：
+- 预编译合约注册到 EVM
+- 私钥存储在加密分区（Gramine 透明加密）
+
+```toml
+# 确保加密分区正确挂载
+[[fs.mounts]]
+type = "encrypted"
+path = "/data/encrypted"
+uri = "file:/data/encrypted"
+key_name = "_sgx_mrenclave"
+```
+
+**运行时验证**：
+```bash
+# 测试密钥创建预编译合约
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.call({to:'0x8000', data:'0x...'})"
+```
+
+#### 05-治理模块集成
+
+**功能**：管理 MRENCLAVE 白名单和验证者
+
+**集成方式**：
+- 治理合约地址固化在 Manifest（防止篡改）
+- 白名单从链上读取（动态更新）
+
+```toml
+# 治理合约地址（影响 MRENCLAVE）
+loader.env.XCHAIN_GOVERNANCE_CONTRACT = "{{ governance_contract }}"
+loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "{{ security_config_contract }}"
+```
+
+**运行时验证**：
+```bash
+# 验证治理合约地址
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.getCode('0x治理合约地址')"
+
+# 查询 MRENCLAVE 白名单
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.call({to:'0x安全配置合约', data:'0x白名单查询'})"
+```
+
+#### 06-数据存储模块集成
+
+**功能**：提供加密存储和参数校验
+
+**集成方式**：
+- Gramine 加密分区挂载
+- 启动时参数校验（Manifest > 链上 > 命令行）
+
+```go
+// 启动时参数校验
+func main() {
+    manifestConfig := loadManifestConfig()  // 从环境变量读取
+    chainConfig := loadChainConfig()        // 从链上合约读取
+    cliConfig := parseCLIArgs()             // 从命令行读取
+    
+    // 校验并合并（Manifest 优先）
+    finalConfig := validateAndMerge(manifestConfig, chainConfig, cliConfig)
+}
+```
+
+**运行时验证**：
+```bash
+# 验证加密分区挂载
+docker exec xchain-node ls -la /data/encrypted
+
+# 验证参数校验逻辑
+docker exec xchain-node geth --datadir /data/wallet/chaindata version
+```
+
+### 整体集成验证流程
+
+```bash
+#!/bin/bash
+# validate-integration.sh
+# 验证所有模块在 Gramine 环境中正常工作
+
+set -e
+
+echo "=== X Chain 模块集成验证 ==="
+
+# 1. 验证 SGX 环境
+echo "[01] 验证 SGX 证明模块..."
+docker exec xchain-node gramine-sgx-sigstruct-view geth.manifest.sgx | grep MRENCLAVE
+
+# 2. 验证共识引擎
+echo "[02] 验证共识引擎模块..."
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.getBlock('latest')"
+
+# 3. 验证激励机制
+echo "[03] 验证激励机制模块..."
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.getBalance('0x激励合约')"
+
+# 4. 验证预编译合约
+echo "[04] 验证预编译合约模块..."
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.call({to:'0x8000', data:'0x...'})"
+
+# 5. 验证治理模块
+echo "[05] 验证治理模块..."
+docker exec xchain-node geth attach /data/wallet/chaindata/geth.ipc --exec "eth.getCode('0x治理合约')"
+
+# 6. 验证数据存储
+echo "[06] 验证数据存储模块..."
+docker exec xchain-node ls -la /data/encrypted
+
+echo "=== 所有模块验证通过 ==="
+```
+
+### 模块间数据流
+
+```
+用户交易
+   │
+   ├──> [01-SGX证明] RA-TLS 验证节点身份
+   │         │
+   │         v
+   ├──> [02-共识引擎] 验证交易并打包区块
+   │         │
+   │         v
+   ├──> [04-预编译合约] 处理密钥管理操作
+   │         │        (私钥在加密分区)
+   │         v
+   ├──> [03-激励机制] 计算并分配奖励
+   │         │
+   │         v
+   ├──> [05-治理模块] 检查白名单和权限
+   │         │
+   │         v
+   └──> [06-存储模块] 持久化到加密分区
+             │
+             v
+        Gramine 加密分区
+        (MRENCLAVE sealing)
+```
+
+### 端到端集成测试
+
+```go
+// integration_test.go
+package integration_test
+
+import (
+    "testing"
+)
+
+func TestFullIntegration(t *testing.T) {
+    // 1. 启动节点
+    node := startXChainNode(t)
+    defer node.Stop()
+    
+    // 2. 验证 SGX 证明
+    if err := node.VerifySGXAttestation(); err != nil {
+        t.Fatalf("SGX attestation failed: %v", err)
+    }
+    
+    // 3. 验证共识引擎
+    block := node.MineBlock()
+    if block == nil {
+        t.Fatal("Failed to mine block")
+    }
+    
+    // 4. 验证预编译合约
+    keyID := node.CreateKey()
+    if keyID == "" {
+        t.Fatal("Failed to create key")
+    }
+    
+    // 5. 验证加密存储
+    if err := node.VerifyEncryptedPartition(); err != nil {
+        t.Fatalf("Encrypted partition verification failed: %v", err)
+    }
+    
+    // 6. 验证治理功能
+    whitelist := node.GetMREnclaveWhitelist()
+    if len(whitelist) == 0 {
+        t.Fatal("MRENCLAVE whitelist is empty")
+    }
+}
+```
+
+## 测试
+
+### 单元测试
+
+```go
+// gramine/manifest_test.go
+package gramine_test
+
+import (
+    "testing"
+)
+
+func TestManifestGeneration(t *testing.T) {
+    // 测试 manifest 生成
+}
+
+func TestParameterValidation(t *testing.T) {
+    // 测试参数校验逻辑
+}
+```
+
+### 集成测试
+
+```bash
+#!/bin/bash
+# test-deployment.sh
+
+set -e
+
+echo "Testing X Chain deployment..."
+
+# 1. 构建镜像
+./build-docker.sh
+
+# 2. 检查 SGX 硬件
+./check-sgx.sh
+
+# 3. 启动测试节点
+docker-compose -f docker-compose.test.yml up -d
+
+# 4. 等待节点启动
+sleep 10
+
+# 5. 检查节点状态
+curl -X POST http://localhost:8545 \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# 6. 清理
+docker-compose -f docker-compose.test.yml down
+
+echo "Deployment test passed!"
+```
+
+### SGX 环境测试
+
+```go
+// gramine/sgx_test.go
+package gramine_test
+
+import (
+    "testing"
+    
+    "github.com/ethereum/go-ethereum/internal/sgx"
+)
+
+func TestSGXHardwareDetection(t *testing.T) {
+    // 测试 SGX 硬件检测
+    if err := sgx.CheckSGXHardware(); err != nil {
+        t.Skipf("SGX hardware not available: %v", err)
+    }
+    
+    info, err := sgx.GetSGXInfo()
+    if err != nil {
+        t.Fatalf("Failed to get SGX info: %v", err)
+    }
+    
+    if !info.IsInsideEnclave {
+        t.Error("Not running inside enclave")
+    }
+    
+    if len(info.MRENCLAVE) == 0 {
+        t.Error("MRENCLAVE is empty")
+    }
+}
+
+func TestEncryptedPartition(t *testing.T) {
+    // 测试加密分区功能
+    testData := []byte("test secret data")
+    
+    // 写入
+    if err := os.WriteFile("/data/encrypted/test.bin", testData, 0600); err != nil {
+        t.Fatalf("Failed to write: %v", err)
+    }
+    
+    // 读取
+    readData, err := os.ReadFile("/data/encrypted/test.bin")
+    if err != nil {
+        t.Fatalf("Failed to read: %v", err)
+    }
+    
+    if !bytes.Equal(testData, readData) {
+        t.Error("Data mismatch")
+    }
+    
+    // 清理
+    os.Remove("/data/encrypted/test.bin")
+}
+```
+
+## 安全检查清单
+
+**部署前检查**
+- [ ] Manifest 中合约地址正确配置
+- [ ] 加密分区路径已配置
+- [ ] SGX 设备可访问 (`/dev/sgx_enclave`, `/dev/sgx_provision`)
+- [ ] AESM 服务正在运行
+- [ ] Manifest 签名密钥安全保管
+- [ ] MRENCLAVE 值已记录（用于白名单配置）
+
+**运行时检查**
+- [ ] 节点在 SGX enclave 中运行
+- [ ] 加密分区正常挂载
+- [ ] RA-TLS 连接建立成功
+- [ ] 参数校验通过（Manifest 优先）
+
+**监控检查**
+- [ ] MRENCLAVE 匹配预期值
+- [ ] TCB 状态为最新
+- [ ] 加密分区访问正常
+- [ ] 内存使用在 enclave_size 限制内
+
+## 与 ARCHITECTURE.md 的对应关系
+
+**本模块是将 ARCHITECTURE.md 中描述的所有组件整合到 Gramine SGX 环境的完整集成方案**。
+
+### 集成方案定位
+
+本模块不仅仅是一个"基础设施模块"，而是**将 01～06 模块以及整体 Geth 集成到 Gramine 环境作为 X Chain 节点运行的完整方案**。
+
+| 方面 | 本模块提供的集成方案 |
+|------|---------------------|
+| **架构对应** | 实现 ARCHITECTURE.md 第 2.2.3 节"Gramine 运行时集成" |
+| **部署对应** | 实现 ARCHITECTURE.md 第 7 章"部署指南" |
+| **模块整合** | 将 01-06 模块整合为统一的 Gramine 应用 |
+| **安全保障** | 通过 Manifest 固化参数确保 MRENCLAVE 绑定 |
+| **验证机制** | 提供端到端验证确保所有模块正常协作 |
+
+### 主要扩展内容
+
+**相比 ARCHITECTURE.md，本模块提供的额外细节**：
+- 完整的 Gramine manifest 配置模板（包含所有模块的依赖）
+- Docker 镜像构建流程（整合 Geth + 所有模块）
+- 启动脚本和部署配置（端到端运行方案）
+- SGX 硬件检测实现（环境准备）
+- 模块集成验证流程（确保各模块协同工作）
+- 参数校验机制的详细实现（三层参数架构）
+
+### 与其他模块文档的关系
+
+```
+ARCHITECTURE.md (总体架构)
+        │
+        ├──> 01-sgx-attestation.md (SGX 证明实现)
+        ├──> 02-consensus-engine.md (共识引擎实现)
+        ├──> 03-incentive-mechanism.md (激励机制实现)
+        ├──> 04-precompiled-contracts.md (预编译合约实现)
+        ├──> 05-governance.md (治理模块实现)
+        ├──> 06-data-storage-sync.md (存储模块实现)
+        │
+        └──> 07-gramine-integration.md (集成方案)
+                    │
+                    ├──> 如何配置 Gramine 运行所有模块
+                    ├──> 如何构建包含所有模块的 Docker 镜像
+                    ├──> 如何启动完整的 X Chain 节点
+                    └──> 如何验证所有模块正常工作
+```
+
+### 保持一致性
+
+**与 ARCHITECTURE.md 完全一致的部分**：
+- Manifest 参数列表与 ARCHITECTURE.md 第 4.1 节一致
+- 合约地址固化方式与 ARCHITECTURE.md 第 4 章对齐
+- 加密分区使用 MRENCLAVE sealing（ARCHITECTURE.md 推荐策略）
+- 启动命令与 ARCHITECTURE.md 第 2.2.3 节一致
+- 三层参数架构（Manifest > 链上 > 命令行）与 ARCHITECTURE.md 第 4.1 节一致
+
+**本模块的独特贡献**：
+- **完整的集成方案**：不仅描述单个组件，而是提供完整的集成和部署方案
+- **端到端验证**：提供验证脚本确保所有模块在 Gramine 环境中正常协作
+- **实操指南**：从 Docker 构建到节点启动的完整操作步骤
+- **模块协作**：明确各模块在 Gramine 环境中的交互方式
+
+### 集成方案的价值
+
+通过本模块的集成方案，开发者可以：
+
+1. **快速部署**：使用提供的 Dockerfile 和脚本快速构建 X Chain 节点
+2. **理解协作**：了解各模块如何在 Gramine 环境中协同工作
+3. **验证功能**：使用集成测试验证所有模块功能正常
+4. **排查问题**：通过模块验证脚本定位集成问题
+
+**总结**：本模块是连接 ARCHITECTURE.md 总体设计与具体实现（01-06 模块）的桥梁，提供了将所有组件整合为完整 X Chain 节点的实践方案。
 ```
