@@ -654,7 +654,7 @@ func DefaultCoreValidatorConfig() *CoreValidatorConfig {
 // 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
 type CommunityValidatorConfig struct {
     MinUptime     time.Duration // 最小运行时间（默认 30 天）
-    MinStake      *big.Int      // 最小质押量（初始值 10,000 X，可通过治理投票修改）
+    MinStake      *big.Int      // 最小质押量（初始值 10000 X，可通过治理投票修改）
     VetoThreshold float64       // 否决阈值（默认 0.334 表示 1/3）
 }
 
@@ -663,7 +663,7 @@ type CommunityValidatorConfig struct {
 func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
     return &CommunityValidatorConfig{
         MinUptime:     30 * 24 * time.Hour,                              // 30 天
-        MinStake:      new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)), // 初始值：10,000 X（可通过治理投票修改）
+        MinStake:      new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)), // 初始值：10000 X（可通过治理投票修改）
         VetoThreshold: 0.334,                                            // 1/3
     }
 }

@@ -4207,7 +4207,7 @@ type CoreValidatorConfig struct {
 // CommunityValidatorConfig 社区验证者配置
 type CommunityValidatorConfig struct {
     MinUptime        time.Duration // 最小运行时间 (默认 30 天)
-    MinStake         *big.Int      // 最小质押量 (初始值 10,000 X，从 GovernanceContract 读取)
+    MinStake         *big.Int      // 最小质押量 (初始值 10000 X，从 GovernanceContract 读取)
     VetoThreshold    float64       // 否决阈值 (默认 1/3)
 }
 
@@ -4225,7 +4225,7 @@ func DefaultCoreValidatorConfig() *CoreValidatorConfig {
 func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
     return &CommunityValidatorConfig{
         MinUptime:     30 * 24 * time.Hour, // 30 天
-        MinStake:      new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)),   // 初始值：10,000 X（从 GovernanceContract 读取）
+        MinStake:      new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)),   // 初始值：10000 X（从 GovernanceContract 读取）
         VetoThreshold: 0.334,               // 1/3
     }
 }
@@ -5777,7 +5777,7 @@ type RemovalConfig struct {
     MinVotingParticipation float64       // 最低投票参与率 (默认 50%)
     
     // 质押量要求
-    MinStakeAmount         *big.Int      // 最低质押量 (初始值 10,000 X，从 GovernanceContract 读取)
+    MinStakeAmount         *big.Int      // 最低质押量 (初始值 10000 X，从 GovernanceContract 读取)
     StakeGracePeriod       time.Duration // 质押不足宽限期 (默认 7 天)
     
     // 恶意行为惩罚
@@ -5793,7 +5793,7 @@ func DefaultRemovalConfig() *RemovalConfig {
     return &RemovalConfig{
         MaxInactiveDays:        30,
         MinVotingParticipation: 0.5,
-        MinStakeAmount:         new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)),  // 初始值：10,000 X（从 GovernanceContract 读取）
+        MinStakeAmount:         new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)),  // 初始值：10000 X（从 GovernanceContract 读取）
         StakeGracePeriod:       7 * 24 * time.Hour,
         MaliciousSlashRate:     50,
         SGXRevalidationPeriod:  30 * 24 * time.Hour,
