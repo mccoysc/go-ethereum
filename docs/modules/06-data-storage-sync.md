@@ -12,7 +12,7 @@
 2. 秘密数据存储（私钥、敏感配置）
 3. 节点间秘密数据同步
 4. 数据一致性保证
-5. 参数校验机制
+5. 参数处理机制
 6. 侧信道攻击防护
 
 ## 依赖关系
@@ -84,7 +84,7 @@
    - 新版本节点在该区块高度前必须完成迁移
    - 触发条件：`currentBlock < UpgradeCompleteBlock AND !migrationComplete`
 
-## 参数分类与校验
+## 参数分类与处理
 
 ### 参数分类原则
 
@@ -187,15 +187,15 @@ func (s *OnChainConfigSync) SyncSecurityParams() (*SecurityConfig, error) {
     --xchain.metrics.enabled=true
 ```
 
-### 参数校验机制
+### 参数处理机制
 
 参数处理流程：
 
 1. **启动后首先读取 Manifest 参数**：从环境变量加载所有安全相关参数
 2. **读取用户命令行参数**：解析用户传入的命令行参数
 3. **合并参数**：
-   - Manifest 参数覆盖用户参数（安全参数以 Manifest 为准）
-   - 如果用户参数与 Manifest 不一致，提示并退出进程
+   - Manifest 参数直接作为最终值（安全参数以 Manifest 为准）
+   - 命令行传入的同名安全参数被忽略，无需比对
    - 非安全参数允许用户通过命令行添加
 
 ```go
@@ -329,35 +329,36 @@ func (pv *ParamValidator) LoadCliParams(args []string) error {
     return nil
 }
 
-// MergeAndValidate 合并参数并校验（步骤 3）
-// 返回错误时应退出进程
+// MergeAndValidate 合并参数（步骤 3）
+// Manifest 参数直接作为最终值，无需与 CLI 参数比对
 func (pv *ParamValidator) MergeAndValidate() error {
-    // 首先将所有 Manifest 参数复制到合并结果
+    // 首先将所有 Manifest 参数复制到合并结果（以 Manifest 为准）
     for name, value := range pv.manifestParams {
         pv.mergedParams[name] = value
     }
     
-    // 检查命令行参数
+    // 处理命令行参数
     for cliFlag, cliValue := range pv.cliParams {
         // 检查是否是安全相关参数
+        isSecurityParam := false
         for _, param := range SecurityParams {
             if param.CliFlag == cliFlag {
-                // 安全参数：检查是否与 Manifest 一致
-                manifestValue, ok := pv.manifestParams[param.Name]
-                if ok && cliValue != manifestValue {
-                    return fmt.Errorf(
-                        "SECURITY VIOLATION: CLI parameter --%s value '%s' conflicts with manifest value '%s'. "+
-                        "Security parameters must match manifest. Exiting.",
-                        cliFlag, cliValue, manifestValue,
-                    )
+                isSecurityParam = true
+                // 安全参数：如果 Manifest 中已存在，直接忽略 CLI 参数
+                if _, exists := pv.manifestParams[param.Name]; exists {
+                    // Manifest 已设置该参数，忽略命令行传入的同名参数
+                    goto nextParam
                 }
-                // 一致则跳过（已从 Manifest 复制）
+                // Manifest 中不存在时，可以使用 CLI 参数
+                pv.mergedParams[param.Name] = cliValue
                 goto nextParam
             }
         }
         
-        // 非安全参数：允许添加到合并结果
-        pv.mergedParams[cliFlag] = cliValue
+        // 非安全参数：直接添加到合并结果
+        if !isSecurityParam {
+            pv.mergedParams[cliFlag] = cliValue
+        }
         
     nextParam:
     }
@@ -389,12 +390,12 @@ func (pv *ParamValidator) GetRuntimeParam(name string) string {
 }
 ```
 
-### 启动时参数校验
+### 启动时参数处理
 
 启动流程：
 1. 启动后首先读取 Manifest 中指定的安全参数
 2. 读取用户传入的命令行参数
-3. 合并参数：Manifest 参数覆盖用户参数，不一致则提示并退出
+3. 合并参数：Manifest 参数直接作为最终值，命令行同名参数被忽略
 
 ```go
 // cmd/geth/main.go (修改)
@@ -424,16 +425,14 @@ func initializeParams() (*config.ParamValidator, error) {
         return nil, fmt.Errorf("failed to load CLI params: %w", err)
     }
     
-    // 步骤 3: 合并参数并校验
-    // - Manifest 参数覆盖用户参数
-    // - 如果用户参数与 Manifest 不一致，提示并退出
-    log.Println("Merging and validating parameters...")
+    // 步骤 3: 合并参数（Manifest 为准，无需比对）
+    // - Manifest 参数直接作为最终值
+    // - 命令行传入的同名安全参数被忽略
+    log.Println("Merging parameters (manifest takes precedence)...")
     if err := validator.MergeAndValidate(); err != nil {
-        // 安全违规，立即退出进程
-        log.Printf("FATAL SECURITY VIOLATION: %v", err)
-        os.Exit(1)
+        return nil, fmt.Errorf("failed to merge params: %w", err)
     }
-    log.Println("Parameter validation successful")
+    log.Println("Parameter merge successful")
     
     return validator, nil
 }
@@ -598,18 +597,18 @@ type ParameterValidator interface {
     // 返回: 验证错误
     ValidateChainParams(chainParams map[string]interface{}) error
     
-    // MergeAndValidate 合并并验证所有参数
-    // manifestParams: Manifest 参数
+    // MergeAndValidate 合并所有参数
+    // manifestParams: Manifest 参数（优先级最高）
     // chainParams: 链上参数
     // cmdLineParams: 命令行参数
-    // 返回: 合并后的参数和验证错误
+    // 返回: 合并后的参数，Manifest 参数直接覆盖，无需验证冲突
     MergeAndValidate(
         manifestParams map[string]string,
         chainParams map[string]interface{},
         cmdLineParams map[string]interface{},
     ) (map[string]interface{}, error)
     
-    // CheckSecurityParams 检查安全参数一致性
+    // CheckSecurityParams 检查安全参数完整性
     // 确保 Manifest 参数未被篡改
     // 返回: 检查错误
     CheckSecurityParams() error
@@ -1083,9 +1082,9 @@ func (sm *SecretSyncManager) VerifyAndApplySync(response *SyncResponse) error {
 }
 ```
 
-### 3. 参数校验实现
+### 3. 参数处理实现
 
-启动时验证参数一致性：
+启动时处理参数，Manifest 为准：
 
 ```go
 // storage/parameter_validator_impl.go
@@ -1136,7 +1135,8 @@ func (cv *ConfigValidator) ValidateManifestParams(manifestParams map[string]stri
     return nil
 }
 
-// MergeAndValidate 合并并验证所有参数
+// MergeAndValidate 合并所有参数
+// Manifest 参数直接作为最终值，无需比对
 func (cv *ConfigValidator) MergeAndValidate(
     manifestParams map[string]string,
     chainParams map[string]interface{},
@@ -1152,20 +1152,15 @@ func (cv *ConfigValidator) MergeAndValidate(
     
     // 2. 添加命令行参数（非安全参数）
     for k, v := range cmdLineParams {
+        // 如果是安全参数且 Manifest 中已定义，则忽略命令行参数
+        if _, isInManifest := manifestParams[k]; isInManifest && isSecurityParam(k) {
+            continue
+        }
         merged[k] = v
     }
     
-    // 3. Manifest 参数覆盖（安全参数不可被覆盖）
+    // 3. Manifest 参数直接覆盖（以 Manifest 为准，无需比对）
     for k, v := range manifestParams {
-        if existingValue, ok := merged[k]; ok {
-            // 检查是否为安全参数
-            if isSecurityParam(k) && existingValue != v {
-                return nil, fmt.Errorf(
-                    "security parameter mismatch: %s (manifest: %v, runtime: %v)",
-                    k, v, existingValue,
-                )
-            }
-        }
         merged[k] = v
     }
     
@@ -1372,7 +1367,7 @@ func (sb *SecureBuffer) Destroy() {
 ```
 storage/
 ├── config.go                 # 存储配置
-├── param_validator.go        # 参数校验
+├── param_validator.go        # 参数处理
 ├── encrypted_partition.go    # 加密分区管理
 ├── sync_protocol.go          # 同步协议
 ├── sync_manager.go           # 同步管理器
@@ -2661,7 +2656,7 @@ func TestMigrationResume(t *testing.T) {
 
 ## 注意事项
 
-1. **参数校验**：安全参数必须与 Manifest 一致，不一致则退出进程
+1. **参数处理**：安全参数以 Manifest 为准，命令行传入的同名参数被忽略，无需比对
 2. **私钥存储**：私钥必须存储在加密分区，不能存储在普通目录
 3. **同步安全**：同步前必须验证对方的 SGX Quote 和 MRENCLAVE
 4. **常量时间**：所有密码学比较操作使用常量时间实现
