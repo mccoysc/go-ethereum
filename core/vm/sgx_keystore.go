@@ -50,8 +50,8 @@ type KeyStore interface {
 	// Sign signs data using the specified key
 	Sign(keyID common.Hash, hash []byte) ([]byte, error)
 	
-	// ECDH performs ECDH key exchange
-	ECDH(keyID common.Hash, peerPubKey []byte) ([]byte, error)
+	// ECDH performs ECDH key exchange, optionally applies KDF, and returns a new key ID
+	ECDH(keyID common.Hash, peerPubKey []byte, kdfParams []byte) (common.Hash, error)
 	
 	// Encrypt encrypts data using the specified key
 	Encrypt(keyID common.Hash, plaintext []byte) ([]byte, error)
@@ -66,5 +66,5 @@ type KeyStore interface {
 	GetMetadata(keyID common.Hash) (*KeyMetadata, error)
 	
 	// DeleteKey deletes a key from the keystore
-	DeleteKey(keyID common.Hash) error
+	DeleteKey(keyID common.Hash, caller common.Address) error
 }

@@ -560,7 +560,7 @@ func TestSGXECDH(t *testing.T) {
 			}
 
 			if len(result) != 32 {
-				t.Errorf("Shared secret length = %d, want 32", len(result))
+				t.Errorf("New key ID length = %d, want 32", len(result))
 			}
 		})
 	}
@@ -973,7 +973,7 @@ func TestKeyStoreOperations(t *testing.T) {
 	t.Run("Delete key", func(t *testing.T) {
 		keyID, _ := keyStore.CreateKey(owner, KeyTypeECDSA)
 		
-		err := keyStore.DeleteKey(keyID)
+		err := keyStore.DeleteKey(keyID, owner)
 		if err != nil {
 			t.Errorf("DeleteKey() error = %v", err)
 		}

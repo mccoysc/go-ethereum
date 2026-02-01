@@ -31,7 +31,7 @@ func (c *SGXECDH) Name() string {
 }
 
 // RequiredGas calculates the required gas
-// Input format: keyID (32 bytes) + peerPubKey (64 bytes)
+// Input format: keyID (32 bytes) + peerPubKey (64 bytes) + optional kdfParams (variable)
 func (c *SGXECDH) RequiredGas(input []byte) uint64 {
 	return 20000
 }
@@ -42,8 +42,8 @@ func (c *SGXECDH) Run(input []byte) ([]byte, error) {
 }
 
 // RunWithContext executes the contract with SGX context
-// Input format: keyID (32 bytes) + peerPubKey (64 bytes)
-// Output format: sharedSecret (32 bytes)
+// Input format: keyID (32 bytes) + peerPubKey (64 bytes) + optional kdfParams (variable)
+// Output format: newKeyID (32 bytes)
 func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
 	// 1. Parse input
 	if len(input) < 96 {
@@ -51,6 +51,12 @@ func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) 
 	}
 	keyID := common.BytesToHash(input[:32])
 	peerPubKey := input[32:96]
+	
+	// Parse optional kdfParams
+	var kdfParams []byte
+	if len(input) > 96 {
+		kdfParams = input[96:]
+	}
 	
 	// 2. Check derivation permission
 	if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionDerive, ctx.Timestamp) {
@@ -60,8 +66,8 @@ func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) 
 		}
 	}
 	
-	// 3. Execute ECDH
-	sharedSecret, err := ctx.KeyStore.ECDH(keyID, peerPubKey)
+	// 3. Execute ECDH and get new key ID
+	newKeyID, err := ctx.KeyStore.ECDH(keyID, peerPubKey, kdfParams)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +75,25 @@ func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) 
 	// 4. Record permission usage (increment counter)
 	_ = ctx.PermissionManager.UsePermission(keyID, ctx.Caller, PermissionDerive)
 	
-	// 5. Return shared secret
-	return sharedSecret, nil
+	// 5. Grant caller Admin permission on the new shared secret key
+	metadata, err := ctx.KeyStore.GetMetadata(keyID)
+	if err != nil {
+		return nil, err
+	}
+	
+	adminPerm := Permission{
+		Grantee:   ctx.Caller,
+		Type:      PermissionAdmin,
+		ExpiresAt: 0,
+		MaxUses:   0,
+		UsedCount: 0,
+	}
+	
+	// Grant admin permission if caller is not already the owner
+	if metadata.Owner != ctx.Caller {
+		_ = ctx.PermissionManager.GrantPermission(newKeyID, adminPerm)
+	}
+	
+	// 6. Return new key ID
+	return newKeyID.Bytes(), nil
 }

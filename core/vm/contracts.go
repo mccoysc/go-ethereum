@@ -191,6 +191,7 @@ var PrecompiledContractsSGX = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x80, 0x06}): &SGXEncrypt{},
 	common.BytesToAddress([]byte{0x80, 0x07}): &SGXDecrypt{},
 	common.BytesToAddress([]byte{0x80, 0x08}): &SGXKeyDerive{},
+	common.BytesToAddress([]byte{0x80, 0x09}): &SGXKeyDelete{},
 }
 
 var (
