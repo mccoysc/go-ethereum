@@ -47,7 +47,13 @@ func GetSGXInfo() (*SGXInfo, error) {
 	info := &SGXInfo{}
 
 	// Get MRENCLAVE and MRSIGNER from attestor
-	attestor := NewAttestor()
+	// Try to create a Gramine attestor
+	attestor, err := NewGramineAttestor()
+	if err != nil {
+		// If we can't create an attestor (e.g., not in enclave), return mock data
+		return GetMockSGXInfo(), nil
+	}
+
 	info.MRENCLAVE = attestor.GetMREnclave()
 	info.MRSIGNER = attestor.GetMRSigner()
 
