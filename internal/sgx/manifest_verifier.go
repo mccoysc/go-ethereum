@@ -55,14 +55,9 @@ type ManifestSignatureVerifier struct {
 // NewManifestSignatureVerifier creates a new manifest signature verifier
 // The public key can be loaded from environment variable or default location
 //
-// SECURITY: Only allows test mode with explicit SGX_TEST_MODE=true
+// SECURITY: NO test mode bypass allowed
+// For testing: provide real test manifest and signing key
 func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
-	// Check if test mode is explicitly enabled
-	if os.Getenv("SGX_TEST_MODE") == "true" {
-		log.Warn("⚠️  SGX_TEST_MODE=true - Creating test verifier (INSECURE)")
-		return &ManifestSignatureVerifier{publicKey: nil}, nil
-	}
-	
 	// Try to load public key from environment variable first
 	pubKeyPath := os.Getenv("GRAMINE_SIGSTRUCT_KEY_PATH")
 	if pubKeyPath == "" {
@@ -73,6 +68,7 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 			"./enclave-key.pub",             // Build directory
 			"./signing_key.pub",             // Alternative name
 			"gramine/enclave-key.pub",       // Relative path
+			"test/keys/test-signing-key.pub", // Test key location
 		}
 
 		for _, path := range possiblePaths {
@@ -87,7 +83,7 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 		return nil, fmt.Errorf("SECURITY: No public key found for manifest signature verification. " +
 			"Searched standard locations. " +
 			"Set GRAMINE_SIGSTRUCT_KEY_PATH or place signing_key.pub in standard location. " +
-			"For testing only: set SGX_TEST_MODE=true")
+			"For testing: create test key with 'openssl genrsa -3 -out test-signing-key.pem 3072'")
 	}
 
 	// Load public key
@@ -113,13 +109,9 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 // 2. 验证manifest文件的RSA签名
 // 3. 从签名文件中提取MRENCLAVE
 // 4. 验证签名中的MRENCLAVE与当前运行的enclave一致
+//
+// NO bypass allowed - always performs full verification
 func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string, signaturePath string) error {
-	// In test mode, skip verification
-	if v.publicKey == nil {
-		log.Warn("Manifest signature verification skipped (test mode)")
-		return nil
-	}
-
 	log.Info("Step 1: Locating manifest signature file...")
 	
 	// Auto-detect signature path if not provided
@@ -332,18 +324,9 @@ func VerifyCurrentManifestFile() error {
 // 4. 必须验证MRENCLAVE匹配
 // 5. 不允许跳过任何步骤
 //
-// 唯一例外：设置环境变量 SGX_TEST_MODE=true 时允许跳过
-// （仅用于单元测试，生产环境必须删除）
+// 测试：如果需要测试，应该提供真实的测试manifest和签名文件，
+// 而不是跳过验证。
 func ValidateManifestIntegrity() error {
-	// 检查是否明确设置了测试模式
-	testMode := os.Getenv("SGX_TEST_MODE")
-	if testMode == "true" {
-		log.Warn("⚠️  SGX_TEST_MODE=true - Manifest verification SKIPPED")
-		log.Warn("⚠️  THIS IS INSECURE - Only use for testing!")
-		log.Warn("⚠️  MUST NOT be used in production")
-		return nil
-	}
-	
 	log.Info("=== Validating Manifest Integrity ===")
 	
 	// Step 1: 检查运行环境
@@ -351,8 +334,7 @@ func ValidateManifestIntegrity() error {
 	if gramineVersion != "" {
 		log.Info("Running under Gramine", "version", gramineVersion)
 	} else {
-		// 不在Gramine环境但仍然需要验证manifest
-		log.Warn("Not running under Gramine - but manifest verification is REQUIRED")
+		log.Info("Not running under Gramine - verifying manifest anyway")
 	}
 	
 	// Step 2: 检查MRENCLAVE（如果可用）
@@ -372,7 +354,7 @@ func ValidateManifestIntegrity() error {
 	manifestPath, err := findManifestFile()
 	if err != nil {
 		return fmt.Errorf("SECURITY: Cannot locate manifest file: %w. " +
-			"Manifest verification is REQUIRED. Set SGX_TEST_MODE=true only for testing.", err)
+			"For testing, provide a test manifest file with valid signature.", err)
 	}
 	log.Info("✓ Manifest file located", "path", manifestPath)
 	

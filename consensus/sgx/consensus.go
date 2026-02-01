@@ -164,11 +164,19 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	log.Info("Loading Module 07: Gramine Integration")
 	
 	// Step 4: Create attestor and verifier
-	// Note: Security parameters will be read from SecurityConfigContract at runtime
-	// via env_manager.go's RATLSEnvManager.InitFromContract()
+	// MUST use Gramine-based implementation - no mocks allowed
 	log.Info("Step 4: Initializing SGX attestation...")
-	attestor := &DefaultAttestor{}
-	verifier := &DefaultVerifier{}
+	attestor, err := NewGramineAttestor()
+	if err != nil {
+		log.Crit("Failed to create Gramine attestor - SGX attestation is REQUIRED", 
+			"error", err, 
+			"hint", "Ensure running under Gramine SGX")
+	}
+	
+	verifier, err := NewGramineVerifier()
+	if err != nil {
+		log.Crit("Failed to create Gramine verifier", "error", err)
+	}
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
 	log.Info("Next: Security parameters will be read from contract", "contract", config.SecurityConfig)
