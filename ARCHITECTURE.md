@@ -4332,6 +4332,7 @@ type WhitelistProposal struct {
 type WhitelistGovernance struct {
     mu sync.RWMutex
     
+    config          *GovernanceConfig             // 治理配置（从 SecurityConfigContract 读取）
     coreConfig      *CoreValidatorConfig
     communityConfig *CommunityValidatorConfig
     
@@ -4342,12 +4343,45 @@ type WhitelistGovernance struct {
     whitelist map[string]bool  // MRENCLAVE 白名单
 }
 
+// GovernanceConfig 治理配置
+// 所有配置参数存储在 SecurityConfigContract 中，可以通过 GovernanceContract 投票修改
+type GovernanceConfig struct {
+    // 核心验证者投票阈值（百分比，默认 67 表示 2/3）
+    CoreValidatorThreshold uint64
+    
+    // 社区验证者投票阈值（百分比，默认 51 表示简单多数）
+    CommunityValidatorThreshold uint64
+    
+    // 投票期限（区块数，默认 40320 ≈ 7天）
+    VotingPeriod uint64
+    
+    // 执行延迟（区块数，默认 5760 ≈ 1天）
+    ExecutionDelay uint64
+    
+    // 最小投票参与率（百分比，默认 50%）
+    MinParticipation uint64
+}
+
+// DefaultGovernanceConfig 默认治理配置
+// 注意：这些是创世区块的初始值，实际值从 SecurityConfigContract 中读取
+func DefaultGovernanceConfig() *GovernanceConfig {
+    return &GovernanceConfig{
+        CoreValidatorThreshold:      67,    // 2/3 核心验证者
+        CommunityValidatorThreshold: 51,    // 简单多数社区验证者
+        VotingPeriod:                40320, // 约 7 天（按 15 秒/块计算）
+        ExecutionDelay:              5760,  // 约 1 天
+        MinParticipation:            50,    // 50% 参与率
+    }
+}
+
 // NewWhitelistGovernance 创建白名单治理实例
 func NewWhitelistGovernance(
+    config *GovernanceConfig,
     coreConfig *CoreValidatorConfig,
     communityConfig *CommunityValidatorConfig,
 ) *WhitelistGovernance {
     return &WhitelistGovernance{
+        config:              config,
         coreConfig:          coreConfig,
         communityConfig:     communityConfig,
         coreValidators:      make(map[common.Address]*Validator),
