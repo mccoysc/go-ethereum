@@ -53,9 +53,6 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 		privateKey: privateKey,
 	}
 
-	// Check if we're in an SGX environment
-	attestor.isSGX = isSGXEnvironment()
-
 	// Read MRENCLAVE using helper function
 	mrenclave, err := readMREnclave()
 	if err != nil {

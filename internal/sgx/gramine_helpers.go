@@ -67,9 +67,3 @@ func generateQuoteViaGramine(reportData []byte) ([]byte, error) {
 
 	return quote, nil
 }
-
-// isSGXEnvironment checks if we're running in an SGX environment.
-func isSGXEnvironment() bool {
-	_, err := os.Stat("/dev/attestation/my_target_info")
-	return err == nil
-}
