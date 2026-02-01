@@ -229,24 +229,37 @@ func init() {
 }
 
 func activePrecompiledContracts(rules params.Rules) PrecompiledContracts {
+	var base PrecompiledContracts
 	switch {
 	case rules.IsVerkle:
-		return PrecompiledContractsVerkle
+		base = PrecompiledContractsVerkle
 	case rules.IsOsaka:
-		return PrecompiledContractsOsaka
+		base = PrecompiledContractsOsaka
 	case rules.IsPrague:
-		return PrecompiledContractsPrague
+		base = PrecompiledContractsPrague
 	case rules.IsCancun:
-		return PrecompiledContractsCancun
+		base = PrecompiledContractsCancun
 	case rules.IsBerlin:
-		return PrecompiledContractsBerlin
+		base = PrecompiledContractsBerlin
 	case rules.IsIstanbul:
-		return PrecompiledContractsIstanbul
+		base = PrecompiledContractsIstanbul
 	case rules.IsByzantium:
-		return PrecompiledContractsByzantium
+		base = PrecompiledContractsByzantium
 	default:
-		return PrecompiledContractsHomestead
+		base = PrecompiledContractsHomestead
 	}
+	
+	// Only include SGX precompiled contracts if SGX consensus is enabled
+	// This is indicated by the IsSGX flag in the rules
+	if rules.IsSGX {
+		result := maps.Clone(base)
+		for addr, contract := range PrecompiledContractsSGX {
+			result[addr] = contract
+		}
+		return result
+	}
+	
+	return base
 }
 
 // ActivePrecompiledContracts returns a copy of precompiled contracts enabled with the current configuration.

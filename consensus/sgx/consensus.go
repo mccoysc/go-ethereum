@@ -12,6 +12,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/holiman/uint256"
@@ -72,6 +74,32 @@ func New(config *Config, attestor Attestor, verifier Verifier) *SGXEngine {
 	engine.onDemandController = NewOnDemandController(config)
 
 	return engine
+}
+
+// NewFromParams creates an SGX consensus engine from genesis params configuration
+func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine {
+	// Convert params.SGXConfig to internal Config
+	config := &Config{
+		Period: paramsConfig.Period,
+		Epoch:  paramsConfig.Epoch,
+		// Use default configs for other fields
+		QualityConfig:    DefaultQualityConfig(),
+		UptimeConfig:     DefaultUptimeConfig(),
+		RewardConfig:     DefaultRewardConfig(),
+		PenaltyConfig:    DefaultPenaltyConfig(),
+		ReputationConfig: DefaultReputationConfig(),
+		// Store contract addresses for later use
+		GovernanceContract: paramsConfig.GovernanceContract,
+		SecurityConfig:     paramsConfig.SecurityConfig,
+		IncentiveContract:  paramsConfig.IncentiveContract,
+	}
+	
+	// Create default attestor and verifier implementations
+	// In production, these would connect to actual SGX hardware
+	attestor := &DefaultAttestor{}
+	verifier := &DefaultVerifier{}
+	
+	return New(config, attestor, verifier)
 }
 
 // Author 从区块头中提取出块者地址

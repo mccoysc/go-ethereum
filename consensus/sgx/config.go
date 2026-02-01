@@ -3,11 +3,21 @@ package sgx
 import (
 	"math/big"
 	"time"
+	
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // Config SGX 共识引擎配置
 type Config struct {
 	// 基础配置
+	Period uint64 // 出块周期（秒）
+	Epoch  uint64 // Epoch长度（区块数）
+	
+	// 合约地址
+	GovernanceContract common.Address // 治理合约地址
+	SecurityConfig     common.Address // 安全配置合约地址
+	IncentiveContract  common.Address // 激励合约地址
+	
 	MinBlockInterval time.Duration // 最小出块间隔
 	MaxBlockInterval time.Duration // 最大出块间隔（用于心跳）
 	MaxTxPerBlock    int           // 单区块最大交易数
@@ -96,6 +106,8 @@ type RewardConfig struct {
 func DefaultConfig() *Config {
 	return &Config{
 		// 基础配置
+		Period:           5,
+		Epoch:            30000,
 		MinBlockInterval: 1 * time.Second,
 		MaxBlockInterval: 60 * time.Second,
 		MaxTxPerBlock:    1000,
@@ -113,56 +125,68 @@ func DefaultConfig() *Config {
 		SpeedRewardRatios: []float64{1.0, 0.6, 0.3},
 
 		// 区块质量评分配置
-		QualityConfig: &QualityConfig{
-			TxCountWeight:        40.0,
-			BlockSizeWeight:      30.0,
-			GasUtilizationWeight: 20.0,
-			TxDiversityWeight:    10.0,
-			MinTxThreshold:       5,
-			TargetBlockSize:      1048576, // 1MB
-			TargetGasUtilization: 0.8,     // 80%
-		},
+		QualityConfig:    DefaultQualityConfig(),
+		UptimeConfig:     DefaultUptimeConfig(),
+		ReputationConfig: DefaultReputationConfig(),
+		PenaltyConfig:    DefaultPenaltyConfig(),
+		RewardConfig:     DefaultRewardConfig(),
+	}
+}
 
-		// 在线率计算配置
-		UptimeConfig: &UptimeConfig{
-			HeartbeatWeight:       40.0,
-			ConsensusWeight:       30.0,
-			TxParticipationWeight: 20.0,
-			ResponseWeight:        10.0,
-			HeartbeatInterval:     30 * time.Second,
-			ConsensusThreshold:    0.67, // 2/3
-			ResponseTimeTarget:    100,  // 100ms
-		},
+func DefaultQualityConfig() *QualityConfig {
+	return &QualityConfig{
+		TxCountWeight:        40.0,
+		BlockSizeWeight:      30.0,
+		GasUtilizationWeight: 20.0,
+		TxDiversityWeight:    10.0,
+		MinTxThreshold:       5,
+		TargetBlockSize:      1048576, // 1MB
+		TargetGasUtilization: 0.8,     // 80%
+	}
+}
 
-		// 信誉系统配置
-		ReputationConfig: &ReputationConfig{
-			UptimeWeight:      60.0,
-			SuccessRateWeight: 30.0,
-			PenaltyWeight:     10.0,
-			MinUptimeScore:    6000, // 60%
-			MinSuccessRate:    0.8,  // 80%
-			UpdateInterval:    1 * time.Hour,
-		},
+func DefaultUptimeConfig() *UptimeConfig {
+	return &UptimeConfig{
+		HeartbeatWeight:       40.0,
+		ConsensusWeight:       30.0,
+		TxParticipationWeight: 20.0,
+		ResponseWeight:        10.0,
+		HeartbeatInterval:     30 * time.Second,
+		ConsensusThreshold:    0.67, // 2/3
+		ResponseTimeTarget:    100,  // 100ms
+	}
+}
 
-		// 惩罚机制配置
-		PenaltyConfig: &PenaltyConfig{
-			LowQualityThreshold: 3000, // 低于 30% 的质量评分
-			EmptyBlockThreshold: 5,    // 连续 5 个空区块
-			OfflineThreshold:    5 * time.Minute,
-			PenaltyAmount:       big.NewInt(1e18), // 1 ETH
-			ExclusionPeriod:     24 * time.Hour,
-			RecoveryPeriod:      7 * 24 * time.Hour,
-		},
+func DefaultReputationConfig() *ReputationConfig {
+	return &ReputationConfig{
+		UptimeWeight:      60.0,
+		SuccessRateWeight: 30.0,
+		PenaltyWeight:     10.0,
+		MinUptimeScore:    6000, // 60%
+		MinSuccessRate:    0.8,  // 80%
+		UpdateInterval:    1 * time.Hour,
+	}
+}
 
-		// 奖励机制配置
-		RewardConfig: &RewardConfig{
-			BaseBlockReward:      big.NewInt(2e18), // 2 ETH
-			OnlineRewardPerEpoch: big.NewInt(1e17), // 0.1 ETH
-			QualityBonusRate:     0.5,              // 50% 质量奖励
-			ServiceBonusRate:     0.3,              // 30% 服务奖励
-			HistoricalBonusRate:  0.2,              // 20% 历史贡献奖励
-			EpochDuration:        24 * time.Hour,   // 24小时周期
-		},
+func DefaultPenaltyConfig() *PenaltyConfig {
+	return &PenaltyConfig{
+		LowQualityThreshold: 3000, // 低于 30% 的质量评分
+		EmptyBlockThreshold: 5,    // 连续 5 个空区块
+		OfflineThreshold:    5 * time.Minute,
+		PenaltyAmount:       big.NewInt(1e18), // 1 ETH
+		ExclusionPeriod:     24 * time.Hour,
+		RecoveryPeriod:      7 * 24 * time.Hour,
+	}
+}
+
+func DefaultRewardConfig() *RewardConfig {
+	return &RewardConfig{
+		BaseBlockReward:      big.NewInt(2e18), // 2 ETH
+		OnlineRewardPerEpoch: big.NewInt(1e17), // 0.1 ETH
+		QualityBonusRate:     0.5,              // 50% 质量奖励
+		ServiceBonusRate:     0.3,              // 30% 服务奖励
+		HistoricalBonusRate:  0.2,              // 20% 历史贡献奖励
+		EpochDuration:        24 * time.Hour,   // 24小时周期
 	}
 }
 

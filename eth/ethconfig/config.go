@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/consensus/sgx"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
@@ -217,17 +218,37 @@ type Config struct {
 func CreateConsensusEngine(config *params.ChainConfig, db ethdb.Database) (consensus.Engine, error) {
 	// SGX consensus engine - check first as it's our custom engine
 	if config.SGX != nil {
-		log.Info("Using SGX consensus engine", "config", config.SGX)
-		return sgx.New(config.SGX, db), nil
+		log.Info("=== Initializing SGX Consensus Engine ===")
+		log.Info("SGX Configuration", 
+			"period", config.SGX.Period,
+			"epoch", config.SGX.Epoch,
+			"governance", config.SGX.GovernanceContract.Hex(),
+			"security", config.SGX.SecurityConfig.Hex(),
+			"incentive", config.SGX.IncentiveContract.Hex())
+		
+		log.Info("Loading Module 01: SGX Attestation")
+		log.Info("Loading Module 02: SGX Consensus Engine")
+		log.Info("Loading Module 03: Incentive Mechanism")
+		log.Info("Loading Module 04: Precompiled Contracts (0x8000-0x8009)")
+		log.Info("Loading Module 05: Governance System")
+		log.Info("Loading Module 06: Encrypted Storage")
+		log.Info("Loading Module 07: Gramine Integration")
+		
+		engine := sgx.NewFromParams(config.SGX, db)
+		log.Info("=== SGX Consensus Engine Initialized ===")
+		return engine, nil
 	}
 	
+	// Standard consensus engines (Clique/Ethash) - SGX modules will NOT be loaded
 	if config.TerminalTotalDifficulty == nil {
 		log.Error("Geth only supports PoS networks. Please transition legacy networks using Geth v1.13.x.")
 		return nil, errors.New("'terminalTotalDifficulty' is not set in genesis block")
 	}
 	// Wrap previously supported consensus engines into their post-merge counterpart
 	if config.Clique != nil {
+		log.Info("Using Clique PoA consensus (SGX modules disabled)")
 		return beacon.New(clique.New(config.Clique, db)), nil
 	}
+	log.Info("Using Ethash PoW consensus (SGX modules disabled)")
 	return beacon.New(ethash.NewFaker()), nil
 }

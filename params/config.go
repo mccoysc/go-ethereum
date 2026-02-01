@@ -1397,6 +1397,7 @@ type Rules struct {
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsAmsterdam, IsVerkle                                   bool
+	IsSGX                                                   bool // SGX consensus enabled
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1429,5 +1430,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsAmsterdam:      isMerge && c.IsAmsterdam(num, timestamp),
 		IsVerkle:         isVerkle,
 		IsEIP4762:        isVerkle,
+		IsSGX:            c.SGX != nil, // SGX consensus is enabled if config exists
 	}
 }
