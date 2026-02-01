@@ -1,0 +1,16 @@
+INFO [02-01|11:19:47.058] Maximum peer count                       ETH=0 total=0
+INFO [02-01|11:19:47.059] Smartcard socket not found, disabling    err="stat /run/pcscd/pcscd.comm: no such file or directory"
+WARN [02-01|11:19:47.060] Option --allow-insecure-unlock is deprecated and has no effect
+WARN [02-01|11:19:47.060] Option --miner.etherbase is deprecated as the etherbase is set by the consensus client post-merge
+WARN [02-01|11:19:47.061] The flag --mine is deprecated and will be removed
+INFO [02-01|11:19:47.062] Set global gas cap                       cap=50,000,000
+WARN [02-01|11:19:47.062] Setting network ID with command-line flag id=762,385,986
+INFO [02-01|11:19:47.062] Initializing the KZG library             backend=gokzg
+INFO [02-01|11:19:47.065] Allocated trie memory caches             clean=154.00MiB dirty=256.00MiB
+INFO [02-01|11:19:47.065] Using pebble as the backing database
+INFO [02-01|11:19:47.065] Allocated cache and file handles         database=/home/runner/work/go-ethereum/go-ethereum/test-node/geth/chaindata cache=512.00MiB handles=32768
+INFO [02-01|11:19:47.076] Opened ancient database                  database=/home/runner/work/go-ethereum/go-ethereum/test-node/geth/chaindata/ancient/chain readonly=false
+INFO [02-01|11:19:47.076] Opened Era store                         datadir=/home/runner/work/go-ethereum/go-ethereum/test-node/geth/chaindata/ancient/chain/era
+INFO [02-01|11:19:47.077] State scheme set to already existing     scheme=path
+ERROR[02-01|11:19:47.077] Geth only supports PoS networks. Please transition legacy networks using Geth v1.13.x.
+Fatal: Failed to register the Ethereum service: 'terminalTotalDifficulty' is not set in genesis block
