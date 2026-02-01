@@ -34,7 +34,7 @@ func TestNewDCAPVerifier(t *testing.T) {
 
 func TestVerifyQuote(t *testing.T) {
 	// Create an attestor to generate a test quote
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestVerifyQuote(t *testing.T) {
 }
 
 func TestVerifyQuoteInvalidMREnclave(t *testing.T) {
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestVerifyQuoteInvalidMREnclave(t *testing.T) {
 
 func TestVerifyCertificate(t *testing.T) {
 	// Create attestor and generate certificate
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestVerifyCertificate(t *testing.T) {
 
 func TestVerifyCertificateNoQuote(t *testing.T) {
 	// Create a regular certificate without SGX quote
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestRemoveAllowedMREnclave(t *testing.T) {
 }
 
 func TestExtractMREnclave(t *testing.T) {
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestExtractMREnclave(t *testing.T) {
 }
 
 func TestExtractMRSigner(t *testing.T) {
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestExtractMRSigner(t *testing.T) {
 }
 
 func TestExtractReportData(t *testing.T) {
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
 	}

@@ -169,7 +169,7 @@ func TestGetMRSigner(t *testing.T) {
 }
 
 func TestMockAttestor(t *testing.T) {
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create mock attestor: %v", err)
 	}

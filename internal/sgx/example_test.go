@@ -49,7 +49,7 @@ func Example_basicQuoteGeneration() {
 // generation and verification.
 func Example_certificateGenerationAndVerification() {
 	// Create attestor
-	attestor, err := sgx.NewMockAttestor()
+	attestor, err := sgx.NewGramineAttestor()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func Example_whitelistManagement() {
 // Example_quoteExtraction demonstrates extracting information from SGX Quotes.
 func Example_quoteExtraction() {
 	// Create attestor
-	attestor, err := sgx.NewMockAttestor()
+	attestor, err := sgx.NewGramineAttestor()
 	if err != nil {
 		log.Fatal(err)
 	}

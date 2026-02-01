@@ -40,3 +40,18 @@ type Verifier interface {
 	// RemoveAllowedMREnclave removes an MRENCLAVE from the whitelist.
 	RemoveAllowedMREnclave(mrenclave []byte)
 }
+
+// NewGramineVerifier creates a new Gramine-based verifier.
+// It will use the appropriate implementation based on the environment:
+// - In SGX mode with CGO: GramineRATLSVerifier with full RA-TLS support
+// - Otherwise: DCAPVerifier with basic verification
+func NewGramineVerifier() (Verifier, error) {
+	// Check if we're in test mode or allow outdated TCB
+	// In test mode or non-production environments, we want lenient verification
+	allowOutdatedTCB := !isSGXEnvironment()
+	
+	// For now, use DCAPVerifier as the default implementation
+	// In production with RA-TLS CGO support, this would return GramineRATLSVerifier
+	return NewDCAPVerifier(allowOutdatedTCB), nil
+}
+
