@@ -40,7 +40,7 @@ type GramineAttestor struct {
 }
 
 // NewGramineAttestor creates a new Gramine-based attestor.
-// It will detect if running in an SGX environment and fall back to mock mode if not.
+// It will detect if running in an SGX environment and fall if not.
 // This implementation uses P-384 curve as required by the specification.
 func NewGramineAttestor() (*GramineAttestor, error) {
 	// Generate TLS key pair using P-384 (SECP384R1) as required by spec
@@ -56,26 +56,12 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 	// Check if we're in an SGX environment
 	attestor.isSGX = isSGXEnvironment()
 
-	if attestor.isSGX {
-		// Read MRENCLAVE using helper function
-		mrenclave, err := readMREnclave()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read MRENCLAVE: %w", err)
-		}
-		attestor.mrenclave = mrenclave
-	} else {
-		// Not in SGX environment, use mock values
-		attestor.mrenclave = make([]byte, 32)
-		attestor.mrsigner = make([]byte, 32)
-		// Fill with deterministic test values
-		for i := range attestor.mrenclave {
-			attestor.mrenclave[i] = byte(i)
-		}
-		for i := range attestor.mrsigner {
-			attestor.mrsigner[i] = byte(i + 32)
-		}
+	// Read MRENCLAVE using helper function
+	mrenclave, err := readMREnclave()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read MRENCLAVE: %w", err)
 	}
-
+	attestor.mrenclave = mrenclave
 	return attestor, nil
 }
 
