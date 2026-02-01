@@ -1,21 +1,23 @@
-## 模块概述
+# 模块 06: 数据存储与同步
 
-数据存储与同步模块负责 X Chain 的数据持久化和节点间秘密数据同步。该模块管理加密分区存储、秘密数据的安全传输、以及节点间的数据一致性。
+## 1. 模块概述
 
-## 负责团队
+本模块实现 X Chain 的数据持久化和节点间秘密数据同步，管理加密分区存储、秘密数据安全传输及节点间数据一致性。
 
-**存储/基础设施团队**
+## 2. 模块职责
 
-## 模块职责
+### 2.1 核心功能
 
-1. 加密分区管理
-2. 秘密数据存储（私钥、敏感配置）
-3. 节点间秘密数据同步
-4. 数据一致性保证
-5. 参数处理机制
-6. 侧信道攻击防护
+1. **加密分区管理**：管理 Gramine 加密文件系统的数据存储
+2. **秘密数据存储**：存储私钥、ECDH 派生秘密、节点身份等敏感数据
+3. **节点间秘密数据同步**：通过 RA-TLS 实现跨节点秘密数据安全传输
+4. **数据一致性验证**：保证所有节点的秘密数据和区块链数据一致性
+5. **参数处理**：合并 Manifest、链上、命令行参数，确保安全参数不被覆盖
+6. **侧信道攻击防护**：实现常量时间操作防止时序泄露
 
-## 依赖关系
+## 3. 架构设计
+
+### 3.1 依赖关系
 
 ```
 +----------------------+
@@ -31,64 +33,59 @@
         +---> 共识引擎模块（UpgradeCompleteBlock 同步）
 ```
 
-### 上游依赖
+### 3.2 上游依赖
 - SGX 证明模块（RA-TLS 安全通道、双向度量值验证）
 - 治理模块（通过 SecurityConfigContract 获取 MRENCLAVE 白名单、PermissionLevel、迁移策略）
 - Gramine LibOS（加密文件系统、密钥封装/解封）
 - 共识引擎（读取当前区块高度、UpgradeCompleteBlock 参数）
 
-### 下游依赖（被以下模块使用）
+### 3.3 下游依赖
 - 预编译合约模块（密钥存储、ECDH 秘密存储）
 - 共识引擎模块（状态持久化、区块数据存储）
 - 治理模块（通过加密分区存储投票记录）
 
-### 与治理模块的交互
+### 3.4 治理模块集成
 
-数据存储模块通过以下方式与治理模块交互：
+本模块通过以下机制与治理模块集成：
 
-1. **MRENCLAVE 白名单验证**：
-   - 秘密数据同步前，必须验证对端节点的 MRENCLAVE 在白名单中
-   - 白名单从 SecurityConfigContract 动态读取
-   - 治理投票可以添加或移除 MRENCLAVE
+**MRENCLAVE 白名单验证**
+- 从 SecurityConfigContract 读取白名单
+- 秘密数据同步前验证对端节点 MRENCLAVE
+- 动态更新通过链上投票管理
 
-2. **权限级别检查**：
-   - 新添加的 MRENCLAVE 具有渐进式权限：
-     - Basic (7 天)：每日最多 10 次迁移
-     - Standard (30 天)：每日最多 100 次迁移
-     - Full (永久)：无限制迁移
-   - AutoMigrationManager 根据 PermissionLevel 限制迁移频率
+**权限级别（PermissionLevel）机制**
+- 新 MRENCLAVE 添加时具有渐进式权限：
+  - `Basic`（7 天）：日迁移限制 10 次
+  - `Standard`（30 天）：日迁移限制 100 次
+  - `Full`（永久）：无迁移限制
+- AutoMigrationManager 实现权限级别检查和迁移频率限制
 
-3. **升级协调**：
-   - 治理设置 `UpgradeCompleteBlock` 参数在 SecurityConfigContract 中
-   - AutoMigrationManager 确保在该区块高度前完成秘密数据迁移
-   - 迁移完成条件：`secretDataSyncedBlock >= UpgradeCompleteBlock`
+**升级协调机制**
+- 治理设置 `UpgradeCompleteBlock` 参数控制升级时间窗口
+- AutoMigrationManager 在该区块高度前完成秘密数据迁移
+- 迁移完成条件：`secretDataSyncedBlock >= UpgradeCompleteBlock`
 
-### 秘密数据同步触发机制
+### 3.5 秘密数据同步触发机制
 
 秘密数据同步由以下事件触发：
 
-1. **新节点加入**：
-   - 新节点首次启动时，检测到本地加密分区为空
-   - 从现有节点请求秘密数据同步
-   - 触发条件：`localSecretDataVersion == 0`
+**新节点启动**
+- 触发条件：`localSecretDataVersion == 0`
+- 实现：检测加密分区为空，从现有节点请求同步
 
-2. **MRENCLAVE 白名单更新**（自动触发）：
-   - 治理投票添加新 MRENCLAVE 到白名单后
-   - AutoMigrationManager 自动检测白名单变化
-   - 新版本节点开始同步秘密数据
-   - 触发条件：`newMREnclave ∈ whitelist AND permissionLevel >= Basic`
+**MRENCLAVE 白名单更新（自动）**
+- 触发条件：`newMREnclave ∈ whitelist AND permissionLevel >= Basic`
+- 实现：AutoMigrationManager 监控白名单变化，自动启动迁移
 
-3. **升级期间协调**：
-   - 升级进行中（白名单包含多个 MRENCLAVE）
-   - AutoMigrationManager 根据 `UpgradeCompleteBlock` 调度迁移
-   - 新版本节点在该区块高度前必须完成迁移
-   - 触发条件：`currentBlock < UpgradeCompleteBlock AND !migrationComplete`
+**升级协调**
+- 触发条件：`currentBlock < UpgradeCompleteBlock AND !migrationComplete`
+- 实现：AutoMigrationManager 根据 UpgradeCompleteBlock 调度迁移任务
 
-## 参数分类与处理
+## 4. 参数管理
 
-### 参数分类原则
+### 4.1 参数分类
 
-X Chain 的配置参数分为两类：
+X Chain 配置参数分为三类：
 
 | 类别 | 控制方式 | 特点 | 示例 |
 |------|----------|------|------|
@@ -96,26 +93,25 @@ X Chain 的配置参数分为两类：
 | **链上安全参数** | 链上合约 | 通过投票管理，动态生效 | 白名单、密钥迁移阈值、准入策略 |
 | **非安全参数** | 命令行参数 | 不影响安全性，可灵活配置 | 出块间隔、RPC 端口、日志级别 |
 
-### Manifest 固定参数
+### 4.2 Manifest 固定参数
 
-Manifest 中只存储本地配置和链上合约地址。合约地址写死在 manifest 中，作为安全锚点，确保节点只能从指定的合约读取安全参数。
+Manifest 中存储本地配置和链上合约地址，作为安全锚点。
 
 ```toml
-# gramine manifest 中的固定参数
+# Gramine manifest 固定参数
 [loader.env]
-# 本地路径配置
-XCHAIN_ENCRYPTED_PATH = "/data/encrypted"    # 加密分区路径
-XCHAIN_SECRET_PATH = "/data/secrets"         # 秘密数据存储路径
+# 本地路径
+XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
+XCHAIN_SECRET_PATH = "/data/secrets"
 
-# 链上合约地址（写死，作为安全锚点）
-# 合约地址影响 MRENCLAVE，攻击者无法修改合约地址而不改变度量值
+# 链上合约地址（影响 MRENCLAVE）
 XCHAIN_GOVERNANCE_CONTRACT = "0x1234567890abcdef1234567890abcdef12345678"
 XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
 ```
 
-### 链上安全参数
+### 4.3 链上安全参数
 
-所有治理相关的安全参数从链上合约动态读取，这样投票结果可以实时生效，无需重新部署节点：
+从链上合约动态读取安全参数，通过投票管理。
 
 | 参数 | 链上合约 | 说明 |
 |------|----------|------|
@@ -128,75 +124,62 @@ XCHAIN_SECURITY_CONFIG_CONTRACT = "0xabcdef1234567890abcdef1234567890abcdef12"
 | 投票阈值 | GovernanceContract | 提案通过所需的投票比例 |
 | 投票期限 | GovernanceContract | 提案投票的区块数 |
 
-**合约职责划分**：
-- **安全配置合约（SecurityConfigContract）**：存储所有安全配置，被其他模块读取
-- **治理合约（GovernanceContract）**：负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约
+**合约职责**
+- `SecurityConfigContract`：存储安全配置，被其他模块读取
+- `GovernanceContract`：管理投票流程，更新 SecurityConfigContract
 
 ```go
-// 从链上读取安全参数
+// 链上参数同步实现
 type OnChainConfigSync struct {
-    governanceContract common.Address  // 从 Manifest 读取
-    whitelistContract  common.Address  // 从 Manifest 读取
-    client             *ethclient.Client
+    governanceContract     common.Address
+    securityConfigContract common.Address
+    client                 *ethclient.Client
 }
 
 func NewOnChainConfigSync() (*OnChainConfigSync, error) {
-    // 从 Manifest 环境变量读取合约地址
     govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
     scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
     
     return &OnChainConfigSync{
         governanceContract:     common.HexToAddress(govAddr),
-        securityConfigContract: common.HexToAddress(scAddr), // 安全配置合约，由治理合约管理
+        securityConfigContract: common.HexToAddress(scAddr),
     }, nil
 }
 
-// SyncSecurityParams 从链上同步所有安全参数
 func (s *OnChainConfigSync) SyncSecurityParams() (*SecurityConfig, error) {
     config := &SecurityConfig{}
-    
-    // 从安全配置合约读取（由治理合约管理）
     config.AllowedMREnclave = s.fetchWhitelist()
-    
-    // 从治理合约读取
     config.KeyMigrationThreshold = s.fetchKeyMigrationThreshold()
     config.AdmissionStrict = s.fetchAdmissionPolicy()
     config.VotingThreshold = s.fetchVotingThreshold()
-    
     return config, nil
 }
 ```
 
-**安全保证**：
-- 合约地址写死在 Manifest 中，影响 MRENCLAVE，无法被篡改
-- 所有安全参数从链上读取，通过共识机制保证一致性
-- 投票结果记录在链上，不可篡改
-- 节点定期从链上同步参数，确保使用最新的治理决策
+**安全保证**
+- 合约地址固定在 Manifest 中，影响 MRENCLAVE
+- 安全参数通过链上共识保证一致性
+- 节点定期同步最新参数
 
-### 非安全参数（命令行控制）
+### 4.4 非安全参数
+
+通过命令行配置的运行时参数。
 
 ```bash
-# 可通过命令行灵活配置的参数
+# 命令行参数示例
 ./geth \
     --xchain.block.interval=15 \
-    --xchain.block.max-tx=1000 \
-    --xchain.block.max-gas=30000000 \
     --xchain.rpc.port=8545 \
-    --xchain.p2p.port=30303 \
-    --xchain.log.level=info \
-    --xchain.metrics.enabled=true
+    --xchain.log.level=info
 ```
 
-### 参数处理机制
+### 4.5 参数合并机制
 
-参数处理流程：
-
-1. **启动后首先读取 Manifest 参数**：从环境变量加载所有安全相关参数
-2. **读取用户命令行参数**：解析用户传入的命令行参数
-3. **合并参数**：
-   - Manifest 参数直接作为最终值（安全参数以 Manifest 为准）
-   - 命令行传入的同名安全参数被忽略，无需比对
-   - 非安全参数允许用户通过命令行添加
+**处理流程**
+1. 从环境变量加载 Manifest 参数
+2. 解析命令行参数
+3. 读取链上参数
+4. 合并参数：Manifest > 链上 > 命令行
 
 ```go
 // config/param_validator.go
