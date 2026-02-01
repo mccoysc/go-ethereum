@@ -30,8 +30,8 @@ X Chain 的安全参数从链上合约读取，但这存在一个"鸡和蛋"的�
 治理合约和安全配置合约在创世区块中预部署，合约地址是确定性的（基于部署者地址和 nonce），可以预先计算并写入 Manifest。
 
 **合约职责划分**：
-- **安全配置合约（SecurityConfigContract）**：存储所有安全配置（白名单、准入策略、分叉配置、迁移策略等），被其他模块读取
-- **治理合约（GovernanceContract）**：负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约
+- **安全配置合约（SecurityConfigContract）**：存储安全相关配置（MRENCLAVE 白名单、节点准入策略、升级配置、密钥迁移策略等），被其他模块读取
+- **治理合约（GovernanceContract）**：负责投票、管理验证者、存储治理配置参数（质押金额、投票参数、验证者配置等），把安全配置变更结果写入 SecurityConfigContract
 
 ```go
 // genesis/bootstrap.go
@@ -602,7 +602,7 @@ import (
 )
 
 // WhitelistConfig 白名单配置
-// 所有配置参数存储在 SecurityConfigContract 中，可以通过 GovernanceContract 投票修改
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
 type WhitelistConfig struct {
     // 核心验证者投票阈值（百分比，默认 67 表示 2/3）
     CoreValidatorThreshold uint64
@@ -621,7 +621,7 @@ type WhitelistConfig struct {
 }
 
 // DefaultWhitelistConfig 默认配置
-// 注意：这些是创世区块的初始值，实际值从 SecurityConfigContract 中读取
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
 func DefaultWhitelistConfig() *WhitelistConfig {
     return &WhitelistConfig{
         CoreValidatorThreshold:      67,    // 2/3 核心验证者
@@ -633,7 +633,7 @@ func DefaultWhitelistConfig() *WhitelistConfig {
 }
 
 // CoreValidatorConfig 核心验证者配置
-// 所有配置参数存储在 SecurityConfigContract 中，可以通过 GovernanceContract 投票修改
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
 type CoreValidatorConfig struct {
     MinMembers      int     // 最小成员数（默认 5）
     MaxMembers      int     // 最大成员数（默认 7）
@@ -641,7 +641,7 @@ type CoreValidatorConfig struct {
 }
 
 // DefaultCoreValidatorConfig 默认核心验证者配置
-// 注意：这些是创世区块的初始值，实际值从 SecurityConfigContract 中读取
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
 func DefaultCoreValidatorConfig() *CoreValidatorConfig {
     return &CoreValidatorConfig{
         MinMembers:      5,
@@ -651,7 +651,7 @@ func DefaultCoreValidatorConfig() *CoreValidatorConfig {
 }
 
 // CommunityValidatorConfig 社区验证者配置
-// 所有配置参数存储在 SecurityConfigContract 中，可以通过 GovernanceContract 投票修改
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
 type CommunityValidatorConfig struct {
     MinUptime     time.Duration // 最小运行时间（默认 30 天）
     MinStake      *big.Int      // 最小质押量（初始值 10,000 X，可通过治理投票修改）
@@ -659,7 +659,7 @@ type CommunityValidatorConfig struct {
 }
 
 // DefaultCommunityValidatorConfig 默认社区验证者配置
-// 注意：这些是创世区块的初始值，实际值从 SecurityConfigContract 中读取
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
 func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
     return &CommunityValidatorConfig{
         MinUptime:     30 * 24 * time.Hour,                              // 30 天
@@ -817,9 +817,9 @@ const (
 )
 
 // StakingConfig 质押配置
-// 所有配置参数存储在 SecurityConfigContract 中，可以通过 GovernanceContract 投票修改
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
 type StakingConfig struct {
-    // 最小质押金额（存储在合约中，可通过治理投票修改）
+    // 最小质押金额（存储在 GovernanceContract 中，可通过治理投票修改）
     MinStakeAmount *big.Int
     
     // 解除质押锁定期（区块数）
@@ -833,7 +833,7 @@ type StakingConfig struct {
 }
 
 // DefaultStakingConfig 默认配置
-// 注意：这些是初始值，实际值从 SecurityConfigContract 中读取，可以通过治理投票修改
+// 注意：这些是初始值，实际值从 GovernanceContract 中读取，可以通过治理投票修改
 func DefaultStakingConfig() *StakingConfig {
     return &StakingConfig{
         MinStakeAmount:    new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)), // 初始值：10000 X（可通过治理合约修改）
@@ -1960,13 +1960,17 @@ func TestAdmissionControl(t *testing.T) {
 
 ## 配置参数
 
-**重要说明**：以下配置参数的值存储在 **SecurityConfigContract** 中，可以通过 **GovernanceContract** 的投票机制进行修改。代码中的默认值仅用于创世区块初始化，实际运行时必须从合约中读取最新配置。
+**重要说明**：配置参数按职责分类存储：
+- **治理配置**（质押金额、投票参数、验证者配置等）：存储在 **GovernanceContract** 中，通过投票机制修改
+- **安全配置**（MRENCLAVE 白名单、升级配置、密钥迁移策略等）：存储在 **SecurityConfigContract** 中，由 GovernanceContract 投票后写入
+
+代码中的默认值仅用于创世区块初始化，实际运行时必须从对应合约中读取最新配置。
 
 ### 参数修改流程
 
 ```
-参数修改投票流程
-================
+治理参数修改流程（存储在 GovernanceContract）
+============================================
 
 1. 提案阶段
    ├── 核心验证者提交参数修改提案
@@ -1979,12 +1983,33 @@ func TestAdmissionControl(t *testing.T) {
 
 3. 执行阶段
    ├── 投票通过后进入执行延迟期
-   ├── GovernanceContract 调用 SecurityConfigContract.SetParameter()
+   ├── GovernanceContract 内部更新参数
    └── 参数更新生效
 
 4. 生效机制
-   ├── 所有节点从 SecurityConfigContract 读取最新配置
+   ├── 所有节点从 GovernanceContract 读取最新配置
    └── 下一个区块开始使用新参数
+
+安全参数修改流程（存储在 SecurityConfigContract）
+==============================================
+
+1. 提案阶段
+   ├── 核心验证者提交安全配置变更提案
+   ├── 提案类型：ProposalAddMREnclave / ProposalRemoveMREnclave
+   └── 包含：新 MRENCLAVE、版本说明、审计报告
+
+2. 投票阶段
+   ├── 核心验证者投票（需要 2/3 通过）
+   └── 社区验证者可以行使否决权（1/3 否决）
+
+3. 执行阶段
+   ├── 投票通过后进入执行延迟期
+   ├── GovernanceContract 调用 SecurityConfigContract.UpdateWhitelist()
+   └── 安全配置更新生效
+
+4. 生效机制
+   ├── 所有节点从 SecurityConfigContract 读取最新安全配置
+   └── 新节点可以开始同步和验证
 ```
 
 ### 配置示例

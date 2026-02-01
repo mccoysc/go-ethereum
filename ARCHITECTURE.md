@@ -4072,8 +4072,8 @@ X Chain 的安全参数采用**链上合约存储 + Manifest 固定合约地址*
 
 | 合约 | 职责 |
 |------|------|
-| **安全配置合约（SecurityConfigContract）** | 存储所有安全配置，被其他模块读取 |
-| **治理合约（GovernanceContract）** | 负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约 |
+| **安全配置合约（SecurityConfigContract）** | 存储安全相关配置（MRENCLAVE 白名单、升级配置、密钥迁移策略等），被其他模块读取 |
+| **治理合约（GovernanceContract）** | 负责投票、管理验证者、存储治理配置（质押金额、投票参数、验证者配置等），把安全配置变更结果写入 SecurityConfigContract |
 
 **Manifest 固定参数：**
 
@@ -4207,7 +4207,7 @@ type CoreValidatorConfig struct {
 // CommunityValidatorConfig 社区验证者配置
 type CommunityValidatorConfig struct {
     MinUptime        time.Duration // 最小运行时间 (默认 30 天)
-    MinStake         *big.Int      // 最小质押量 (初始值 10,000 X，可通过治理投票修改)
+    MinStake         *big.Int      // 最小质押量 (初始值 10,000 X，从 GovernanceContract 读取)
     VetoThreshold    float64       // 否决阈值 (默认 1/3)
 }
 
@@ -4221,11 +4221,11 @@ func DefaultCoreValidatorConfig() *CoreValidatorConfig {
 }
 
 // DefaultCommunityValidatorConfig 默认社区验证者配置
-// 注意：这些是创世区块的初始值，实际值从 SecurityConfigContract 中读取
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
 func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
     return &CommunityValidatorConfig{
         MinUptime:     30 * 24 * time.Hour, // 30 天
-        MinStake:      big.NewInt(10000 * 1e18),   // 初始值：10,000 X（可通过治理投票修改）
+        MinStake:      new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)),   // 初始值：10,000 X（从 GovernanceContract 读取）
         VetoThreshold: 0.334,               // 1/3
     }
 }
@@ -4332,7 +4332,7 @@ type WhitelistProposal struct {
 type WhitelistGovernance struct {
     mu sync.RWMutex
     
-    config          *GovernanceConfig             // 治理配置（从 SecurityConfigContract 读取）
+    config          *GovernanceConfig             // 治理配置（从 GovernanceContract 读取）
     coreConfig      *CoreValidatorConfig
     communityConfig *CommunityValidatorConfig
     
@@ -4344,7 +4344,7 @@ type WhitelistGovernance struct {
 }
 
 // GovernanceConfig 治理配置
-// 所有配置参数存储在 SecurityConfigContract 中，可以通过 GovernanceContract 投票修改
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
 type GovernanceConfig struct {
     // 核心验证者投票阈值（百分比，默认 67 表示 2/3）
     CoreValidatorThreshold uint64
@@ -4363,7 +4363,7 @@ type GovernanceConfig struct {
 }
 
 // DefaultGovernanceConfig 默认治理配置
-// 注意：这些是创世区块的初始值，实际值从 SecurityConfigContract 中读取
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
 func DefaultGovernanceConfig() *GovernanceConfig {
     return &GovernanceConfig{
         CoreValidatorThreshold:      67,    // 2/3 核心验证者
@@ -5777,7 +5777,7 @@ type RemovalConfig struct {
     MinVotingParticipation float64       // 最低投票参与率 (默认 50%)
     
     // 质押量要求
-    MinStakeAmount         *big.Int      // 最低质押量 (初始值 10,000 X，可通过治理投票修改)
+    MinStakeAmount         *big.Int      // 最低质押量 (初始值 10,000 X，从 GovernanceContract 读取)
     StakeGracePeriod       time.Duration // 质押不足宽限期 (默认 7 天)
     
     // 恶意行为惩罚
@@ -5788,12 +5788,12 @@ type RemovalConfig struct {
 }
 
 // DefaultRemovalConfig 默认剔除配置
-// 注意：MinStakeAmount 的实际值从 SecurityConfigContract 中读取
+// 注意：MinStakeAmount 的实际值从 GovernanceContract 中读取
 func DefaultRemovalConfig() *RemovalConfig {
     return &RemovalConfig{
         MaxInactiveDays:        30,
         MinVotingParticipation: 0.5,
-        MinStakeAmount:         big.NewInt(10000 * 1e18),  // 初始值：10,000 X（可通过治理投票修改）
+        MinStakeAmount:         new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)),  // 初始值：10,000 X（从 GovernanceContract 读取）
         StakeGracePeriod:       7 * 24 * time.Hour,
         MaliciousSlashRate:     50,
         SGXRevalidationPeriod:  30 * 24 * time.Hour,
