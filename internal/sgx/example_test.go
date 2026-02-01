@@ -42,7 +42,7 @@ func Example_basicQuoteGeneration() {
 	}
 
 	fmt.Printf("Generated SGX Quote of %d bytes\n", len(quote))
-	// Output: Generated SGX Quote of 432 bytes
+	// Output: Generated SGX Quote of 1060 bytes
 }
 
 // Example_certificateGenerationAndVerification demonstrates RA-TLS certificate

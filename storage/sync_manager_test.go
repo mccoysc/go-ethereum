@@ -48,6 +48,23 @@ os.Unsetenv("RA_TLS_MRENCLAVE")
 os.Unsetenv("RA_TLS_MRSIGNER")
 }
 
+// generateValidMockQuote generates a properly formatted mock SGX quote
+func generateValidMockQuote(t *testing.T, reportData []byte) []byte {
+t.Helper()
+
+attestor, err := sgx.NewGramineAttestor()
+if err != nil {
+t.Fatalf("Failed to create attestor for quote generation: %v", err)
+}
+
+quote, err := attestor.GenerateQuote(reportData)
+if err != nil {
+t.Fatalf("Failed to generate quote: %v", err)
+}
+
+return quote
+}
+
 // createTestSyncManager creates a SyncManager with real SGX interfaces in test mode
 func createTestSyncManager(t *testing.T, tmpDir string) (*SyncManagerImpl, error) {
 t.Helper()
@@ -102,10 +119,12 @@ if err != nil {
 t.Fatalf("Failed to create sync manager: %v", err)
 }
 
+// Generate a valid mock quote
+quote := generateValidMockQuote(t, []byte("test-data"))
+
 // Add a peer
 peerID := common.BytesToHash([]byte("peer1"))
 mrenclave := [32]byte{4, 5, 6}
-quote := []byte("test-quote")
 
 err = syncManager.AddPeer(peerID, mrenclave, quote)
 if err != nil {
@@ -131,8 +150,6 @@ tmpDir := t.TempDir()
 os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
 defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
-// In test mode, quote verification always passes
-// So this test is less meaningful, but we keep it for structure
 syncManager, err := createTestSyncManager(t, tmpDir)
 if err != nil {
 t.Fatalf("Failed to create sync manager: %v", err)
@@ -140,13 +157,12 @@ t.Fatalf("Failed to create sync manager: %v", err)
 
 peerID := common.BytesToHash([]byte("peer1"))
 mrenclave := [32]byte{4, 5, 6}
-quote := []byte("invalid-quote")
+// Short quote that will fail parsing
+invalidQuote := []byte("too-short")
 
-// In test mode, this will succeed because verifier is lenient
-err = syncManager.AddPeer(peerID, mrenclave, quote)
-if err != nil {
-// This is actually expected behavior in production, but in test mode it might pass
-t.Logf("Quote verification failed as expected: %v", err)
+err = syncManager.AddPeer(peerID, mrenclave, invalidQuote)
+if err == nil {
+t.Fatal("Expected error for invalid quote")
 }
 }
 
@@ -163,9 +179,11 @@ if err != nil {
 t.Fatalf("Failed to create sync manager: %v", err)
 }
 
+// Generate a valid mock quote
+quote := generateValidMockQuote(t, []byte("test-data"))
+
 peerID := common.BytesToHash([]byte("peer1"))
 mrenclave := [32]byte{4, 5, 6}
-quote := []byte("test-quote")
 
 // Add peer
 err = syncManager.AddPeer(peerID, mrenclave, quote)
@@ -199,10 +217,13 @@ if err != nil {
 t.Fatalf("Failed to create sync manager: %v", err)
 }
 
+// Generate a valid mock quote
+quote := generateValidMockQuote(t, []byte("test-data"))
+
 // Add peer to whitelist
 peerID := common.BytesToHash([]byte("peer1"))
 mrenclave := [32]byte{4, 5, 6}
-syncManager.AddPeer(peerID, mrenclave, []byte("quote"))
+syncManager.AddPeer(peerID, mrenclave, quote)
 syncManager.UpdateAllowedEnclaves([][32]byte{mrenclave})
 
 // Request sync
@@ -230,10 +251,13 @@ if err != nil {
 t.Fatalf("Failed to create sync manager: %v", err)
 }
 
+// Generate a valid mock quote
+quote := generateValidMockQuote(t, []byte("test-data"))
+
 // Add peer but don't add to whitelist
 peerID := common.BytesToHash([]byte("peer1"))
 mrenclave := [32]byte{4, 5, 6}
-syncManager.AddPeer(peerID, mrenclave, []byte("quote"))
+syncManager.AddPeer(peerID, mrenclave, quote)
 
 // Request sync should fail
 _, err = syncManager.RequestSync(peerID, []SecretDataType{SecretTypePrivateKey})
@@ -264,10 +288,13 @@ if err != nil {
 t.Fatalf("Failed to create sync manager: %v", err)
 }
 
+// Generate a valid mock quote
+quote := generateValidMockQuote(t, []byte("test-data"))
+
 // Add peer to whitelist
 peerID := common.BytesToHash([]byte("peer1"))
 mrenclave := [32]byte{4, 5, 6}
-syncManager.AddPeer(peerID, mrenclave, []byte("quote"))
+syncManager.AddPeer(peerID, mrenclave, quote)
 syncManager.UpdateAllowedEnclaves([][32]byte{mrenclave})
 
 // Create sync request
@@ -344,10 +371,13 @@ if err != nil {
 t.Fatalf("Failed to create sync manager: %v", err)
 }
 
+// Generate a valid mock quote
+quote := generateValidMockQuote(t, []byte("test-data"))
+
 // Add peer and update whitelist
 peerID := common.BytesToHash([]byte("peer1"))
 mrenclave := [32]byte{4, 5, 6}
-syncManager.AddPeer(peerID, mrenclave, []byte("quote"))
+syncManager.AddPeer(peerID, mrenclave, quote)
 syncManager.UpdateAllowedEnclaves([][32]byte{mrenclave})
 
 // Create a sync request first
