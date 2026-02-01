@@ -116,6 +116,11 @@ print(f"  MRSIGNER: {test_mrsigner.hex()}")
 PYTHON_EOF
 
 echo "[4/4] 设置文件权限 ..."
+# 先确保文件可写，以便可以重复运行脚本
+chmod 644 "${MOCK_DEV_DIR}/attestation/type" 2>/dev/null || true
+chmod 666 "${MOCK_DEV_DIR}/attestation/user_report_data" 2>/dev/null || true
+chmod 644 "${MOCK_DEV_DIR}/attestation/quote" 2>/dev/null || true
+# 再设置为最终权限
 chmod 644 "${MOCK_DEV_DIR}/attestation/type"
 chmod 666 "${MOCK_DEV_DIR}/attestation/user_report_data"
 chmod 444 "${MOCK_DEV_DIR}/attestation/quote"
