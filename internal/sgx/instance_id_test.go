@@ -22,7 +22,7 @@ import (
 
 func TestExtractInstanceID(t *testing.T) {
 	// Create a mock attestor to generate a quote
-	attestor, err := NewMockAttestor()
+	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
 	}

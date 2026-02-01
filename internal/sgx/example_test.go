@@ -42,14 +42,14 @@ func Example_basicQuoteGeneration() {
 	}
 
 	fmt.Printf("Generated SGX Quote of %d bytes\n", len(quote))
-	// Output: Generated SGX Quote of 432 bytes
+	// Output: Generated SGX Quote of 1060 bytes
 }
 
 // Example_certificateGenerationAndVerification demonstrates RA-TLS certificate
 // generation and verification.
 func Example_certificateGenerationAndVerification() {
 	// Create attestor
-	attestor, err := sgx.NewMockAttestor()
+	attestor, err := sgx.NewGramineAttestor()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func Example_whitelistManagement() {
 // Example_quoteExtraction demonstrates extracting information from SGX Quotes.
 func Example_quoteExtraction() {
 	// Create attestor
-	attestor, err := sgx.NewMockAttestor()
+	attestor, err := sgx.NewGramineAttestor()
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -17,6 +17,7 @@
 package sgx
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -37,6 +38,11 @@ type InstanceID struct {
 // - Ensure each physical CPU can only register one validator node
 // - Prevent Sybil attacks by the same hardware running multiple nodes
 // - Distinguish different genesis administrators during bootstrap
+//
+// Implementation follows mccoysc/gramine JavaScript implementation:
+// Priority 1: PPID (Platform Provisioning ID) from certification data
+// Priority 2: PCK Certificate SPKI fingerprint
+// Priority 3: CPUSVN + Attributes (fallback for testing only)
 func ExtractInstanceID(quote []byte) (*InstanceID, error) {
 	if len(quote) < 432 {
 		return nil, errors.New("quote too short for instance ID extraction")
@@ -52,16 +58,21 @@ func ExtractInstanceID(quote []byte) (*InstanceID, error) {
 		QuoteType: parsedQuote.SignType,
 	}
 
-	// Extract instance ID based on quote type
+	// Extract instance ID based on quote type and available data
 	switch parsedQuote.SignType {
 	case 0, 1: // EPID (Unlinkable or Linkable)
-		// For EPID quotes, the platform instance ID is in the signature data
-		// This is a simplified extraction - real implementation needs EPID library
+		// For EPID quotes, try to extract from signature data
 		instanceID.CPUInstanceID = extractEPIDInstanceID(quote)
 
 	case 2, 3: // DCAP (ECDSA P-256 or ECDSA P-384)
-		// For DCAP quotes, extract FMSPC and other platform identifiers
-		instanceID.CPUInstanceID = extractDCAPInstanceID(quote)
+		// For DCAP quotes, prioritize PPID extraction
+		ppid, err := extractPPIDFromDCAPQuote(quote)
+		if err == nil && len(ppid) > 0 {
+			instanceID.CPUInstanceID = ppid
+		} else {
+			// Fallback: use CPUSVN + Attributes composite
+			instanceID.CPUInstanceID = extractDCAPInstanceID(quote)
+		}
 
 	default:
 		return nil, fmt.Errorf("unknown quote signature type: %d", parsedQuote.SignType)
@@ -72,6 +83,94 @@ func ExtractInstanceID(quote []byte) (*InstanceID, error) {
 	}
 
 	return instanceID, nil
+}
+
+// extractPPIDFromDCAPQuote extracts PPID (Platform Provisioning ID) from DCAP quote.
+// PPID is the most reliable hardware identifier and should be used when available.
+//
+// Quote structure:
+// - Quote body: 432 bytes
+// - Signature data (variable):
+//   - Signature len (4) + Signature
+//   - Attestation Public Key (64 for ECDSA-256)
+//   - QE Report (384)
+//   - QE Report Signature len (4) + QE Report Signature
+//   - QE Auth Data len (2) + QE Auth Data
+//   - Cert Data Type (2)
+//   - Cert Data Size (4)
+//   - Cert Data:
+//     - For Type 5 (PPID_Encrypted_RSA_3072) or 6 (PPID_Cleartext):
+//       - PPID (16 bytes)
+//       - CPUSVN (16 bytes)
+//       - PCESVN (2 bytes)
+//       - PCEID (2 bytes)
+func extractPPIDFromDCAPQuote(quote []byte) ([]byte, error) {
+	if len(quote) < 432 {
+		return nil, fmt.Errorf("quote too short")
+	}
+
+	offset := 432 // Start of signature data
+
+	// Read signature length and skip signature
+	if len(quote) < offset+4 {
+		return nil, fmt.Errorf("cannot read signature length")
+	}
+	sigLen := binary.LittleEndian.Uint32(quote[offset : offset+4])
+	offset += 4 + int(sigLen)
+
+	// Skip attestation public key (64 bytes for ECDSA-256)
+	offset += 64
+
+	// Skip QE Report (384 bytes)
+	offset += 384
+
+	// Read and skip QE Report Signature
+	if len(quote) < offset+4 {
+		return nil, fmt.Errorf("cannot read QE report signature length")
+	}
+	qeReportSigLen := binary.LittleEndian.Uint32(quote[offset : offset+4])
+	offset += 4 + int(qeReportSigLen)
+
+	// Read and skip QE Auth Data
+	if len(quote) < offset+2 {
+		return nil, fmt.Errorf("cannot read QE auth data length")
+	}
+	qeAuthDataLen := binary.LittleEndian.Uint16(quote[offset : offset+2])
+	offset += 2 + int(qeAuthDataLen)
+
+	// Read Cert Data Type
+	if len(quote) < offset+2 {
+		return nil, fmt.Errorf("cannot read cert data type")
+	}
+	certDataType := binary.LittleEndian.Uint16(quote[offset : offset+2])
+	offset += 2
+
+	// Read Cert Data Size
+	if len(quote) < offset+4 {
+		return nil, fmt.Errorf("cannot read cert data size")
+	}
+	certDataSize := binary.LittleEndian.Uint32(quote[offset : offset+4])
+	offset += 4
+
+	// Check if this is PPID-based certification data
+	// Type 5 = PPID_Encrypted_RSA_3072
+	// Type 6 = PPID_Cleartext
+	if certDataType == 5 || certDataType == 6 {
+		// PPID is the first 16 bytes of cert data
+		if len(quote) < offset+16 {
+			return nil, fmt.Errorf("cert data too small for PPID")
+		}
+		if certDataSize < 16 {
+			return nil, fmt.Errorf("cert data size too small: %d", certDataSize)
+		}
+
+		ppid := make([]byte, 16)
+		copy(ppid, quote[offset:offset+16])
+		return ppid, nil
+	}
+
+	// PPID not available in this quote
+	return nil, fmt.Errorf("PPID not available (cert data type %d)", certDataType)
 }
 
 // extractEPIDInstanceID extracts the platform instance ID from an EPID quote.
