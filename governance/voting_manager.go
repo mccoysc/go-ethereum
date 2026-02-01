@@ -183,19 +183,35 @@ func (vm *InMemoryVotingManager) CheckProposalStatus(proposalID common.Hash, cur
 	// Check if proposal passed
 	passed := false
 
-	// Core validator threshold check (2/3 majority)
-	if totalCoreVotingPower > 0 {
-		coreApprovalRate := (proposal.CoreYesVotes * 100) / totalCoreVotingPower
-		if coreApprovalRate >= vm.config.CoreValidatorThreshold {
+	// Emergency upgrade requires 100% core validator approval
+	if proposal.Type == ProposalEmergencyUpgrade {
+		// Must have 100% of core validators vote yes
+		if totalCoreVotingPower > 0 && proposal.CoreYesVotes == totalCoreVotingPower {
 			passed = true
 		}
-	}
 
-	// Community validator veto check (1/3 can veto)
-	if passed && totalCommunityVotingPower > 0 {
-		communityRejectionRate := (proposal.CommunityNoVotes * 100) / totalCommunityVotingPower
-		if communityRejectionRate >= vm.config.CommunityVetoThreshold {
-			passed = false
+		// Community veto threshold is 1/2 for emergency upgrades (stricter)
+		if passed && totalCommunityVotingPower > 0 {
+			communityRejectionRate := (proposal.CommunityNoVotes * 100) / totalCommunityVotingPower
+			if communityRejectionRate >= 50 { // 1/2 veto threshold
+				passed = false
+			}
+		}
+	} else {
+		// Normal upgrade: Core validator threshold check (2/3 majority)
+		if totalCoreVotingPower > 0 {
+			coreApprovalRate := (proposal.CoreYesVotes * 100) / totalCoreVotingPower
+			if coreApprovalRate >= vm.config.CoreValidatorThreshold {
+				passed = true
+			}
+		}
+
+		// Community validator veto check (1/3 can veto for normal upgrades)
+		if passed && totalCommunityVotingPower > 0 {
+			communityRejectionRate := (proposal.CommunityNoVotes * 100) / totalCommunityVotingPower
+			if communityRejectionRate >= vm.config.CommunityVetoThreshold {
+				passed = false
+			}
 		}
 	}
 

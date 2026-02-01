@@ -445,3 +445,130 @@ func TestVotingManager_GetActiveProposals(t *testing.T) {
 		t.Errorf("expected 2 active proposals, got %d", len(active))
 	}
 }
+
+func TestVotingManager_EmergencyUpgrade_RequiresUnanimous(t *testing.T) {
+	config := DefaultWhitelistConfig()
+	validators := NewMockValidatorManager()
+	vm := NewInMemoryVotingManager(config, validators)
+
+	// Add 3 core validators
+	core1 := common.HexToAddress("0x1")
+	core2 := common.HexToAddress("0x2")
+	core3 := common.HexToAddress("0x3")
+	validators.AddMockValidator(core1, VoterTypeCore, 1)
+	validators.AddMockValidator(core2, VoterTypeCore, 1)
+	validators.AddMockValidator(core3, VoterTypeCore, 1)
+
+	// Create emergency upgrade proposal
+	proposal := &Proposal{
+		Type:      ProposalEmergencyUpgrade,
+		Proposer:  core1,
+		Target:    []byte{1, 2, 3},
+		CreatedAt: 100,
+	}
+	proposalID, _ := vm.CreateProposal(proposal)
+
+	// Only 2 out of 3 vote yes (not unanimous)
+	vm.Vote(proposalID, core1, true, nil)
+	vm.Vote(proposalID, core2, true, nil)
+
+	// Check status after voting period ends
+	currentBlock := 100 + config.VotingPeriod + 1
+	vm.CheckProposalStatus(proposalID, currentBlock)
+
+	// Should be rejected (not 100%)
+	retrieved, _ := vm.GetProposal(proposalID)
+	if retrieved.Status != ProposalStatusRejected {
+		t.Errorf("emergency upgrade without unanimous vote should be rejected, got %v", retrieved.Status)
+	}
+}
+
+func TestVotingManager_EmergencyUpgrade_Unanimous(t *testing.T) {
+	config := DefaultWhitelistConfig()
+	validators := NewMockValidatorManager()
+	vm := NewInMemoryVotingManager(config, validators)
+
+	// Add 3 core validators
+	core1 := common.HexToAddress("0x1")
+	core2 := common.HexToAddress("0x2")
+	core3 := common.HexToAddress("0x3")
+	validators.AddMockValidator(core1, VoterTypeCore, 1)
+	validators.AddMockValidator(core2, VoterTypeCore, 1)
+	validators.AddMockValidator(core3, VoterTypeCore, 1)
+
+	// Create emergency upgrade proposal
+	proposal := &Proposal{
+		Type:      ProposalEmergencyUpgrade,
+		Proposer:  core1,
+		Target:    []byte{1, 2, 3},
+		CreatedAt: 100,
+	}
+	proposalID, _ := vm.CreateProposal(proposal)
+
+	// All 3 vote yes (unanimous)
+	vm.Vote(proposalID, core1, true, nil)
+	vm.Vote(proposalID, core2, true, nil)
+	vm.Vote(proposalID, core3, true, nil)
+
+	// Check status after voting period ends
+	currentBlock := 100 + config.VotingPeriod + 1
+	vm.CheckProposalStatus(proposalID, currentBlock)
+
+	// Should pass
+	retrieved, _ := vm.GetProposal(proposalID)
+	if retrieved.Status != ProposalStatusPassed {
+		t.Errorf("emergency upgrade with unanimous vote should pass, got %v", retrieved.Status)
+	}
+}
+
+func TestVotingManager_EmergencyUpgrade_StricterVeto(t *testing.T) {
+	config := DefaultWhitelistConfig()
+	validators := NewMockValidatorManager()
+	vm := NewInMemoryVotingManager(config, validators)
+
+	// Add 3 core validators (all vote yes)
+	core1 := common.HexToAddress("0x1")
+	core2 := common.HexToAddress("0x2")
+	core3 := common.HexToAddress("0x3")
+	validators.AddMockValidator(core1, VoterTypeCore, 1)
+	validators.AddMockValidator(core2, VoterTypeCore, 1)
+	validators.AddMockValidator(core3, VoterTypeCore, 1)
+
+	// Add 4 community validators
+	comm1 := common.HexToAddress("0x11")
+	comm2 := common.HexToAddress("0x12")
+	comm3 := common.HexToAddress("0x13")
+	comm4 := common.HexToAddress("0x14")
+	validators.AddMockValidator(comm1, VoterTypeCommunity, 1)
+	validators.AddMockValidator(comm2, VoterTypeCommunity, 1)
+	validators.AddMockValidator(comm3, VoterTypeCommunity, 1)
+	validators.AddMockValidator(comm4, VoterTypeCommunity, 1)
+
+	// Create emergency upgrade proposal
+	proposal := &Proposal{
+		Type:      ProposalEmergencyUpgrade,
+		Proposer:  core1,
+		Target:    []byte{1, 2, 3},
+		CreatedAt: 100,
+	}
+	proposalID, _ := vm.CreateProposal(proposal)
+
+	// All core validators vote yes
+	vm.Vote(proposalID, core1, true, nil)
+	vm.Vote(proposalID, core2, true, nil)
+	vm.Vote(proposalID, core3, true, nil)
+
+	// 2 out of 4 community validators vote no (50% - should veto)
+	vm.Vote(proposalID, comm1, false, nil)
+	vm.Vote(proposalID, comm2, false, nil)
+
+	// Check status after voting period ends
+	currentBlock := 100 + config.VotingPeriod + 1
+	vm.CheckProposalStatus(proposalID, currentBlock)
+
+	// Should be rejected due to 1/2 community veto
+	retrieved, _ := vm.GetProposal(proposalID)
+	if retrieved.Status != ProposalStatusRejected {
+		t.Errorf("emergency upgrade should be vetoed by 50%% community, got %v", retrieved.Status)
+	}
+}
