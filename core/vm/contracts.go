@@ -177,6 +177,22 @@ var PrecompiledContractsP256Verify = PrecompiledContracts{
 	common.BytesToAddress([]byte{0x1, 0x00}): &p256Verify{},
 }
 
+// PrecompiledContractsSGX contains the SGX precompiled contracts for
+// cryptographic key management operations. These contracts provide
+// secure key creation, signing, encryption, and key derivation within
+// the SGX enclave.
+var PrecompiledContractsSGX = PrecompiledContracts{
+	common.BytesToAddress([]byte{0x80, 0x00}): &SGXKeyCreate{},
+	common.BytesToAddress([]byte{0x80, 0x01}): &SGXKeyGetPublic{},
+	common.BytesToAddress([]byte{0x80, 0x02}): &SGXSign{},
+	common.BytesToAddress([]byte{0x80, 0x03}): &SGXVerify{},
+	common.BytesToAddress([]byte{0x80, 0x04}): &SGXECDH{},
+	common.BytesToAddress([]byte{0x80, 0x05}): &SGXRandom{},
+	common.BytesToAddress([]byte{0x80, 0x06}): &SGXEncrypt{},
+	common.BytesToAddress([]byte{0x80, 0x07}): &SGXDecrypt{},
+	common.BytesToAddress([]byte{0x80, 0x08}): &SGXKeyDerive{},
+}
+
 var (
 	PrecompiledAddressesOsaka     []common.Address
 	PrecompiledAddressesPrague    []common.Address
