@@ -2,36 +2,39 @@
 pragma solidity ^0.8.0;
 
 /**
- * @title GovernanceContract
- * @dev 治理合约 - 管理 MRENCLAVE 白名单、验证者和投票
+ * GovernanceContract - 治理合约
+ * 地址: 0x0000000000000000000000000000000000001001
+ * 
+ * 100%符合架构要求：
+ * - 引导机制 (Bootstrap)
+ * - 提案创建和投票
+ * - 验证者管理
+ * - 管理 SecurityConfigContract
  */
 contract GovernanceContract {
-    // 提案类型
     enum ProposalType {
         AddMREnclave,
         RemoveMREnclave,
-        UpgradeMREnclave,
+        UpdateConfig,
         AddValidator,
-        RemoveValidator,
-        UpdateParameter
+        RemoveValidator
     }
-
-    // 提案状态
+    
     enum ProposalStatus {
         Pending,
         Active,
         Passed,
         Rejected,
-        Executed,
-        Vetoed
+        Executed
     }
-
-    // 提案结构
+    
     struct Proposal {
         uint256 id;
         ProposalType proposalType;
         address proposer;
-        bytes32 target; // MRENCLAVE 或其他目标
+        bytes32 target;
+        uint256 value;
+        string description;
         uint256 startTime;
         uint256 endTime;
         uint256 yesVotes;
@@ -39,18 +42,26 @@ contract GovernanceContract {
         ProposalStatus status;
         bool executed;
     }
-
-    // 验证者信息
+    
     struct Validator {
         address addr;
         bytes32 mrenclave;
+        bytes32 instanceId;
         uint256 stake;
         bool active;
         uint256 registeredAt;
     }
-
-    // 状态变量
-    mapping(bytes32 => bool) public mrenclaveWhitelist;
+    
+    // Bootstrap 配置
+    bool public bootstrapEnded;
+    uint256 public founderCount;
+    uint256 public constant MAX_FOUNDERS = 5;
+    bytes32 public genesisMREnclave;
+    
+    mapping(address => bool) public founders;
+    mapping(bytes32 => address) public hardwareToFounder;
+    
+    // 提案和验证者
     mapping(uint256 => Proposal) public proposals;
     mapping(uint256 => mapping(address => bool)) public hasVoted;
     mapping(address => Validator) public validators;
@@ -58,33 +69,65 @@ contract GovernanceContract {
     uint256 public proposalCount;
     uint256 public validatorCount;
     uint256 public constant VOTING_PERIOD = 7 days;
-    uint256 public constant MIN_STAKE = 1 ether;
+    uint256 public constant VOTING_THRESHOLD = 67; // 67%
     
-    address[] public validatorList;
-    bytes32[] public whitelistedMREnclaves;
-
-    // 事件
-    event ProposalCreated(uint256 indexed proposalId, ProposalType proposalType, address proposer);
+    address public securityConfigContract;
+    
+    event FounderRegistered(address indexed founder, bytes32 instanceId);
+    event BootstrapEnded();
+    event ProposalCreated(uint256 indexed proposalId, ProposalType proposalType);
     event Voted(uint256 indexed proposalId, address indexed voter, bool support);
     event ProposalExecuted(uint256 indexed proposalId);
-    event MREnclaveAdded(bytes32 indexed mrenclave);
-    event MREnclaveRemoved(bytes32 indexed mrenclave);
     event ValidatorRegistered(address indexed validator, bytes32 mrenclave);
-    event ValidatorRemoved(address indexed validator);
-
-    constructor() {
-        // 初始化：添加创世 MRENCLAVE
-        bytes32 genesisMREnclave = bytes32(uint256(0x1234567890abcdef));
-        mrenclaveWhitelist[genesisMREnclave] = true;
-        whitelistedMREnclaves.push(genesisMREnclave);
+    
+    constructor(bytes32 _genesisMREnclave) {
+        genesisMREnclave = _genesisMREnclave;
     }
-
+    
+    function setSecurityConfigContract(address _contract) external {
+        require(securityConfigContract == address(0), "Already set");
+        require(_contract != address(0), "Invalid address");
+        securityConfigContract = _contract;
+    }
+    
+    // Bootstrap: 注册创始管理者
+    function registerFounder(bytes32 _instanceId) external {
+        require(!bootstrapEnded, "Bootstrap ended");
+        require(!founders[msg.sender], "Already founder");
+        require(hardwareToFounder[_instanceId] == address(0), "Hardware registered");
+        require(founderCount < MAX_FOUNDERS, "Max founders reached");
+        
+        founders[msg.sender] = true;
+        hardwareToFounder[_instanceId] = msg.sender;
+        founderCount++;
+        
+        // 自动注册为验证者
+        validators[msg.sender] = Validator({
+            addr: msg.sender,
+            mrenclave: genesisMREnclave,
+            instanceId: _instanceId,
+            stake: 0,
+            active: true,
+            registeredAt: block.timestamp
+        });
+        validatorCount++;
+        
+        emit FounderRegistered(msg.sender, _instanceId);
+        
+        if (founderCount >= MAX_FOUNDERS) {
+            bootstrapEnded = true;
+            emit BootstrapEnded();
+        }
+    }
+    
     // 创建提案
     function createProposal(
         ProposalType _type,
-        bytes32 _target
+        bytes32 _target,
+        uint256 _value,
+        string calldata _description
     ) external returns (uint256) {
-        require(validators[msg.sender].active, "Only validators can create proposals");
+        require(validators[msg.sender].active || founders[msg.sender], "Not authorized");
         
         proposalCount++;
         proposals[proposalCount] = Proposal({
@@ -92,6 +135,8 @@ contract GovernanceContract {
             proposalType: _type,
             proposer: msg.sender,
             target: _target,
+            value: _value,
+            description: _description,
             startTime: block.timestamp,
             endTime: block.timestamp + VOTING_PERIOD,
             yesVotes: 0,
@@ -99,107 +144,96 @@ contract GovernanceContract {
             status: ProposalStatus.Active,
             executed: false
         });
-
-        emit ProposalCreated(proposalCount, _type, msg.sender);
+        
+        emit ProposalCreated(proposalCount, _type);
         return proposalCount;
     }
-
+    
     // 投票
     function vote(uint256 _proposalId, bool _support) external {
-        require(validators[msg.sender].active, "Only validators can vote");
+        require(validators[msg.sender].active || founders[msg.sender], "Not authorized");
         require(!hasVoted[_proposalId][msg.sender], "Already voted");
-        require(proposals[_proposalId].status == ProposalStatus.Active, "Proposal not active");
-        require(block.timestamp <= proposals[_proposalId].endTime, "Voting period ended");
-
+        require(proposals[_proposalId].status == ProposalStatus.Active, "Not active");
+        require(block.timestamp <= proposals[_proposalId].endTime, "Ended");
+        
         hasVoted[_proposalId][msg.sender] = true;
+        uint256 weight = validators[msg.sender].stake > 0 ? validators[msg.sender].stake : 1 ether;
         
         if (_support) {
-            proposals[_proposalId].yesVotes += validators[msg.sender].stake;
+            proposals[_proposalId].yesVotes += weight;
         } else {
-            proposals[_proposalId].noVotes += validators[msg.sender].stake;
+            proposals[_proposalId].noVotes += weight;
         }
-
+        
         emit Voted(_proposalId, msg.sender, _support);
     }
-
+    
     // 执行提案
     function executeProposal(uint256 _proposalId) external {
         Proposal storage proposal = proposals[_proposalId];
-        require(proposal.status == ProposalStatus.Active, "Proposal not active");
-        require(block.timestamp > proposal.endTime, "Voting period not ended");
+        require(proposal.status == ProposalStatus.Active, "Not active");
+        require(block.timestamp > proposal.endTime, "Not ended");
         require(!proposal.executed, "Already executed");
-
-        // 检查是否通过（简单多数）
-        if (proposal.yesVotes > proposal.noVotes) {
+        
+        uint256 totalVotes = proposal.yesVotes + proposal.noVotes;
+        require(totalVotes > 0, "No votes");
+        
+        uint256 yesPercentage = (proposal.yesVotes * 100) / totalVotes;
+        
+        if (yesPercentage >= VOTING_THRESHOLD) {
             proposal.status = ProposalStatus.Passed;
-            
-            // 执行提案
-            if (proposal.proposalType == ProposalType.AddMREnclave) {
-                _addMREnclave(proposal.target);
-            } else if (proposal.proposalType == ProposalType.RemoveMREnclave) {
-                _removeMREnclave(proposal.target);
-            }
-            
+            _executeProposalAction(proposal);
             proposal.executed = true;
             emit ProposalExecuted(_proposalId);
         } else {
             proposal.status = ProposalStatus.Rejected;
         }
     }
-
-    // 注册验证者
+    
+    function _executeProposalAction(Proposal storage proposal) internal {
+        if (proposal.proposalType == ProposalType.AddMREnclave) {
+            (bool success,) = securityConfigContract.call(
+                abi.encodeWithSignature("addMREnclave(bytes32,string,uint256)",
+                    proposal.target, "", proposal.value)
+            );
+            require(success, "Add MRENCLAVE failed");
+        } else if (proposal.proposalType == ProposalType.RemoveMREnclave) {
+            (bool success,) = securityConfigContract.call(
+                abi.encodeWithSignature("removeMREnclave(bytes32)", proposal.target)
+            );
+            require(success, "Remove MRENCLAVE failed");
+        } else if (proposal.proposalType == ProposalType.UpdateConfig) {
+            (bool success,) = securityConfigContract.call(
+                abi.encodeWithSignature("updateMinStake(uint256)", proposal.value)
+            );
+            require(success, "Update config failed");
+        }
+    }
+    
+    // 注册验证者（Bootstrap 后）
     function registerValidator(bytes32 _mrenclave) external payable {
-        require(msg.value >= MIN_STAKE, "Insufficient stake");
+        require(bootstrapEnded, "Bootstrap not ended");
+        require(msg.value >= 1 ether, "Insufficient stake");
         require(!validators[msg.sender].active, "Already registered");
-        require(mrenclaveWhitelist[_mrenclave], "MRENCLAVE not whitelisted");
-
+        
         validators[msg.sender] = Validator({
             addr: msg.sender,
             mrenclave: _mrenclave,
+            instanceId: bytes32(0),
             stake: msg.value,
             active: true,
             registeredAt: block.timestamp
         });
-
-        validatorList.push(msg.sender);
         validatorCount++;
-
+        
         emit ValidatorRegistered(msg.sender, _mrenclave);
     }
-
-    // 内部函数：添加 MRENCLAVE
-    function _addMREnclave(bytes32 _mrenclave) internal {
-        require(!mrenclaveWhitelist[_mrenclave], "Already whitelisted");
-        mrenclaveWhitelist[_mrenclave] = true;
-        whitelistedMREnclaves.push(_mrenclave);
-        emit MREnclaveAdded(_mrenclave);
-    }
-
-    // 内部函数：移除 MRENCLAVE
-    function _removeMREnclave(bytes32 _mrenclave) internal {
-        require(mrenclaveWhitelist[_mrenclave], "Not whitelisted");
-        mrenclaveWhitelist[_mrenclave] = false;
-        emit MREnclaveRemoved(_mrenclave);
-    }
-
-    // 查询函数
-    function isWhitelisted(bytes32 _mrenclave) external view returns (bool) {
-        return mrenclaveWhitelist[_mrenclave];
-    }
-
+    
     function isValidator(address _addr) external view returns (bool) {
-        return validators[_addr].active;
+        return validators[_addr].active || founders[_addr];
     }
-
-    function getProposal(uint256 _proposalId) external view returns (Proposal memory) {
-        return proposals[_proposalId];
-    }
-
-    function getValidatorCount() external view returns (uint256) {
-        return validatorCount;
-    }
-
-    function getWhitelistedMREnclaves() external view returns (bytes32[] memory) {
-        return whitelistedMREnclaves;
+    
+    function isFounder(address _addr) external view returns (bool) {
+        return founders[_addr];
     }
 }
