@@ -211,11 +211,12 @@ func (e *SGXEngine) VerifyUncles(chain consensus.ChainReader, block *types.Block
 }
 
 // Prepare 准备区块头
+// 除SGX相关字段外，其他处理与以太坊完全一致
 func (e *SGXEngine) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
-	// 设置难度
+	// 标准以太坊处理：设置难度（PoA固定为1）
 	header.Difficulty = big.NewInt(1)
 
-	// 设置时间戳
+	// 标准以太坊处理：设置时间戳
 	parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
 	if parent == nil {
 		return consensus.ErrUnknownAncestor
@@ -225,24 +226,14 @@ func (e *SGXEngine) Prepare(chain consensus.ChainHeaderReader, header *types.Hea
 		header.Time = parent.Time + 1
 	}
 
-	// 生成 SGX Quote
-	quote, err := e.attestor.GenerateQuote(header.ParentHash.Bytes())
-	if err != nil {
-		return err
-	}
-
-	// 获取 ProducerID
-	producerID, err := e.attestor.GetProducerID()
-	if err != nil {
-		return err
-	}
-
-	// 构造 Extra 数据
+	// SGX特有：预留Extra空间用于后续在Seal阶段填充
+	// 此时还没有完整的区块信息，所以只预留空间
+	// 实际的SGX Quote将在Seal阶段生成（因为需要完整的区块哈希作为userData）
 	extra := &SGXExtra{
-		SGXQuote:      quote,
-		ProducerID:    producerID,
-		AttestationTS: uint64(time.Now().Unix()),
-		Signature:     []byte{}, // 签名在 Seal 阶段生成
+		SGXQuote:      []byte{}, // Seal阶段生成
+		ProducerID:    []byte{}, // Seal阶段填充
+		AttestationTS: 0,        // Seal阶段填充
+		Signature:     []byte{}, // Seal阶段生成
 	}
 
 	extraData, err := extra.Encode()
@@ -272,34 +263,51 @@ func (e *SGXEngine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, heade
 	return types.NewBlock(header, body, receipts, trie.NewStackTrie(nil)), nil
 }
 
-// Seal 密封区块（生成签名）
+// Seal 密封区块（生成SGX远程证明并签名）
+// 这是唯一涉及SGX的核心函数，其他所有处理与以太坊一致
 func (e *SGXEngine) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	header := block.Header()
 
-	// 计算 seal hash
+	// 标准以太坊处理：计算seal hash（不包含签名的区块哈希）
 	sealHash := e.SealHash(header)
 
-	// 在 Enclave 内签名
+	// ===== SGX核心功能：远程证明 =====
+	// 1. 使用区块哈希作为userData生成SGX Quote
+	//    这证明了该区块确实是在SGX Enclave内产生的
+	//    Quote包含：MRENCLAVE、userData(blockHash)、timestamp等
+	quote, err := e.attestor.GenerateQuote(sealHash.Bytes())
+	if err != nil {
+		return err
+	}
+
+	// 2. 获取出块者ID（从SGX证书中提取）
+	producerID, err := e.attestor.GetProducerID()
+	if err != nil {
+		return err
+	}
+
+	// 3. 在Enclave内对区块进行签名
+	//    私钥永远不会离开SGX Enclave，保证安全性
 	signature, err := e.attestor.SignInEnclave(sealHash.Bytes())
 	if err != nil {
 		return err
 	}
 
-	// 解析现有的 Extra
-	extra, err := DecodeSGXExtra(header.Extra)
-	if err != nil {
-		return err
+	// 4. 构造包含SGX证明的Extra数据
+	extra := &SGXExtra{
+		SGXQuote:      quote,                       // SGX远程证明报告
+		ProducerID:    producerID,                  // 出块者身份
+		AttestationTS: uint64(time.Now().Unix()),  // 证明时间戳
+		Signature:     signature,                   // Enclave内的签名
 	}
 
-	// 添加签名
-	extra.Signature = signature
 	extraData, err := extra.Encode()
 	if err != nil {
 		return err
 	}
 	header.Extra = extraData
 
-	// 返回密封后的区块
+	// 标准以太坊处理：返回密封后的区块
 	select {
 	case results <- block.WithSeal(header):
 	case <-stop:
