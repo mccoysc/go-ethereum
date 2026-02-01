@@ -237,7 +237,7 @@ func (rm *ReputationManager) applyDecay(rep *NodeReputation) {
 
 	if periods > 0 {
 		for i := 0; i < periods; i++ {
-			decay := uint64(float64(rep.Score) * rm.config.DecayRate / 100.0)
+			decay := (rep.Score * uint64(rm.config.DecayRate)) / 100
 			if rep.Score >= decay {
 				rep.Score -= decay
 			} else {
