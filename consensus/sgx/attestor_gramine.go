@@ -38,8 +38,10 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 	// Check if we're in Gramine environment
 	gramineVersion := os.Getenv("GRAMINE_VERSION")
 	if gramineVersion == "" {
-		return nil, fmt.Errorf("not running under Gramine - cannot use GramineAttestor. " +
-			"Gramine is REQUIRED for SGX attestation.")
+		// GRAMINE_VERSION缺失 → 可以退出（用户可以设置环境变量模拟）
+		return nil, fmt.Errorf("GRAMINE_VERSION environment variable not set. " +
+			"For Gramine environment: this should be set automatically. " +
+			"For testing: export GRAMINE_VERSION=test")
 	}
 	
 	log.Info("Gramine attestor initialized", "version", gramineVersion)
@@ -50,11 +52,9 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 // GenerateQuote generates an SGX quote for the given data
 func (a *GramineAttestor) GenerateQuote(data []byte) ([]byte, error) {
 	// Real SGX quote generation via Gramine
-	// In Gramine, we use the gramine-sgx-get-token or direct SGX SDK calls
-	
-	// Try to use Gramine's SGX quote generation
 	quote, err := gramineGenerateQuote(data)
 	if err != nil {
+		// Gramine runtime调用失败 → 必须报错，不能跳过
 		return nil, fmt.Errorf("failed to generate SGX quote: %w", err)
 	}
 	
@@ -71,13 +71,15 @@ func (a *GramineAttestor) GetMREnclave() ([]byte, error) {
 	}
 	
 	if mrenclaveHex == "" {
-		return nil, fmt.Errorf("MRENCLAVE not available in environment - " +
-			"ensure running under Gramine SGX")
+		// MRENCLAVE环境变量缺失 → 可以退出（用户可以设置）
+		return nil, fmt.Errorf("MRENCLAVE not available in environment. " +
+			"For Gramine: this should be set automatically. " +
+			"For testing: export RA_TLS_MRENCLAVE=<64-char-hex> or SGX_MRENCLAVE=<64-char-hex>")
 	}
 	
 	// Convert hex string to bytes
 	mrenclave := make([]byte, 32)
-	for i := 0; i < 32; i++ {
+	for i := 0; i < 32 && i*2+1 < len(mrenclaveHex); i++ {
 		fmt.Sscanf(mrenclaveHex[i*2:i*2+2], "%02x", &mrenclave[i])
 	}
 	
@@ -93,13 +95,15 @@ func (a *GramineAttestor) GetMRSigner() ([]byte, error) {
 	}
 	
 	if mrsignerHex == "" {
-		return nil, fmt.Errorf("MRSIGNER not available in environment - " +
-			"ensure running under Gramine SGX")
+		// MRSIGNER环境变量缺失 → 可以退出（用户可以设置）
+		return nil, fmt.Errorf("MRSIGNER not available in environment. " +
+			"For Gramine: this should be set automatically. " +
+			"For testing: export RA_TLS_MRSIGNER=<64-char-hex> or SGX_MRSIGNER=<64-char-hex>")
 	}
 	
 	// Convert hex string to bytes
 	mrsigner := make([]byte, 32)
-	for i := 0; i < 32; i++ {
+	for i := 0; i < 32 && i*2+1 < len(mrsignerHex); i++ {
 		fmt.Sscanf(mrsignerHex[i*2:i*2+2], "%02x", &mrsigner[i])
 	}
 	
@@ -117,6 +121,7 @@ func (a *GramineAttestor) SignInEnclave(data []byte) ([]byte, error) {
 	// Real SGX signing via Gramine
 	signature, err := gramineSignData(data)
 	if err != nil {
+		// Gramine runtime调用失败 → 必须报错，不能跳过
 		return nil, fmt.Errorf("failed to sign data in enclave: %w", err)
 	}
 	

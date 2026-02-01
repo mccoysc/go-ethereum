@@ -83,11 +83,26 @@ func New(config *Config, attestor Attestor, verifier Verifier) *SGXEngine {
 func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine {
 	log.Info("=== Initializing SGX Consensus Engine ===")
 	
+	// Check environment
+	gramineVersion := os.Getenv("GRAMINE_VERSION")
+	isGramine := gramineVersion != ""
+	
+	if isGramine {
+		log.Info("Running under Gramine", "version", gramineVersion)
+	} else {
+		log.Warn("⚠️  Not running under Gramine - using file-based test mode")
+		log.Warn("⚠️  This mode reads test data from files (testdata/sgx/)")
+		log.Warn("⚠️  Production deployment MUST use Gramine")
+	}
+	
 	// Step 1: Validate manifest integrity (signature verification)
 	log.Info("Step 1: Validating manifest integrity...")
 	if err := internalsgx.ValidateManifestIntegrity(); err != nil {
-		log.Warn("Manifest integrity validation failed (development mode?)", "error", err)
-		// In development without Gramine, continue
+		if isGramine {
+			log.Crit("Manifest validation FAILED in Gramine environment", "error", err)
+		} else {
+			log.Warn("Manifest validation skipped (test mode, not in Gramine)", "error", err)
+		}
 	} else {
 		log.Info("✓ Manifest signature verified")
 	}
@@ -164,18 +179,55 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	log.Info("Loading Module 07: Gramine Integration")
 	
 	// Step 4: Create attestor and verifier
-	// MUST use Gramine-based implementation - no mocks allowed
 	log.Info("Step 4: Initializing SGX attestation...")
-	attestor, err := NewGramineAttestor()
-	if err != nil {
-		log.Crit("Failed to create Gramine attestor - SGX attestation is REQUIRED", 
-			"error", err, 
-			"hint", "Ensure running under Gramine SGX")
-	}
 	
-	verifier, err := NewGramineVerifier()
-	if err != nil {
-		log.Crit("Failed to create Gramine verifier", "error", err)
+	var attestor Attestor
+	var verifier Verifier
+	var err error
+	
+	if isGramine {
+		// In Gramine: use real SGX attestation
+		log.Info("Using Gramine SGX attestation (production mode)")
+		attestor, err = NewGramineAttestor()
+		if err != nil {
+			// Gramine环境必须有正确的环境变量
+			log.Crit("Failed to create Gramine attestor", "error", err)
+		}
+		
+		verifier, err = NewGramineVerifier()
+		if err != nil {
+			log.Crit("Failed to create Gramine verifier", "error", err)
+		}
+	} else {
+		// Not in Gramine: use file-based test attestation
+		log.Warn("⚠️  Using file-based test attestation (NOT for production)")
+		
+		testDataDir := os.Getenv("SGX_TEST_DATA_DIR")
+		if testDataDir == "" {
+			testDataDir = "./testdata/sgx"
+		}
+		
+		// Create test data directory if it doesn't exist
+		if err := CreateTestDataDirectory(testDataDir); err != nil {
+			// 无法创建测试数据目录 → 可以退出（用户可以提供可写目录）
+			log.Crit("Failed to create test data directory", 
+				"path", testDataDir, 
+				"error", err,
+				"hint", "Set SGX_TEST_DATA_DIR to writable directory or ensure ./testdata/sgx is writable")
+		}
+		
+		attestor, err = NewTestAttestor(testDataDir)
+		if err != nil {
+			// 测试数据不存在 → 可以退出（用户可以提供测试数据文件）
+			log.Crit("Failed to create test attestor - test data not found", 
+				"error", err,
+				"hint", fmt.Sprintf("Provide test data in %s (mrenclave.txt, mrsigner.txt)", testDataDir))
+		}
+		
+		verifier, err = NewTestVerifier(testDataDir)
+		if err != nil {
+			log.Crit("Failed to create test verifier", "error", err)
+		}
 	}
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
