@@ -170,8 +170,10 @@ type BlockCandidate struct {
 // BlockQuality 区块质量详情
 type BlockQuality struct {
     TxCount          uint64  // 交易数量
+    BlockSize        uint64  // 区块大小（字节）
     GasUsed          uint64  // Gas 使用量
     NewTxCount       uint64  // 新交易数（相对于第一名）
+    UniqueSenders    uint64  // 不同发送者数量
     RewardMultiplier float64 // 质量奖励倍数
 }
 
@@ -328,26 +330,38 @@ import (
 
 // BlockQualityConfig 区块质量评分配置
 type BlockQualityConfig struct {
-    // 交易数量权重
-    TxCountWeight uint64
+    // 交易数量权重 (默认 40%)
+    TxCountWeight uint8
     
-    // Gas 利用率权重
-    GasUtilizationWeight uint64
+    // 区块大小权重 (默认 30%)
+    BlockSizeWeight uint8
     
-    // 交易多样性权重
-    TxDiversityWeight uint64
+    // Gas 利用率权重 (默认 20%)
+    GasUtilizationWeight uint8
+    
+    // 交易多样性权重 (默认 10%)
+    TxDiversityWeight uint8
+    
+    // 最小交易数阈值（低于此值收益大幅降低）
+    MinTxThreshold uint64
+    
+    // 目标区块大小（字节）
+    TargetBlockSize uint64
     
     // 目标 Gas 利用率
-    TargetGasUtilization uint64
+    TargetGasUtilization float64
 }
 
 // DefaultBlockQualityConfig 默认配置
 func DefaultBlockQualityConfig() *BlockQualityConfig {
     return &BlockQualityConfig{
-        TxCountWeight:        30,
-        GasUtilizationWeight: 50,
-        TxDiversityWeight:    20,
-        TargetGasUtilization: 80, // 80%
+        TxCountWeight:        40,
+        BlockSizeWeight:      30,
+        GasUtilizationWeight: 20,
+        TxDiversityWeight:    10,
+        MinTxThreshold:       5,           // 至少 5 笔交易
+        TargetBlockSize:      1024 * 1024, // 1MB
+        TargetGasUtilization: 0.8,         // 80% Gas 利用率
     }
 }
 
@@ -365,24 +379,29 @@ func NewBlockQualityScorer(config *BlockQualityConfig) *BlockQualityScorer {
 // 
 // 区块质量评分考虑多个维度：
 // 1. 交易数量：更多交易意味着更高的网络效用
-// 2. Gas 利用率：接近目标利用率（80%）得分最高
-// 3. 交易多样性：不同类型的交易提高得分
+// 2. 区块大小：接近目标大小的区块得分更高
+// 3. Gas 利用率：接近目标利用率（80%）得分最高
+// 4. 交易多样性：不同类型的交易提高得分
 //
 // 返回值范围：0-100
 func (s *BlockQualityScorer) ScoreBlock(block *types.Block, gasLimit uint64) uint64 {
     // 1. 交易数量得分
     txCountScore := s.scoreTxCount(len(block.Transactions()))
     
-    // 2. Gas 利用率得分
+    // 2. 区块大小得分
+    blockSizeScore := s.scoreBlockSize(block.Size())
+    
+    // 3. Gas 利用率得分
     gasUtilScore := s.scoreGasUtilization(block.GasUsed(), gasLimit)
     
-    // 3. 交易多样性得分
+    // 4. 交易多样性得分
     diversityScore := s.scoreTxDiversity(block.Transactions())
     
-    // 综合得分
-    totalScore := (txCountScore*s.config.TxCountWeight +
-                  gasUtilScore*s.config.GasUtilizationWeight +
-                  diversityScore*s.config.TxDiversityWeight) / 100
+    // 综合得分（权重总和为 100）
+    totalScore := (txCountScore*uint64(s.config.TxCountWeight) +
+                  blockSizeScore*uint64(s.config.BlockSizeWeight) +
+                  gasUtilScore*uint64(s.config.GasUtilizationWeight) +
+                  diversityScore*uint64(s.config.TxDiversityWeight)) / 100
     
     return totalScore
 }
@@ -392,6 +411,14 @@ func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality 
     gasLimit := block.GasLimit()
     qualityScore := s.ScoreBlock(block, gasLimit)
     
+    // 统计不同发送者
+    txs := block.Transactions()
+    senders := make(map[common.Address]bool)
+    for _, tx := range txs {
+        from, _ := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+        senders[from] = true
+    }
+    
     // 质量倍数：质量分数映射到奖励倍数
     // 质量分数 100 -> 倍数 2.0
     // 质量分数 50  -> 倍数 1.0
@@ -399,8 +426,10 @@ func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality 
     multiplier := 0.5 + (float64(qualityScore) / 100.0 * 1.5)
     
     return &BlockQuality{
-        TxCount:          uint64(len(block.Transactions())),
+        TxCount:          uint64(len(txs)),
+        BlockSize:        block.Size(),
         GasUsed:          block.GasUsed(),
+        UniqueSenders:    uint64(len(senders)),
         RewardMultiplier: multiplier,
     }
 }
@@ -439,7 +468,7 @@ func (s *BlockQualityScorer) scoreGasUtilization(gasUsed, gasLimit uint64) uint6
     }
     
     utilization := gasUsed * 100 / gasLimit
-    target := s.config.TargetGasUtilization
+    target := uint64(s.config.TargetGasUtilization * 100)
     
     // 计算偏离度
     var deviation uint64
@@ -456,6 +485,58 @@ func (s *BlockQualityScorer) scoreGasUtilization(gasUsed, gasLimit uint64) uint6
         return 100 - deviation*2
     }
     return 100 - 40 - (deviation-20)*3
+}
+
+// scoreBlockSize 区块大小得分
+//
+// 评分策略（以目标区块大小为最优）：
+// - 区块大小 = 目标（1MB）：满分 100
+// - 偏离目标：按偏离程度扣分
+// - 过小说明交易不足，过大可能影响传播
+func (s *BlockQualityScorer) scoreBlockSize(blockSize uint64) uint64 {
+    if blockSize == 0 {
+        return 0
+    }
+    
+    target := s.config.TargetBlockSize
+    
+    // 计算比例（百分比）
+    var ratio uint64
+    if blockSize >= target {
+        ratio = blockSize * 100 / target // 大于目标
+    } else {
+        ratio = blockSize * 100 / target // 小于目标
+    }
+    
+    // 最优范围：目标的 70%-130%
+    if ratio >= 70 && ratio <= 130 {
+        // 在最优范围内，得满分或接近满分
+        if ratio >= 90 && ratio <= 110 {
+            return 100 // 完美区间
+        }
+        // 稍微偏离，轻微扣分
+        var deviation uint64
+        if ratio < 90 {
+            deviation = 90 - ratio
+        } else {
+            deviation = ratio - 110
+        }
+        return 100 - deviation/2
+    }
+    
+    // 偏离较大
+    if ratio < 70 {
+        // 过小，按比例扣分
+        return ratio * 100 / 70
+    }
+    
+    // 过大，扣分更多
+    deviation := ratio - 130
+    score := uint64(100)
+    if deviation > score {
+        return 0
+    }
+    return score - deviation
 }
 
 // scoreTxDiversity 交易多样性得分
