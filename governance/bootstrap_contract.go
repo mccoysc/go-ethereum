@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/internal/sgx"
 )
 
 // BootstrapContract manages the bootstrap phase and founder registration

@@ -17,7 +17,6 @@
 package governance
 
 import (
-	"crypto/sha256"
 	"encoding/binary"
 	"sync"
 
@@ -221,12 +220,14 @@ func (vm *InMemoryVotingManager) ExecuteProposal(proposalID common.Hash) error {
 		return ErrProposalNotFound
 	}
 
-	if proposal.Status != ProposalStatusPassed {
-		return ErrProposalNotPassed
-	}
-
+	// Check if already executed first
 	if proposal.Status == ProposalStatusExecuted {
 		return ErrProposalAlreadyExecuted
+	}
+
+	// Check if passed
+	if proposal.Status != ProposalStatusPassed {
+		return ErrProposalNotPassed
 	}
 
 	// Mark as executed
