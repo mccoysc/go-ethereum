@@ -2,25 +2,44 @@
 
 此目录包含用于快速开发测试 X Chain 节点的 Gramine 配置和脚本。
 
+## 重要：编译环境一致性
+
+**所有编译必须在 Gramine 官方镜像环境中进行**，以确保依赖库版本一致，避免运行时问题。
+
 ## 快速开始
 
-### 1. 编译 geth
-
-```bash
-cd ..
-make geth
-```
-
-### 2. 生成 Gramine manifest
+### 1. 在 Gramine 环境中编译 geth
 
 ```bash
 cd gramine
+./build-in-gramine.sh
+```
+
+这会在 `gramineproject/gramine:latest` 容器中编译 geth，确保与运行环境完全一致。
+
+### 2. 本地集成测试（推荐）
+
+在 Gramine 镜像容器中直接运行 geth（不使用 gramine-sgx 包装）：
+
+```bash
+./run-local.sh
+```
+
+**优点**：
+- ✅ 在真实运行环境中测试
+- ✅ 确保依赖库兼容
+- ✅ 功能验证，SGX 使用 mock
+- ✅ 快速迭代开发
+
+### 3. 生成 Gramine manifest
+
+```bash
 ./rebuild-manifest.sh dev
 ```
 
-### 3. 运行节点
+### 4. 运行节点
 
-#### 模拟模式（推荐用于开发测试）
+#### 模拟模式（gramine-direct）
 
 使用 `gramine-direct` 在模拟器中运行，**无需 SGX 硬件**：
 
@@ -28,17 +47,7 @@ cd gramine
 ./run-dev.sh direct
 ```
 
-**优点**：
-- ✅ 无需 SGX 硬件
-- ✅ 快速启动和测试
-- ✅ 适合功能开发和调试
-
-**限制**：
-- ❌ 无真实 SGX 保护
-- ❌ 无远程证明
-- ❌ 加密分区仍然工作，但安全性降低
-
-#### SGX 模式（用于完整测试）
+#### SGX 模式（gramine-sgx）
 
 使用 `gramine-sgx` 在真实 SGX enclave 中运行：
 
@@ -46,10 +55,40 @@ cd gramine
 ./run-dev.sh sgx
 ```
 
-**要求**：
-- ✅ CPU 支持 SGX
-- ✅ BIOS 中启用 SGX
-- ✅ 安装了 SGX 驱动
+## 完整测试工作流
+
+### 测试层级（按顺序）
+
+1. **本地集成测试**（在 Gramine 容器中直接运行）
+   ```bash
+   ./build-in-gramine.sh    # 在 Gramine 环境编译
+   ./run-local.sh           # 在 Gramine 容器测试
+   ```
+   - 验证功能正确性
+   - 确保依赖兼容性
+   - SGX 功能使用 mock
+
+2. **gramine-direct 测试**（Gramine 模拟器）
+   ```bash
+   ./rebuild-manifest.sh dev
+   ./run-dev.sh direct
+   ```
+   - 验证 Gramine 集成
+   - 无需 SGX 硬件
+
+3. **gramine-sgx 测试**（真实 SGX）
+   ```bash
+   ./rebuild-manifest.sh dev
+   ./run-dev.sh sgx
+   ```
+   - 完整 SGX 功能测试
+   - 需要 SGX 硬件
+
+4. **Docker 集成测试**
+   ```bash
+   ./build-docker.sh
+   docker run ghcr.io/mccoysc/xchain-node:dev direct
+   ```
 
 ## 开发工作流
 
@@ -57,49 +96,43 @@ cd gramine
 
 1. **修改代码**
    ```bash
-   # 编辑 go-ethereum 源代码
    vim ../consensus/sgx/consensus.go
    ```
 
-2. **重新编译 geth**
+2. **在 Gramine 环境重新编译**
    ```bash
-   cd ..
-   make geth
-   cd gramine
+   ./build-in-gramine.sh
    ```
 
-3. **快速重新生成 manifest**（只需几秒钟）
+3. **本地集成测试**
+   ```bash
+   ./run-local.sh
+   ```
+
+4. **通过后，测试 Gramine 集成**
    ```bash
    ./rebuild-manifest.sh dev
-   ```
-
-4. **测试运行**
-   ```bash
-   # 使用模拟模式快速测试
    ./run-dev.sh direct
-   
-   # 或使用 SGX 模式完整测试
-   ./run-dev.sh sgx
    ```
 
-### 为什么这种方式更快？
+### 为什么必须在 Gramine 环境编译？
 
-**传统方式**（慢）：
+❌ **错误做法**（本地编译）:
 ```bash
-# 每次都要重建整个 Docker 镜像（5-10分钟）
-docker build -t xchain-node:latest .
-docker run xchain-node:latest
+make geth  # 在本地环境编译
+./run-dev.sh sgx  # 可能因依赖不兼容而失败
 ```
 
-**新方式**（快）：
+✅ **正确做法**（Gramine 环境编译）:
 ```bash
-# 只重新编译 geth（30秒）+ 重新生成 manifest（5秒）
-make geth
-./rebuild-manifest.sh dev
-./run-dev.sh direct
+./build-in-gramine.sh  # 在 Gramine 容器中编译
+./run-dev.sh sgx       # 依赖完全兼容
 ```
 
-**时间节省**：从 5-10 分钟降低到 30-40 秒！
+**原因**：
+- Gramine 镜像使用特定版本的 glibc 和系统库
+- 本地编译的二进制可能链接不同版本的库
+- 会导致运行时错误或未定义行为
 
 ## 文件说明
 

@@ -1,0 +1,111 @@
+# Dockerfile.xchain
+# X Chain 节点 Docker 镜像
+# 使用 Gramine 官方镜像进行编译和运行，确保环境一致性
+
+# ============ 构建阶段 ============
+FROM gramineproject/gramine:latest AS builder
+
+LABEL org.opencontainers.image.source=https://github.com/mccoysc/go-ethereum
+LABEL org.opencontainers.image.description="X Chain Node with Gramine SGX"
+LABEL org.opencontainers.image.licenses=LGPL-3.0
+
+# 安装 Go 和构建工具（在 Gramine 镜像中）
+RUN apt-get update && apt-get install -y \
+    wget \
+    git \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装 Go 1.21
+RUN wget https://go.dev/dl/go1.21.6.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.21.6.linux-amd64.tar.gz && \
+    rm go1.21.6.linux-amd64.tar.gz
+
+ENV PATH=/usr/local/go/bin:$PATH
+ENV GOPATH=/go
+ENV GO111MODULE=on
+
+# 复制源代码
+WORKDIR /go-ethereum
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# 编译 geth（在 Gramine 环境中）
+RUN make geth
+
+# ============ 运行阶段 ============
+FROM gramineproject/gramine:latest
+
+# 从构建阶段复制编译好的 geth
+COPY --from=builder /go-ethereum/build/bin/geth /app/geth
+RUN chmod +x /app/geth
+
+WORKDIR /app
+
+# 安装运行时依赖
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    jq \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制 Gramine 配置
+COPY gramine/geth.manifest.template /app/geth.manifest.template
+COPY gramine/start-xchain.sh /app/start-xchain.sh
+RUN chmod +x /app/start-xchain.sh
+
+# 复制创世配置
+COPY gramine/genesis-local.json /app/genesis.json
+
+# 设置构建参数
+ARG GOVERNANCE_CONTRACT=0x0000000000000000000000000000000000001001
+ARG SECURITY_CONFIG_CONTRACT=0x0000000000000000000000000000000000001002
+ARG BUILD_MODE=prod
+ARG VERSION=dev
+
+ENV XCHAIN_VERSION=${VERSION}
+ENV XCHAIN_GOVERNANCE_CONTRACT=${GOVERNANCE_CONTRACT}
+ENV XCHAIN_SECURITY_CONFIG_CONTRACT=${SECURITY_CONFIG_CONTRACT}
+
+# 生成 manifest
+RUN gramine-manifest \
+    -Dlog_level=error \
+    -Darch_libdir=/lib/x86_64-linux-gnu \
+    -Dgovernance_contract=${GOVERNANCE_CONTRACT} \
+    -Dsecurity_config_contract=${SECURITY_CONFIG_CONTRACT} \
+    -Ddebug=false \
+    -Dseal_key=_sgx_mrenclave \
+    -Dattestation_type=dcap \
+    geth.manifest.template geth.manifest
+
+# 生成或复制签名密钥
+RUN openssl genrsa -3 -out /app/enclave-key.pem 3072
+
+# 签名 manifest
+RUN gramine-sgx-sign \
+    --manifest geth.manifest \
+    --output geth.manifest.sgx \
+    --key enclave-key.pem
+
+# 提取 MRENCLAVE
+RUN gramine-sgx-sigstruct-view geth.manifest.sgx | grep "mr_enclave" | awk '{print $2}' > /app/MRENCLAVE.txt && \
+    echo "MRENCLAVE: $(cat /app/MRENCLAVE.txt)"
+
+# 创建数据目录
+RUN mkdir -p /data/encrypted /data/secrets /data/wallet /app/logs
+
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8545 -X POST -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' || exit 1
+
+# 暴露端口
+EXPOSE 8545 8546 30303
+
+# 设置入口点
+ENTRYPOINT ["/app/start-xchain.sh"]
+
+# 默认命令
+CMD ["sgx"]

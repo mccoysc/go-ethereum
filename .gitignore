@@ -66,3 +66,8 @@ gramine/enclave-key.pem
 gramine/enclave-key.pem.backup.*
 gramine/MRENCLAVE.txt
 gramine/MRSIGNER.txt
+
+# 测试数据
+test-data/
+MRENCLAVE.txt
+.dockerfile-build-temp
