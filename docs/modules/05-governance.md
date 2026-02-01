@@ -30,8 +30,8 @@ X Chain 的安全参数从链上合约读取，但这存在一个"鸡和蛋"的�
 治理合约和安全配置合约在创世区块中预部署，合约地址是确定性的（基于部署者地址和 nonce），可以预先计算并写入 Manifest。
 
 **合约职责划分**：
-- **安全配置合约（SecurityConfigContract）**：存储所有安全配置（白名单、准入策略、分叉配置、迁移策略等），被其他模块读取
-- **治理合约（GovernanceContract）**：负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约
+- **安全配置合约（SecurityConfigContract）**：存储安全相关配置（MRENCLAVE 白名单、节点准入策略、升级配置、密钥迁移策略等），被其他模块读取
+- **治理合约（GovernanceContract）**：负责投票、管理验证者、存储治理配置参数（质押金额、投票参数、验证者配置等），把安全配置变更结果写入 SecurityConfigContract
 
 ```go
 // genesis/bootstrap.go
@@ -602,31 +602,69 @@ import (
 )
 
 // WhitelistConfig 白名单配置
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
 type WhitelistConfig struct {
-    // 核心验证者投票阈值（百分比）
+    // 核心验证者投票阈值（百分比，默认 67 表示 2/3）
     CoreValidatorThreshold uint64
     
-    // 社区验证者投票阈值（百分比）
+    // 社区验证者投票阈值（百分比，默认 51 表示简单多数）
     CommunityValidatorThreshold uint64
     
-    // 投票期限（区块数）
+    // 投票期限（区块数，默认 40320 ≈ 7天）
     VotingPeriod uint64
     
-    // 执行延迟（区块数）
+    // 执行延迟（区块数，默认 5760 ≈ 1天）
     ExecutionDelay uint64
     
-    // 最小投票参与率（百分比）
+    // 最小投票参与率（百分比，默认 50%）
     MinParticipation uint64
 }
 
 // DefaultWhitelistConfig 默认配置
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
 func DefaultWhitelistConfig() *WhitelistConfig {
     return &WhitelistConfig{
-        CoreValidatorThreshold:      67, // 2/3 核心验证者
-        CommunityValidatorThreshold: 51, // 简单多数社区验证者
-        VotingPeriod:                40320, // 约 7 天
+        CoreValidatorThreshold:      67,    // 2/3 核心验证者
+        CommunityValidatorThreshold: 51,    // 简单多数社区验证者
+        VotingPeriod:                40320, // 约 7 天（按 15 秒/块计算）
         ExecutionDelay:              5760,  // 约 1 天
         MinParticipation:            50,    // 50% 参与率
+    }
+}
+
+// CoreValidatorConfig 核心验证者配置
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
+type CoreValidatorConfig struct {
+    MinMembers      int     // 最小成员数（默认 5）
+    MaxMembers      int     // 最大成员数（默认 7）
+    QuorumThreshold float64 // 投票通过阈值（默认 0.667 表示 2/3）
+}
+
+// DefaultCoreValidatorConfig 默认核心验证者配置
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
+func DefaultCoreValidatorConfig() *CoreValidatorConfig {
+    return &CoreValidatorConfig{
+        MinMembers:      5,
+        MaxMembers:      7,
+        QuorumThreshold: 0.667, // 2/3
+    }
+}
+
+// CommunityValidatorConfig 社区验证者配置
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
+type CommunityValidatorConfig struct {
+    MinUptime     time.Duration // 最小运行时间（默认 30 天）
+    MinStake      *big.Int      // 最小质押量（初始值 10000 X，可通过治理投票修改）
+    VetoThreshold float64       // 否决阈值（默认 0.334 表示 1/3）
+}
+
+// DefaultCommunityValidatorConfig 默认社区验证者配置
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
+func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
+    return &CommunityValidatorConfig{
+        MinUptime:     30 * 24 * time.Hour,                              // 30 天
+        MinStake:      new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)), // 初始值：10000 X（可通过治理投票修改）
+        VetoThreshold: 0.334,                                            // 1/3
     }
 }
 
@@ -681,7 +719,18 @@ const (
     ProposalAddValidator    ProposalType = 0x04 // 添加验证者
     ProposalRemoveValidator ProposalType = 0x05 // 移除验证者
     ProposalParameterChange ProposalType = 0x06 // 参数修改
+    ProposalNormalUpgrade   ProposalType = 0x07 // 普通升级
+    ProposalEmergencyUpgrade ProposalType = 0x08 // 紧急升级（安全漏洞修复）
 )
+
+// 升级提案的投票规则：
+// 1. 普通升级（ProposalNormalUpgrade）：
+//    - 核心验证者：需要 2/3 通过
+//    - 社区验证者：可以行使否决权，1/3 否决即可拒绝提案
+// 2. 紧急升级（ProposalEmergencyUpgrade）：
+//    - 核心验证者：需要 100% 通过
+//    - 社区验证者：否决权阈值提高到 1/2（更高的否决门槛）
+//    - 必须附带安全漏洞详情和修复说明
 
 // Proposal 提案
 type Proposal struct {
@@ -768,8 +817,9 @@ const (
 )
 
 // StakingConfig 质押配置
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
 type StakingConfig struct {
-    // 最小质押金额
+    // 最小质押金额（存储在 GovernanceContract 中，可通过治理投票修改）
     MinStakeAmount *big.Int
     
     // 解除质押锁定期（区块数）
@@ -783,12 +833,13 @@ type StakingConfig struct {
 }
 
 // DefaultStakingConfig 默认配置
+// 注意：这些是初始值，实际值从 GovernanceContract 中读取，可以通过治理投票修改
 func DefaultStakingConfig() *StakingConfig {
     return &StakingConfig{
-        MinStakeAmount:    big.NewInt(1000e18), // 1000 X
-        UnstakeLockPeriod: 40320,               // 约 7 天
-        AnnualRewardRate:  5,                   // 5%
-        SlashingRate:      10,                  // 10%
+        MinStakeAmount:    new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)), // 初始值：10000 X（可通过治理合约修改）
+        UnstakeLockPeriod: 40320,                // 约 7 天
+        AnnualRewardRate:  5,                    // 5%
+        SlashingRate:      10,                   // 10%
     }
 }
 ```
@@ -1909,6 +1960,60 @@ func TestAdmissionControl(t *testing.T) {
 
 ## 配置参数
 
+**重要说明**：配置参数按职责分类存储：
+- **治理配置**（质押金额、投票参数、验证者配置等）：存储在 **GovernanceContract** 中，通过投票机制修改
+- **安全配置**（MRENCLAVE 白名单、升级配置、密钥迁移策略等）：存储在 **SecurityConfigContract** 中，由 GovernanceContract 投票后写入
+
+代码中的默认值仅用于创世区块初始化，实际运行时必须从对应合约中读取最新配置。
+
+### 参数修改流程
+
+```
+治理参数修改流程（存储在 GovernanceContract）
+============================================
+
+1. 提案阶段
+   ├── 核心验证者提交参数修改提案
+   ├── 提案类型：ProposalParameterChange
+   └── 包含：参数名、新值、修改理由
+
+2. 投票阶段
+   ├── 核心验证者投票（需要 2/3 通过）
+   └── 社区验证者可以行使否决权（1/3 否决）
+
+3. 执行阶段
+   ├── 投票通过后进入执行延迟期
+   ├── GovernanceContract 内部更新参数
+   └── 参数更新生效
+
+4. 生效机制
+   ├── 所有节点从 GovernanceContract 读取最新配置
+   └── 下一个区块开始使用新参数
+
+安全参数修改流程（存储在 SecurityConfigContract）
+==============================================
+
+1. 提案阶段
+   ├── 核心验证者提交安全配置变更提案
+   ├── 提案类型：ProposalAddMREnclave / ProposalRemoveMREnclave
+   └── 包含：新 MRENCLAVE、版本说明、审计报告
+
+2. 投票阶段
+   ├── 核心验证者投票（需要 2/3 通过）
+   └── 社区验证者可以行使否决权（1/3 否决）
+
+3. 执行阶段
+   ├── 投票通过后进入执行延迟期
+   ├── GovernanceContract 调用 SecurityConfigContract.UpdateWhitelist()
+   └── 安全配置更新生效
+
+4. 生效机制
+   ├── 所有节点从 SecurityConfigContract 读取最新安全配置
+   └── 新节点可以开始同步和验证
+```
+
+### 配置示例
+
 ```toml
 # config.toml
 [governance]
@@ -1928,8 +2033,8 @@ execution_delay = 5760
 min_participation = 50
 
 [governance.staking]
-# 最小质押金额
-min_stake_amount = "1000000000000000000000"  # 1000 X
+# 最小质押金额（初始值，可通过治理投票修改）
+min_stake_amount = "10000000000000000000000"  # 初始值：10000 X
 
 # 解除质押锁定期（区块数）
 unstake_lock_period = 40320

@@ -4072,8 +4072,8 @@ X Chain 的安全参数采用**链上合约存储 + Manifest 固定合约地址*
 
 | 合约 | 职责 |
 |------|------|
-| **安全配置合约（SecurityConfigContract）** | 存储所有安全配置，被其他模块读取 |
-| **治理合约（GovernanceContract）** | 负责投票、管理投票人（有效性、合法性）、把投票结果写入安全配置合约 |
+| **安全配置合约（SecurityConfigContract）** | 存储安全相关配置（MRENCLAVE 白名单、升级配置、密钥迁移策略等），被其他模块读取 |
+| **治理合约（GovernanceContract）** | 负责投票、管理验证者、存储治理配置（质押金额、投票参数、验证者配置等），把安全配置变更结果写入 SecurityConfigContract |
 
 **Manifest 固定参数：**
 
@@ -4108,10 +4108,19 @@ X Chain 的安全参数从链上合约读取，但首次运行时还没有链。
 1. 治理合约和安全配置合约在创世区块中预部署
 2. 合约地址是确定性的（基于部署者地址和 nonce），可以预先计算
 3. Manifest 中写死这个预计算的合约地址
-4. 引导阶段：前 N 个（如 5 个）运行正确 MRENCLAVE 的节点自动成为创始管理者
+4. 引导阶段：前 N 个（如 5 个）不同 SGX Instance ID 的节点自动成为创始管理者
 5. 正常阶段：新管理者必须通过现有管理者投票添加
 
-创始管理者由 **MRENCLAVE** 决定，而不是由具体地址决定。任何运行正确 MRENCLAVE 的节点可以在引导阶段自动成为创始管理者，达到上限后引导阶段自动结束。
+**创始管理者选择机制：**
+
+除了升级硬分叉期间，所有节点的 MRENCLAVE 都是完全相同的。区分不同节点的是 **SGX Instance ID**（硬件唯一标识），而不是 MRENCLAVE。
+
+创始管理者的选择基于：
+- **MRENCLAVE 验证**：确保运行的是正确的代码（所有节点相同）
+- **Instance ID 去重**：每个物理 CPU 只能注册一个创始管理者
+- **先到先得**：前 N 个注册的不同硬件实例成为创始管理者
+
+这确保了创始管理者来自不同的物理硬件，防止单个实体通过多个软件实例控制网络引导过程。
 
 #### 6.1.0.0.3 分层验证者治理机制
 
@@ -4198,7 +4207,7 @@ type CoreValidatorConfig struct {
 // CommunityValidatorConfig 社区验证者配置
 type CommunityValidatorConfig struct {
     MinUptime        time.Duration // 最小运行时间 (默认 30 天)
-    MinStake         *big.Int      // 最小质押量 (默认 10,000 X)
+    MinStake         *big.Int      // 最小质押量 (初始值 10000 X，从 GovernanceContract 读取)
     VetoThreshold    float64       // 否决阈值 (默认 1/3)
 }
 
@@ -4212,10 +4221,11 @@ func DefaultCoreValidatorConfig() *CoreValidatorConfig {
 }
 
 // DefaultCommunityValidatorConfig 默认社区验证者配置
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
 func DefaultCommunityValidatorConfig() *CommunityValidatorConfig {
     return &CommunityValidatorConfig{
         MinUptime:     30 * 24 * time.Hour, // 30 天
-        MinStake:      big.NewInt(10000),   // 10,000 X
+        MinStake:      new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)),   // 初始值：10000 X（从 GovernanceContract 读取）
         VetoThreshold: 0.334,               // 1/3
     }
 }
@@ -4282,9 +4292,24 @@ import (
 type ProposalType uint8
 
 const (
-    NormalUpgrade    ProposalType = 0x01  // 普通升级
-    EmergencyUpgrade ProposalType = 0x02  // 紧急升级
+    ProposalAddMREnclave      ProposalType = 0x01 // 添加 MRENCLAVE
+    ProposalRemoveMREnclave   ProposalType = 0x02 // 移除 MRENCLAVE
+    ProposalUpgradePermission ProposalType = 0x03 // 升级权限
+    ProposalAddValidator      ProposalType = 0x04 // 添加验证者
+    ProposalRemoveValidator   ProposalType = 0x05 // 移除验证者
+    ProposalParameterChange   ProposalType = 0x06 // 参数修改
+    ProposalNormalUpgrade     ProposalType = 0x07 // 普通升级
+    ProposalEmergencyUpgrade  ProposalType = 0x08 // 紧急升级（安全漏洞修复）
 )
+
+// 升级提案的投票规则：
+// 1. 普通升级（ProposalNormalUpgrade）：
+//    - 核心验证者：需要 2/3 通过
+//    - 社区验证者：可以行使否决权，1/3 否决即可拒绝提案
+// 2. 紧急升级（ProposalEmergencyUpgrade）：
+//    - 核心验证者：需要 100% 通过
+//    - 社区验证者：否决权阈值提高到 1/2（更高的否决门槛）
+//    - 必须附带安全漏洞详情和修复说明
 
 // ProposalStatus 提案状态
 type ProposalStatus uint8
@@ -4322,6 +4347,7 @@ type WhitelistProposal struct {
 type WhitelistGovernance struct {
     mu sync.RWMutex
     
+    config          *GovernanceConfig             // 治理配置（从 GovernanceContract 读取）
     coreConfig      *CoreValidatorConfig
     communityConfig *CommunityValidatorConfig
     
@@ -4332,12 +4358,45 @@ type WhitelistGovernance struct {
     whitelist map[string]bool  // MRENCLAVE 白名单
 }
 
+// GovernanceConfig 治理配置
+// 所有配置参数存储在 GovernanceContract 中，可以通过投票机制修改
+type GovernanceConfig struct {
+    // 核心验证者投票阈值（百分比，默认 67 表示 2/3）
+    CoreValidatorThreshold uint64
+    
+    // 社区验证者投票阈值（百分比，默认 51 表示简单多数）
+    CommunityValidatorThreshold uint64
+    
+    // 投票期限（区块数，默认 40320 ≈ 7天）
+    VotingPeriod uint64
+    
+    // 执行延迟（区块数，默认 5760 ≈ 1天）
+    ExecutionDelay uint64
+    
+    // 最小投票参与率（百分比，默认 50%）
+    MinParticipation uint64
+}
+
+// DefaultGovernanceConfig 默认治理配置
+// 注意：这些是创世区块的初始值，实际值从 GovernanceContract 中读取
+func DefaultGovernanceConfig() *GovernanceConfig {
+    return &GovernanceConfig{
+        CoreValidatorThreshold:      67,    // 2/3 核心验证者
+        CommunityValidatorThreshold: 51,    // 简单多数社区验证者
+        VotingPeriod:                40320, // 约 7 天（按 15 秒/块计算）
+        ExecutionDelay:              5760,  // 约 1 天
+        MinParticipation:            50,    // 50% 参与率
+    }
+}
+
 // NewWhitelistGovernance 创建白名单治理实例
 func NewWhitelistGovernance(
+    config *GovernanceConfig,
     coreConfig *CoreValidatorConfig,
     communityConfig *CommunityValidatorConfig,
 ) *WhitelistGovernance {
     return &WhitelistGovernance{
+        config:              config,
         coreConfig:          coreConfig,
         communityConfig:     communityConfig,
         coreValidators:      make(map[common.Address]*Validator),
@@ -4378,7 +4437,7 @@ func (g *WhitelistGovernance) SubmitProposal(
     }
     
     // 设置投票截止时间
-    if proposalType == EmergencyUpgrade {
+    if proposalType == ProposalEmergencyUpgrade {
         proposal.CoreVoteDeadline = time.Now().Add(6 * time.Hour)
         proposal.PublicReviewEnd = time.Now().Add(24 * time.Hour)
     } else {
@@ -4445,7 +4504,7 @@ func (g *WhitelistGovernance) checkCoreVotingResult(proposal *WhitelistProposal)
     }
     
     // 紧急升级需要 100% 同意
-    if proposal.Type == EmergencyUpgrade {
+    if proposal.Type == ProposalEmergencyUpgrade {
         if approveCount == totalCoreValidators {
             proposal.Status = ProposalPublicReview
         } else if rejectCount > 0 {
@@ -4510,7 +4569,7 @@ func (g *WhitelistGovernance) checkCommunityVetoResult(proposal *WhitelistPropos
     
     // 确定否决阈值
     var threshold float64
-    if proposal.Type == EmergencyUpgrade {
+    if proposal.Type == ProposalEmergencyUpgrade {
         threshold = 0.5  // 紧急升级需要 1/2 否决
     } else {
         threshold = g.communityConfig.VetoThreshold  // 普通升级需要 1/3 否决
@@ -5733,7 +5792,7 @@ type RemovalConfig struct {
     MinVotingParticipation float64       // 最低投票参与率 (默认 50%)
     
     // 质押量要求
-    MinStakeAmount         *big.Int      // 最低质押量 (默认 10,000 X)
+    MinStakeAmount         *big.Int      // 最低质押量 (初始值 10000 X，从 GovernanceContract 读取)
     StakeGracePeriod       time.Duration // 质押不足宽限期 (默认 7 天)
     
     // 恶意行为惩罚
@@ -5744,11 +5803,12 @@ type RemovalConfig struct {
 }
 
 // DefaultRemovalConfig 默认剔除配置
+// 注意：MinStakeAmount 的实际值从 GovernanceContract 中读取
 func DefaultRemovalConfig() *RemovalConfig {
     return &RemovalConfig{
         MaxInactiveDays:        30,
         MinVotingParticipation: 0.5,
-        MinStakeAmount:         big.NewInt(10000 * 1e18),  // 10,000 X
+        MinStakeAmount:         new(big.Int).Mul(big.NewInt(10000), big.NewInt(1e18)),  // 初始值：10000 X（从 GovernanceContract 读取）
         StakeGracePeriod:       7 * 24 * time.Hour,
         MaliciousSlashRate:     50,
         SGXRevalidationPeriod:  30 * 24 * time.Hour,
