@@ -2,137 +2,77 @@
 
 此目录包含用于快速开发测试 X Chain 节点的 Gramine 配置和脚本。
 
+**完整文档请查看**: [docs/modules/07-gramine-integration.md](../docs/modules/07-gramine-integration.md)
+
 ## 重要：编译环境一致性
 
 **所有编译必须在 Gramine 官方镜像环境中进行**，以确保依赖库版本一致，避免运行时问题。
 
 ## 快速开始
 
-### 1. 在 Gramine 环境中编译 geth
-
 ```bash
-cd gramine
+# 1. 在 Gramine 环境中编译
 ./build-in-gramine.sh
-```
 
-这会在 `gramineproject/gramine:latest` 容器中编译 geth，确保与运行环境完全一致。
-
-### 2. 本地集成测试（推荐）
-
-在 Gramine 镜像容器中直接运行 geth（不使用 gramine-sgx 包装）：
-
-```bash
+# 2. 本地集成测试（在 Gramine 容器中直接运行）
 ./run-local.sh
-```
 
-**优点**：
-- ✅ 在真实运行环境中测试
-- ✅ 确保依赖库兼容
-- ✅ 功能验证，SGX 使用 mock
-- ✅ 快速迭代开发
-
-### 3. 生成 Gramine manifest
-
-```bash
+# 3. Gramine 模拟器测试
 ./rebuild-manifest.sh dev
-```
-
-### 4. 运行节点
-
-#### 模拟模式（gramine-direct）
-
-使用 `gramine-direct` 在模拟器中运行，**无需 SGX 硬件**：
-
-```bash
 ./run-dev.sh direct
 ```
 
-#### SGX 模式（gramine-sgx）
+## 文件说明
 
-使用 `gramine-sgx` 在真实 SGX enclave 中运行：
+| 文件 | 用途 |
+|------|------|
+| `build-in-gramine.sh` | ⭐ 在 Gramine 容器中编译 geth |
+| `run-local.sh` | ⭐ 本地集成测试（Gramine 容器直接运行） |
+| `rebuild-manifest.sh` | 快速重新生成和签名 manifest |
+| `run-dev.sh` | Gramine 运行（direct/sgx 模式） |
+| `build-docker.sh` | 构建 Docker 镜像 |
+| `push-docker.sh` | 推送到 GitHub Container Registry |
+| `setup-signing-key.sh` | 管理签名密钥 |
+| `start-xchain.sh` | Docker 容器启动脚本 |
+| `geth.manifest.template` | Gramine manifest 模板 |
+| `genesis-local.json` | 本地测试创世配置 |
 
+## 快速参考
+
+### 开发迭代
 ```bash
-./run-dev.sh sgx
+vim ../consensus/sgx/consensus.go  # 修改代码
+./build-in-gramine.sh              # 重新编译（2分钟）
+./run-local.sh                      # 测试（秒级）
 ```
 
-## 完整测试工作流
-
-### 测试层级（按顺序）
-
-1. **本地集成测试**（在 Gramine 容器中直接运行）
-   ```bash
-   ./build-in-gramine.sh    # 在 Gramine 环境编译
-   ./run-local.sh           # 在 Gramine 容器测试
-   ```
-   - 验证功能正确性
-   - 确保依赖兼容性
-   - SGX 功能使用 mock
-
-2. **gramine-direct 测试**（Gramine 模拟器）
-   ```bash
-   ./rebuild-manifest.sh dev
-   ./run-dev.sh direct
-   ```
-   - 验证 Gramine 集成
-   - 无需 SGX 硬件
-
-3. **gramine-sgx 测试**（真实 SGX）
-   ```bash
-   ./rebuild-manifest.sh dev
-   ./run-dev.sh sgx
-   ```
-   - 完整 SGX 功能测试
-   - 需要 SGX 硬件
-
-4. **Docker 集成测试**
-   ```bash
-   ./build-docker.sh
-   docker run ghcr.io/mccoysc/xchain-node:dev direct
-   ```
-
-## 开发工作流
-
-### 典型的开发迭代流程
-
-1. **修改代码**
-   ```bash
-   vim ../consensus/sgx/consensus.go
-   ```
-
-2. **在 Gramine 环境重新编译**
-   ```bash
-   ./build-in-gramine.sh
-   ```
-
-3. **本地集成测试**
-   ```bash
-   ./run-local.sh
-   ```
-
-4. **通过后，测试 Gramine 集成**
-   ```bash
-   ./rebuild-manifest.sh dev
-   ./run-dev.sh direct
-   ```
-
-### 为什么必须在 Gramine 环境编译？
-
-❌ **错误做法**（本地编译）:
+### 测试层级
 ```bash
-make geth  # 在本地环境编译
-./run-dev.sh sgx  # 可能因依赖不兼容而失败
+./run-local.sh           # 层级1: 本地集成（最快）
+./run-dev.sh direct      # 层级2: Gramine 模拟器
+./run-dev.sh sgx         # 层级3: SGX 真实环境
 ```
 
-✅ **正确做法**（Gramine 环境编译）:
+### 发布流程
 ```bash
-./build-in-gramine.sh  # 在 Gramine 容器中编译
-./run-dev.sh sgx       # 依赖完全兼容
+./rebuild-manifest.sh prod   # 生产模式
+./build-docker.sh v1.0.0     # 构建镜像
+./push-docker.sh v1.0.0      # 推送到 ghcr.io
 ```
 
-**原因**：
-- Gramine 镜像使用特定版本的 glibc 和系统库
-- 本地编译的二进制可能链接不同版本的库
-- 会导致运行时错误或未定义行为
+## 详细文档
+
+完整的开发工作流、最佳实践、故障排除等详细信息，请查看：
+
+📚 **[07-gramine-integration.md](../docs/modules/07-gramine-integration.md)**
+
+包含：
+- 完整的开发工作流说明
+- 四层测试体系详解
+- 开发模式 vs 生产模式
+- Manifest 配置详解
+- Docker 构建和发布
+- 故障排除和最佳实践
 
 ## 文件说明
 

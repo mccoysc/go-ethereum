@@ -1777,16 +1777,55 @@ sudo ./run-dev.sh sgx
 
 ```
 gramine/
-├── README.md                    # 开发工作流详细文档
+├── README.md                    # 简要说明和快速参考
 ├── geth.manifest.template       # Manifest 模板
-├── rebuild-manifest.sh          # 快速重新生成脚本
-├── run-dev.sh                   # 运行脚本（direct/sgx）
-├── setup-signing-key.sh         # 签名密钥管理
-├── enclave-key.pem             # 签名密钥（自动生成，不提交）
-├── geth.manifest               # 生成的 manifest（不提交）
-├── geth.manifest.sgx           # 签名的 manifest（不提交）
-└── MRENCLAVE.txt               # MRENCLAVE 值（不提交）
+├── genesis-local.json           # 本地测试创世配置
+│
+├── build-in-gramine.sh         # ⭐ 在 Gramine 环境编译
+├── run-local.sh                # ⭐ 本地集成测试
+├── rebuild-manifest.sh         # 快速重新生成脚本
+├── run-dev.sh                  # 运行脚本（direct/sgx）
+├── setup-signing-key.sh        # 签名密钥管理
+│
+├── build-docker.sh             # Docker 构建
+├── push-docker.sh              # Docker 推送
+└── start-xchain.sh             # 容器启动脚本
 ```
 
-查看 `gramine/README.md` 获取更多详细信息和示例。
+### 快速命令参考
+
+#### 编译
+```bash
+cd gramine
+./build-in-gramine.sh          # 在 Gramine 容器中编译（推荐）
+```
+
+#### 测试（按顺序推荐）
+```bash
+./run-local.sh                 # 层级1: 本地集成测试（最快）
+./run-dev.sh direct            # 层级2: Gramine 模拟器
+./run-dev.sh sgx               # 层级3: SGX 真实环境
+```
+
+#### Manifest 管理
+```bash
+./rebuild-manifest.sh dev      # 开发模式（MRSIGNER sealing）
+./rebuild-manifest.sh prod     # 生产模式（MRENCLAVE sealing）
+```
+
+#### Docker 发布
+```bash
+./build-docker.sh v1.0.0       # 构建镜像
+./push-docker.sh v1.0.0        # 推送到 ghcr.io
+```
+
+#### 快速迭代示例
+```bash
+# 修改代码后
+vim ../consensus/sgx/consensus.go
+./build-in-gramine.sh          # 重新编译（2分钟）
+./run-local.sh                 # 测试（秒级启动）
+```
+
+查看 `gramine/README.md` 获取更多示例。
 ```
