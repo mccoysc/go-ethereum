@@ -59,8 +59,18 @@ fs.mounts = [
   { path = "/tmp", uri = "file:/tmp" },
   
   # 加密分区挂载（核心安全功能）
-  # 开发模式使用 MRSIGNER，避免每次重编译后数据迁移
-  # 生产模式使用 MRENCLAVE，提供最高安全性
+  # key_name 使用 Gramine 内置的密钥，无需应用自定义
+  # 
+  # Gramine 官方支持的内置 key_name：
+  # - "_sgx_mrenclave"      : 基于 MRENCLAVE 派生（代码度量值）
+  # - "_sgx_mrsigner"       : 基于 MRSIGNER 派生（签名者公钥哈希）  
+  # - "_sgx_mrenclave_legacy": 旧版 MRENCLAVE 格式（兼容性）
+  # - "_sgx_mrsigner_legacy" : 旧版 MRSIGNER 格式（兼容性）
+  #
+  # 开发模式推荐: _sgx_mrsigner（重编译后数据无需迁移，方便迭代）
+  # 生产模式推荐: _sgx_mrenclave（最高安全性，只有相同代码能访问）
+  #
+  # Gramine 自动调用 SGX sgx_get_seal_key() 派生密钥，应用层完全透明
   { type = "encrypted", path = "/data/encrypted", uri = "file:/data/encrypted", key_name = "{{ seal_key }}" },
   { type = "encrypted", path = "/data/secrets", uri = "file:/data/secrets", key_name = "{{ seal_key }}" },
   { type = "encrypted", path = "/app/wallet", uri = "file:/data/wallet", key_name = "{{ seal_key }}" },

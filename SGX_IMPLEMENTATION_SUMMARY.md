@@ -109,8 +109,9 @@ func (ks *EncryptedKeyStore) loadPrivateKey(keyID common.Hash, keyType KeyType) 
 
 # 加密分区配置
 fs.mounts = [
-  # 开发模式：MRSIGNER（避免重编译后数据迁移）
-  # 生产模式：MRENCLAVE（最高安全性）
+  # 使用 Gramine 内置的 seal key，无需应用自定义
+  # 开发模式：_sgx_mrsigner（重编译后数据无需迁移）
+  # 生产模式：_sgx_mrenclave（最高安全性，只有相同代码能访问）
   { type = "encrypted", 
     path = "/data/encrypted", 
     uri = "file:/data/encrypted", 
@@ -123,11 +124,31 @@ fs.mounts = [
 ]
 ```
 
+**Gramine 官方内置 key_name**（无需应用自定义）：
+
+| key_name | 派生基础 | 用途 | 数据迁移 |
+|----------|---------|------|---------|
+| `_sgx_mrenclave` | MRENCLAVE | 生产环境（推荐） | 代码改变需要迁移 |
+| `_sgx_mrsigner` | MRSIGNER | 开发环境（推荐） | 代码改变无需迁移 |
+| `_sgx_mrenclave_legacy` | MRENCLAVE | 兼容旧版本 | 代码改变需要迁移 |
+| `_sgx_mrsigner_legacy` | MRSIGNER | 兼容旧版本 | 代码改变无需迁移 |
+
+**选择建议**：
+- **开发/测试**：使用 `_sgx_mrsigner`（重新编译后数据仍可访问）
+- **生产部署**：使用 `_sgx_mrenclave`（最高安全性，只有完全相同的代码能访问）
+
+**Gramine 内置 key_name**：
+- `_sgx_mrenclave`：使用 MRENCLAVE 派生（生产推荐）
+- `_sgx_mrsigner`：使用 MRSIGNER 派生（开发方便）
+- `_sgx_mrenclave_legacy`：旧版 MRENCLAVE 格式（向后兼容）
+- `_sgx_mrsigner_legacy`：旧版 MRSIGNER 格式（向后兼容）
+- **无需应用生成或管理任何密钥**
+
 **Gramine 自动完成**：
-1. 使用 MRENCLAVE/MRSIGNER 通过 SGX `sgx_get_seal_key()` 派生密钥
-2. 写入时：AES-GCM 加密后存储
-3. 读取时：AES-GCM 解密后返回
-4. 应用层完全透明
+1. 调用 SGX `sgx_get_seal_key()` 使用 MRENCLAVE/MRSIGNER 派生密钥
+2. 写入时：AES-GCM 加密后存储到宿主机文件系统
+3. 读取时：AES-GCM 解密后返回给应用
+4. 应用层完全透明，使用标准文件 I/O
 
 ## 区块 Seal 流程
 
@@ -201,19 +222,52 @@ SGX Quote 结构：
 
 ## 部署和测试
 
-### 开发模式（MRSIGNER）
+### 开发模式（使用 _sgx_mrsigner）
+
 ```bash
-# 优点：代码改动后不需要迁移数据
-# 缺点：安全性稍低（同一签名者的不同版本都能访问）
-gramine-manifest -Dsealing_key=_sgx_mrsigner geth.manifest.template geth.manifest
+# 优点：代码改动后不需要迁移数据（同一签名者的版本都能访问）
+# 缺点：安全性稍低
+# 使用 Gramine 内置 key_name，无需应用自定义
+cd gramine
+./rebuild-manifest.sh dev
+
+# 脚本自动设置：key_name = "_sgx_mrsigner"
+# Gramine 自动调用 SGX sgx_get_seal_key() 派生密钥
 ```
 
-### 生产模式（MRENCLAVE）
+### 生产模式（使用 _sgx_mrenclave）
+
 ```bash
-# 优点：最高安全性（只有相同代码能访问）
+# 优点：最高安全性（只有相同代码能访问数据）
 # 缺点：代码改动后需要数据迁移
-gramine-manifest -Dsealing_key=_sgx_mrenclave geth.manifest.template geth.manifest
+# 使用 Gramine 内置 key_name，无需应用自定义
+cd gramine
+./rebuild-manifest.sh prod
+
+# 脚本自动设置：key_name = "_sgx_mrenclave"
+# Gramine 自动调用 SGX sgx_get_seal_key() 派生密钥
 ```
+
+### Gramine 官方内置 key_name
+
+根据 Gramine 官方文档，支持以下内置 key_name：
+
+| key_name | 派生基础 | 安全性 | 代码更新 |
+|----------|---------|--------|---------|
+| `_sgx_mrenclave` | MRENCLAVE（代码度量） | 最高 | 需要迁移数据 |
+| `_sgx_mrsigner` | MRSIGNER（签名者） | 中等 | 无需迁移 |
+| `_sgx_mrenclave_legacy` | MRENCLAVE（旧版） | 最高 | 需要迁移数据 |
+| `_sgx_mrsigner_legacy` | MRSIGNER（旧版） | 中等 | 无需迁移 |
+
+**推荐选择**：
+- 开发/测试：`_sgx_mrsigner`（方便迭代）
+- 生产环境：`_sgx_mrenclave`（最高安全性）
+
+**应用层无需**：
+- ❌ 生成 seal key
+- ❌ 管理 seal key
+- ❌ 调用 SGX seal/unseal API
+- ✅ 只需在 manifest 中指定 key_name
 
 ### 运行测试
 ```bash
