@@ -1777,7 +1777,6 @@ sudo ./run-dev.sh sgx
 
 ```
 gramine/
-├── README.md                    # 简要说明和快速参考
 ├── geth.manifest.template       # Manifest 模板
 ├── genesis-local.json           # 本地测试创世配置
 │
@@ -1791,6 +1790,8 @@ gramine/
 ├── push-docker.sh              # Docker 推送
 └── start-xchain.sh             # 容器启动脚本
 ```
+
+所有脚本的详细使用说明都在本文档中。
 
 ### 快速命令参考
 
