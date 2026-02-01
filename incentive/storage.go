@@ -244,7 +244,9 @@ func (sm *StorageManager) uint64ToBytes(val uint64) []byte {
 // float64ToBytes 将 float64 转换为字节数组
 func (sm *StorageManager) float64ToBytes(val float64) []byte {
 	buf := new(bytes.Buffer)
-	binary.Write(buf, binary.BigEndian, val)
+	if err := binary.Write(buf, binary.BigEndian, val); err != nil {
+		return make([]byte, 8)
+	}
 	return buf.Bytes()
 }
 
@@ -252,7 +254,9 @@ func (sm *StorageManager) float64ToBytes(val float64) []byte {
 func (sm *StorageManager) bytesToFloat64(b []byte) float64 {
 	var val float64
 	buf := bytes.NewReader(b)
-	binary.Read(buf, binary.BigEndian, &val)
+	if err := binary.Read(buf, binary.BigEndian, &val); err != nil {
+		return 0
+	}
 	return val
 }
 

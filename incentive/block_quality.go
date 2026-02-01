@@ -71,7 +71,10 @@ func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality 
 	txs := block.Transactions()
 	senders := make(map[common.Address]bool)
 	for _, tx := range txs {
-		from, _ := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+		from, err := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+		if err != nil {
+			continue
+		}
 		senders[from] = true
 	}
 
