@@ -12,7 +12,7 @@
 2. 秘密数据存储（私钥、敏感配置）
 3. 节点间秘密数据同步
 4. 数据一致性保证
-5. 参数校验机制
+5. 参数处理机制
 6. 侧信道攻击防护
 
 ## 依赖关系
@@ -84,7 +84,7 @@
    - 新版本节点在该区块高度前必须完成迁移
    - 触发条件：`currentBlock < UpgradeCompleteBlock AND !migrationComplete`
 
-## 参数分类与校验
+## 参数分类与处理
 
 ### 参数分类原则
 
@@ -187,7 +187,7 @@ func (s *OnChainConfigSync) SyncSecurityParams() (*SecurityConfig, error) {
     --xchain.metrics.enabled=true
 ```
 
-### 参数校验机制
+### 参数处理机制
 
 参数处理流程：
 
@@ -390,12 +390,12 @@ func (pv *ParamValidator) GetRuntimeParam(name string) string {
 }
 ```
 
-### 启动时参数校验
+### 启动时参数处理
 
 启动流程：
 1. 启动后首先读取 Manifest 中指定的安全参数
 2. 读取用户传入的命令行参数
-3. 合并参数：Manifest 参数覆盖用户参数，不一致则提示并退出
+3. 合并参数：Manifest 参数直接作为最终值，命令行同名参数被忽略
 
 ```go
 // cmd/geth/main.go (修改)
@@ -1082,9 +1082,9 @@ func (sm *SecretSyncManager) VerifyAndApplySync(response *SyncResponse) error {
 }
 ```
 
-### 3. 参数校验实现
+### 3. 参数处理实现
 
-启动时验证参数一致性：
+启动时处理参数，Manifest 为准：
 
 ```go
 // storage/parameter_validator_impl.go
@@ -1367,7 +1367,7 @@ func (sb *SecureBuffer) Destroy() {
 ```
 storage/
 ├── config.go                 # 存储配置
-├── param_validator.go        # 参数校验
+├── param_validator.go        # 参数处理
 ├── encrypted_partition.go    # 加密分区管理
 ├── sync_protocol.go          # 同步协议
 ├── sync_manager.go           # 同步管理器
