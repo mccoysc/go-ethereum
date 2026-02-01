@@ -39,6 +39,21 @@ func NewEncryptedPartition(basePath string) (*EncryptedPartitionImpl, error) {
 		return nil, fmt.Errorf("encrypted partition path does not exist: %s", basePath)
 	}
 
+	// CRITICAL SECURITY CHECK: Verify Gramine manifest signature
+	if err := VerifyGramineManifestSignature(); err != nil {
+		return nil, fmt.Errorf("gramine manifest signature verification failed: %w", err)
+	}
+
+	// CRITICAL SECURITY CHECK: Verify path is configured for encryption
+	validator, err := NewGramineEncryptionValidator()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create encryption validator: %w", err)
+	}
+
+	if err := validator.ValidatePath(basePath); err != nil {
+		return nil, fmt.Errorf("path validation failed: %w", err)
+	}
+
 	return &EncryptedPartitionImpl{
 		basePath: basePath,
 	}, nil

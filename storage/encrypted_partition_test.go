@@ -29,6 +29,10 @@ func TestNewEncryptedPartition(t *testing.T) {
 	// Create a temporary directory
 	tmpDir := t.TempDir()
 
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
 	// Test successful creation
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -54,6 +58,10 @@ func TestNewEncryptedPartition_NonExistentPath(t *testing.T) {
 
 func TestWriteAndReadSecret(t *testing.T) {
 	tmpDir := t.TempDir()
+
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -85,6 +93,10 @@ func TestWriteAndReadSecret(t *testing.T) {
 func TestDeleteSecret(t *testing.T) {
 	tmpDir := t.TempDir()
 
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
 		t.Fatalf("Failed to create partition: %v", err)
@@ -114,6 +126,10 @@ func TestDeleteSecret(t *testing.T) {
 
 func TestListSecrets(t *testing.T) {
 	tmpDir := t.TempDir()
+
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -160,6 +176,10 @@ func TestListSecrets(t *testing.T) {
 func TestSecureDelete(t *testing.T) {
 	tmpDir := t.TempDir()
 
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
 		t.Fatalf("Failed to create partition: %v", err)
@@ -189,6 +209,10 @@ func TestSecureDelete(t *testing.T) {
 
 func TestConcurrentWriteAndRead(t *testing.T) {
 	tmpDir := t.TempDir()
+
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {

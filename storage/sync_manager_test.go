@@ -21,6 +21,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -79,6 +80,9 @@ func (m *MockVerifier) RemoveAllowedMREnclave(mrenclave []byte) {
 
 func TestNewSyncManager(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -100,6 +104,9 @@ func TestNewSyncManager(t *testing.T) {
 
 func TestAddPeer(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -137,6 +144,9 @@ func TestAddPeer(t *testing.T) {
 
 func TestAddPeer_InvalidQuote(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -163,6 +173,9 @@ func TestAddPeer_InvalidQuote(t *testing.T) {
 
 func TestRemovePeer(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -202,6 +215,9 @@ func TestRemovePeer(t *testing.T) {
 
 func TestRequestSync(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -236,6 +252,9 @@ func TestRequestSync(t *testing.T) {
 
 func TestRequestSync_PeerNotInWhitelist(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -264,6 +283,9 @@ func TestRequestSync_PeerNotInWhitelist(t *testing.T) {
 
 func TestHandleSyncRequest(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -313,6 +335,9 @@ func TestHandleSyncRequest(t *testing.T) {
 
 func TestStartHeartbeat(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
@@ -349,6 +374,9 @@ func TestStartHeartbeat(t *testing.T) {
 
 func TestVerifyAndApplySync(t *testing.T) {
 	tmpDir := t.TempDir()
+	// Set up encrypted path environment
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
 
 	partition, err := NewEncryptedPartition(tmpDir)
 	if err != nil {
