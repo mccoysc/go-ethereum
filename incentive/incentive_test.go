@@ -478,8 +478,13 @@ func TestReputationManager(t *testing.T) {
 		mgr.RecordOffline(addr3, offlineDuration)
 		
 		newScore := mgr.GetReputationScore(addr3)
-		expectedPenalty := int64(3 * uint64(config.OfflinePenaltyPerHour))
-		expectedScore := initialScore - expectedPenalty
+		expectedPenalty := uint64(3 * config.OfflinePenaltyPerHour)
+		var expectedScore uint64
+		if initialScore >= expectedPenalty {
+			expectedScore = initialScore - expectedPenalty
+		} else {
+			expectedScore = config.MinReputation
+		}
 		
 		if newScore != expectedScore {
 			t.Errorf("After 3h offline: score = %d, want %d", newScore, expectedScore)
@@ -494,7 +499,7 @@ func TestReputationManager(t *testing.T) {
 		mgr.RecordOnline(addr4, onlineDuration)
 		
 		newScore := mgr.GetReputationScore(addr4)
-		expectedRecovery := int64(2 * uint64(config.RecoveryPerHour))
+		expectedRecovery := uint64(2 * config.OnlineRecoveryPerHour)
 		expectedScore := initialScore + expectedRecovery
 		
 		if newScore != expectedScore {
@@ -616,7 +621,7 @@ func TestPenaltyManager(t *testing.T) {
 	t.Run("Double sign penalty", func(t *testing.T) {
 		penalty := mgr.CalculateDoubleSignPenalty(nodeBalance)
 		
-		expected := new(big.Int).Mul(nodeBalance, big.NewInt(int64(config.DoubleSignPenaltyPercent)))
+		expected := new(big.Int).Mul(nodeBalance, big.NewInt(int64(config.DoubleSignPenaltyRate)))
 		expected.Div(expected, big.NewInt(100))
 		
 		if penalty.Cmp(expected) != 0 {
@@ -652,7 +657,7 @@ func TestPenaltyManager(t *testing.T) {
 		penalty := mgr.CalculateMaliciousPenalty(nodeBalance)
 		
 		// Should be 100% of balance
-		expected := new(big.Int).Mul(nodeBalance, big.NewInt(int64(config.MaliciousPenaltyPercent)))
+		expected := new(big.Int).Mul(nodeBalance, big.NewInt(int64(config.MaliciousPenaltyRate)))
 		expected.Div(expected, big.NewInt(100))
 		
 		if penalty.Cmp(expected) != 0 {

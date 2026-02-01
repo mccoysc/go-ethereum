@@ -57,9 +57,9 @@ func (c *SGXRandom) Run(input []byte) ([]byte, error) {
 	// Extract length (big-endian uint256)
 	length := binary.BigEndian.Uint64(input[24:32])
 	
-	// 2. Validate length (limit to max 1MB)
-	if length > 1024*1024 {
-		return nil, errors.New("requested length too large (max 1MB)")
+	// 2. Validate length (limit to max 1KB)
+	if length > 1024 {
+		return nil, errors.New("requested length too large (max 1KB)")
 	}
 	if length == 0 {
 		return nil, errors.New("requested length must be greater than 0")

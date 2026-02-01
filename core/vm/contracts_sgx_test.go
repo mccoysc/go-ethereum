@@ -592,7 +592,7 @@ func TestSGXRandom(t *testing.T) {
 		},
 		{
 			name:      "Exceed max bytes",
-			length:    1024*1024 + 1,
+			length:    1024 + 1,
 			wantError: true,
 		},
 		{

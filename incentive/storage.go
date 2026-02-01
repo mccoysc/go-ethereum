@@ -263,7 +263,7 @@ func (sm *StorageManager) bytesToFloat64(b []byte) float64 {
 // Storage data structures for RLP encoding
 
 type reputationData struct {
-	Score           int64
+	Score           uint64
 	TotalBlocks     uint64
 	SuccessBlocks   uint64
 	FailedBlocks    uint64

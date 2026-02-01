@@ -33,7 +33,7 @@ type ReputationManager struct {
 // NodeReputation represents the node's reputation.
 type NodeReputation struct {
 	Address         common.Address
-	Score           int64
+	Score           uint64
 	TotalBlocks     uint64
 	SuccessBlocks   uint64
 	FailedBlocks    uint64
@@ -81,9 +81,11 @@ func (rm *ReputationManager) RecordBlockSuccess(addr common.Address) {
 	rm.applyDecay(rep)
 
 	// Increase reputation
-	rep.Score += rm.config.SuccessBonus
-	if rep.Score > rm.config.MaxReputation {
+	newScore := rep.Score + rm.config.SuccessBonus
+	if newScore > rm.config.MaxReputation {
 		rep.Score = rm.config.MaxReputation
+	} else {
+		rep.Score = newScore
 	}
 
 	rep.TotalBlocks++
@@ -101,9 +103,10 @@ func (rm *ReputationManager) RecordBlockFailure(addr common.Address) {
 	// Apply decay
 	rm.applyDecay(rep)
 
-	// Decrease reputation
-	rep.Score -= rm.config.FailurePenalty
-	if rep.Score < rm.config.MinReputation {
+	// Decrease reputation (protect against underflow)
+	if rep.Score >= rm.config.FailurePenalty {
+		rep.Score -= rm.config.FailurePenalty
+	} else {
 		rep.Score = rm.config.MinReputation
 	}
 
@@ -119,9 +122,10 @@ func (rm *ReputationManager) RecordMaliciousBehavior(addr common.Address) {
 
 	rep := rm.getOrCreateReputation(addr)
 
-	// Significantly decrease reputation
-	rep.Score -= rm.config.MaliciousPenalty
-	if rep.Score < rm.config.MinReputation {
+	// Significantly decrease reputation (protect against underflow)
+	if rep.Score >= rm.config.MaliciousPenalty {
+		rep.Score -= rm.config.MaliciousPenalty
+	} else {
 		rep.Score = rm.config.MinReputation
 	}
 
@@ -147,10 +151,11 @@ func (rm *ReputationManager) RecordOffline(addr common.Address, duration time.Du
 		hours = 1
 	}
 
-	// Apply offline penalty
-	penalty := int64(hours * uint64(rm.config.OfflinePenaltyPerHour))
-	rep.Score -= penalty
-	if rep.Score < rm.config.MinReputation {
+	// Apply offline penalty (protect against underflow)
+	penalty := hours * rm.config.OfflinePenaltyPerHour
+	if rep.Score >= penalty {
+		rep.Score -= penalty
+	} else {
 		rep.Score = rm.config.MinReputation
 	}
 
@@ -178,10 +183,12 @@ func (rm *ReputationManager) RecordOnline(addr common.Address, duration time.Dur
 	}
 
 	// Apply online recovery reward
-	recovery := int64(hours * uint64(rm.config.RecoveryPerHour))
-	rep.Score += recovery
-	if rep.Score > rm.config.MaxReputation {
+	recovery := hours * rm.config.OnlineRecoveryPerHour
+	newScore := rep.Score + recovery
+	if newScore > rm.config.MaxReputation {
 		rep.Score = rm.config.MaxReputation
+	} else {
+		rep.Score = newScore
 	}
 
 	rep.OnlineHours += hours
@@ -196,13 +203,13 @@ func (rm *ReputationManager) IsExcluded(addr common.Address) bool {
 }
 
 // GetReputationScore retrieves the reputation score.
-func (rm *ReputationManager) GetReputationScore(addr common.Address) int64 {
+func (rm *ReputationManager) GetReputationScore(addr common.Address) uint64 {
 	rep := rm.GetReputation(addr)
 	return rep.Score
 }
 
 // IsReputationSufficient checks if the reputation is sufficient.
-func (rm *ReputationManager) IsReputationSufficient(addr common.Address, threshold int64) bool {
+func (rm *ReputationManager) IsReputationSufficient(addr common.Address, threshold uint64) bool {
 	return rm.GetReputationScore(addr) >= threshold
 }
 
@@ -230,9 +237,10 @@ func (rm *ReputationManager) applyDecay(rep *NodeReputation) {
 
 	if periods > 0 {
 		for i := 0; i < periods; i++ {
-			decay := int64(float64(rep.Score) * rm.config.DecayRate)
-			rep.Score -= decay
-			if rep.Score < rm.config.MinReputation {
+			decay := uint64(float64(rep.Score) * rm.config.DecayRate / 100.0)
+			if rep.Score >= decay {
+				rep.Score -= decay
+			} else {
 				rep.Score = rm.config.MinReputation
 				break
 			}

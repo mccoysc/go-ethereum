@@ -68,7 +68,7 @@ func NewPenaltyManager(config *PenaltyConfig) *PenaltyManager {
 // Returns:
 //   - Penalty amount (percentage of node's balance)
 func (pm *PenaltyManager) CalculateDoubleSignPenalty(nodeBalance *big.Int) *big.Int {
-	penalty := new(big.Int).Mul(nodeBalance, big.NewInt(int64(pm.config.DoubleSignPenaltyPercent)))
+	penalty := new(big.Int).Mul(nodeBalance, big.NewInt(int64(pm.config.DoubleSignPenaltyRate)))
 	penalty.Div(penalty, big.NewInt(100))
 	return penalty
 }
@@ -107,7 +107,7 @@ func (pm *PenaltyManager) CalculateInvalidBlockPenalty() *big.Int {
 // Returns:
 //   - Penalty amount (percentage of node's balance, potentially all of it)
 func (pm *PenaltyManager) CalculateMaliciousPenalty(nodeBalance *big.Int) *big.Int {
-	penalty := new(big.Int).Mul(nodeBalance, big.NewInt(int64(pm.config.MaliciousPenaltyPercent)))
+	penalty := new(big.Int).Mul(nodeBalance, big.NewInt(int64(pm.config.MaliciousPenaltyRate)))
 	penalty.Div(penalty, big.NewInt(100))
 	return penalty
 }

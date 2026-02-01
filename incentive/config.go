@@ -106,8 +106,8 @@ type OnlineRewardConfig struct {
 	// HourlyReward is the online reward per hour
 	HourlyReward *big.Int
 	
-	// MinOnlineDuration is the minimum online duration requirement (in hours)
-	MinOnlineDuration time.Duration
+	// MinOnlineTime is the minimum online duration requirement (in hours)
+	MinOnlineTime time.Duration
 	
 	// MinUptimeRatio is the minimum uptime ratio requirement (percentage)
 	MinUptimeRatio float64
@@ -119,7 +119,7 @@ func DefaultOnlineRewardConfig() *OnlineRewardConfig {
 		HeartbeatInterval: 30 * time.Second,
 		HeartbeatTimeout:  2 * time.Minute,
 		HourlyReward:      big.NewInt(1e16), // 0.01 X
-		MinOnlineDuration: 1 * time.Hour,
+		MinOnlineTime: 1 * time.Hour,
 		MinUptimeRatio:    0.9, // 90%
 	}
 }
@@ -127,28 +127,28 @@ func DefaultOnlineRewardConfig() *OnlineRewardConfig {
 // ReputationConfig represents the reputation configuration.
 type ReputationConfig struct {
 	// InitialReputation is the initial reputation value
-	InitialReputation int64
+	InitialReputation uint64
 	
 	// MaxReputation is the maximum reputation value
-	MaxReputation int64
+	MaxReputation uint64
 	
 	// MinReputation is the minimum reputation value
-	MinReputation int64
+	MinReputation uint64
 	
 	// SuccessBonus is the reward for successful block production
-	SuccessBonus int64
+	SuccessBonus uint64
 	
 	// FailurePenalty is the penalty for block production failure
-	FailurePenalty int64
+	FailurePenalty uint64
 	
 	// MaliciousPenalty is the penalty for malicious behavior
-	MaliciousPenalty int64
+	MaliciousPenalty uint64
 	
 	// OfflinePenaltyPerHour is the offline penalty (per hour)
-	OfflinePenaltyPerHour int64
+	OfflinePenaltyPerHour uint64
 	
-	// RecoveryPerHour is the recovery rate (per hour)
-	RecoveryPerHour int64
+	// OnlineRecoveryPerHour is the recovery rate (per hour)
+	OnlineRecoveryPerHour uint64
 	
 	// MaxPenaltyCount is the maximum penalty count (after which the node is excluded)
 	MaxPenaltyCount int
@@ -167,16 +167,16 @@ func DefaultReputationConfig() *ReputationConfig {
 		FailurePenalty:        20,
 		MaliciousPenalty:      500,
 		OfflinePenaltyPerHour: 10,
-		RecoveryPerHour:       50,
+		OnlineRecoveryPerHour: 50,
 		MaxPenaltyCount:       10,
-		DecayRate:             0.01, // 1% per day
+		DecayRate:             1, // 1% per day
 	}
 }
 
 // PenaltyConfig represents the penalty configuration.
 type PenaltyConfig struct {
-	// DoubleSignPenaltyPercent is the double signing penalty (percentage of balance)
-	DoubleSignPenaltyPercent int
+	// DoubleSignPenaltyRate is the double signing penalty (percentage of balance)
+	DoubleSignPenaltyRate int
 	
 	// OfflinePenaltyPerHour is the offline penalty (per hour)
 	OfflinePenaltyPerHour *big.Int
@@ -184,17 +184,17 @@ type PenaltyConfig struct {
 	// InvalidBlockPenalty is the invalid block penalty (fixed amount)
 	InvalidBlockPenalty *big.Int
 	
-	// MaliciousPenaltyPercent is the malicious behavior penalty (percentage of balance)
-	MaliciousPenaltyPercent int
+	// MaliciousPenaltyRate is the malicious behavior penalty (percentage of balance)
+	MaliciousPenaltyRate int
 }
 
 // DefaultPenaltyConfig returns the default penalty configuration.
 func DefaultPenaltyConfig() *PenaltyConfig {
 	return &PenaltyConfig{
-		DoubleSignPenaltyPercent: 50,                  // 50%
+		DoubleSignPenaltyRate: 50,                  // 50%
 		OfflinePenaltyPerHour:    big.NewInt(1e16),    // 0.01 X
 		InvalidBlockPenalty:      big.NewInt(1e17),    // 0.1 X
-		MaliciousPenaltyPercent:  100,                 // 100%
+		MaliciousPenaltyRate:  100,                 // 100%
 	}
 }
 

@@ -89,7 +89,7 @@ func (orm *OnlineRewardManager) CalculateReward(addr common.Address) *big.Int {
 	}
 
 	// Check minimum online duration
-	if status.TotalOnlineTime < orm.config.MinOnlineDuration {
+	if status.TotalOnlineTime < orm.config.MinOnlineTime {
 		return big.NewInt(0)
 	}
 
