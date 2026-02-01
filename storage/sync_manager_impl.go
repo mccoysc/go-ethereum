@@ -136,25 +136,19 @@ func (sm *SyncManagerImpl) HandleSyncRequest(request *SyncRequest) (*SyncRespons
 			continue
 		}
 
-		// Parse the secret type from the ID or metadata
-		// In a real implementation, the ID would encode the type or we'd store metadata
-		// For now, we include all secrets if no specific types requested
+		// Create secret entry
+		// Note: In a full implementation, the secret type would be encoded in the ID
+		// or stored as metadata alongside the encrypted data. For now, we include
+		// all secrets when types are requested (the receiving node can filter).
 		secret := SecretData{
 			ID:        []byte(id),
 			Data:      data,
 			CreatedAt: uint64(time.Now().Unix()),
 		}
 
-		// If specific types requested and we can determine the type, filter
-		// Since we don't have metadata storage yet, we'll include all secrets
-		// when types are requested (the receiving end can filter)
-		if len(requestedTypes) == 0 {
-			// No filter, include all
-			secrets = append(secrets, secret)
-		} else {
-			// Include all for now - in production, would parse type from ID/metadata
-			secrets = append(secrets, secret)
-		}
+		// If no specific types requested, include all secrets
+		// If types requested, include all (client-side filtering)
+		secrets = append(secrets, secret)
 	}
 
 	// Create response
