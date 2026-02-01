@@ -89,12 +89,21 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 // According to Gramine spec:
 // - manifestPath should be the .manifest.sgx file
 // - signaturePath should be the .manifest.sgx.sig file (auto-detected if empty)
+//
+// CRITICAL SECURITY STEPS:
+// 1. 定位签名文件 (.manifest.sgx.sig)
+// 2. 验证manifest文件的RSA签名
+// 3. 从签名文件中提取MRENCLAVE
+// 4. 验证签名中的MRENCLAVE与当前运行的enclave一致
 func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string, signaturePath string) error {
 	// In test mode, skip verification
 	if v.publicKey == nil {
+		log.Warn("Manifest signature verification skipped (test mode)")
 		return nil
 	}
 
+	log.Info("Step 1: Locating manifest signature file...")
+	
 	// Auto-detect signature path if not provided
 	// Gramine convention: <app>.manifest.sgx -> <app>.manifest.sgx.sig
 	if signaturePath == "" {
@@ -105,27 +114,95 @@ func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string,
 			signaturePath = manifestPath + ".manifest.sgx.sig"
 		}
 	}
+	
+	// Verify signature file exists
+	if _, err := os.Stat(signaturePath); err != nil {
+		return fmt.Errorf("signature file not found: %s (%w)", signaturePath, err)
+	}
+	
+	log.Info("Signature file located", "path", signaturePath)
 
+	log.Info("Step 2: Reading manifest and signature files...")
+	
 	// Read manifest file (.manifest.sgx)
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return fmt.Errorf("failed to read manifest file: %w", err)
 	}
+	
+	log.Info("Manifest file read", "size", len(manifestData))
 
 	// Read signature file (.manifest.sgx.sig)
+	// Gramine signature file contains SIGSTRUCT (1808 bytes)
 	signatureData, err := os.ReadFile(signaturePath)
 	if err != nil {
 		return fmt.Errorf("failed to read signature file %s: %w", signaturePath, err)
 	}
+	
+	log.Info("Signature file read", "size", len(signatureData))
+	
+	log.Info("Step 3: Verifying RSA signature...")
 
 	// Gramine uses SHA256 hash and RSA-3072 signature
 	hash := sha256.Sum256(manifestData)
 
-	// Verify RSA signature (PKCS#1 v1.5)
-	err = rsa.VerifyPKCS1v15(v.publicKey, crypto.SHA256, hash[:], signatureData)
-	if err != nil {
-		return fmt.Errorf("manifest signature verification failed: %w", err)
+	// The signature file contains SIGSTRUCT which includes the RSA signature
+	// Extract signature from SIGSTRUCT (at specific offset for Gramine)
+	// SIGSTRUCT format: https://software.intel.com/content/www/us/en/develop/download/intel-sgx-sdk-developer-reference-for-linux-os.html
+	if len(signatureData) < 384 {
+		return fmt.Errorf("signature file too small: %d bytes", len(signatureData))
 	}
+	
+	// Extract RSA signature from SIGSTRUCT (offset 128, length 384 for RSA-3072)
+	rsaSignature := signatureData[128:512]
+
+	// Verify RSA signature (PKCS#1 v1.5)
+	err = rsa.VerifyPKCS1v15(v.publicKey, crypto.SHA256, hash[:], rsaSignature)
+	if err != nil {
+		return fmt.Errorf("manifest RSA signature verification failed: %w", err)
+	}
+	
+	log.Info("✓ RSA signature verified successfully")
+	
+	log.Info("Step 4: Extracting and verifying MRENCLAVE...")
+	
+	// Extract MRENCLAVE from SIGSTRUCT (offset 960, length 32)
+	if len(signatureData) < 992 {
+		return fmt.Errorf("signature file too small to contain MRENCLAVE")
+	}
+	
+	manifestMREnclave := signatureData[960:992]
+	
+	log.Info("MRENCLAVE from manifest signature", "mrenclave", fmt.Sprintf("%x", manifestMREnclave))
+	
+	// Get current enclave's MRENCLAVE
+	currentMREnclave := os.Getenv("RA_TLS_MRENCLAVE")
+	if currentMREnclave == "" {
+		// Try alternative environment variable
+		currentMREnclave = os.Getenv("GRAMINE_MRENCLAVE")
+	}
+	
+	if currentMREnclave == "" {
+		log.Warn("Cannot verify MRENCLAVE: not available in environment")
+		// In production this should be an error, but for now we log a warning
+		return fmt.Errorf("MRENCLAVE not available - cannot verify manifest integrity")
+	}
+	
+	log.Info("Current enclave MRENCLAVE", "mrenclave", currentMREnclave)
+	
+	// Compare MRENCLAVEs (convert hex string to bytes)
+	currentMREnclaveBytes := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		fmt.Sscanf(currentMREnclave[i*2:i*2+2], "%02x", &currentMREnclaveBytes[i])
+	}
+	
+	if !bytes.Equal(manifestMREnclave, currentMREnclaveBytes) {
+		return fmt.Errorf("MRENCLAVE MISMATCH! Manifest MRENCLAVE does not match current enclave. " +
+			"This indicates the manifest file has been tampered with or replaced. " +
+			"Manifest: %x, Current: %x", manifestMREnclave, currentMREnclaveBytes)
+	}
+	
+	log.Info("✓ MRENCLAVE verified - manifest matches current enclave")
 
 	return nil
 }
