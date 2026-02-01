@@ -248,3 +248,129 @@ func TestValidatorManager_UpdateMREnclave(t *testing.T) {
 		t.Error("MRENCLAVE not updated")
 	}
 }
+
+func TestValidatorManager_GetAllValidators(t *testing.T) {
+	config := DefaultStakingConfig()
+	vm := NewInMemoryValidatorManager(config)
+
+	// Add multiple validators
+	for i := 0; i < 5; i++ {
+		addr := common.BigToAddress(common.Big1)
+		addr[19] = byte(i)
+		validator := &ValidatorInfo{
+			Address:     addr,
+			Type:        VoterTypeCore,
+			Status:      ValidatorStatusActive,
+			StakeAmount: big.NewInt(1000),
+			VotingPower: 1,
+		}
+		vm.AddValidator(validator)
+	}
+
+	allValidators := vm.GetAllValidators()
+	if len(allValidators) != 5 {
+		t.Errorf("expected 5 validators, got %d", len(allValidators))
+	}
+}
+
+func TestValidatorManager_GetVoterType(t *testing.T) {
+	config := DefaultStakingConfig()
+	vm := NewInMemoryValidatorManager(config)
+
+	coreAddr := common.HexToAddress("0x1")
+	communityAddr := common.HexToAddress("0x2")
+	unknownAddr := common.HexToAddress("0x999")
+
+	// Add core validator
+	coreValidator := &ValidatorInfo{
+		Address:     coreAddr,
+		Type:        VoterTypeCore,
+		Status:      ValidatorStatusActive,
+		StakeAmount: big.NewInt(1000),
+		VotingPower: 1,
+	}
+	vm.AddValidator(coreValidator)
+
+	// Add community validator
+	communityValidator := &ValidatorInfo{
+		Address:     communityAddr,
+		Type:        VoterTypeCommunity,
+		Status:      ValidatorStatusActive,
+		StakeAmount: big.NewInt(1000),
+		VotingPower: 1,
+	}
+	vm.AddValidator(communityValidator)
+
+	// Test core validator type
+	if vm.GetVoterType(coreAddr) != VoterTypeCore {
+		t.Error("should return VoterTypeCore")
+	}
+
+	// Test community validator type
+	if vm.GetVoterType(communityAddr) != VoterTypeCommunity {
+		t.Error("should return VoterTypeCommunity")
+	}
+
+	// Test unknown address - should default to community
+	if vm.GetVoterType(unknownAddr) != VoterTypeCommunity {
+		t.Error("should default to VoterTypeCommunity for unknown address")
+	}
+}
+
+func TestValidatorManager_ClaimRewards(t *testing.T) {
+	config := DefaultStakingConfig()
+	vm := NewInMemoryValidatorManager(config)
+
+	addr := common.HexToAddress("0x1")
+	stakeAmount := new(big.Int).Mul(big.NewInt(20000), big.NewInt(1e18))
+
+	// Stake first
+	vm.Stake(addr, stakeAmount)
+
+	// Claim rewards
+	rewards, err := vm.ClaimRewards(addr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should return 0 (placeholder implementation)
+	if rewards.Cmp(big.NewInt(0)) != 0 {
+		t.Errorf("expected 0 rewards, got %v", rewards)
+	}
+}
+
+func TestValidatorManager_ClaimRewards_NotFound(t *testing.T) {
+	config := DefaultStakingConfig()
+	vm := NewInMemoryValidatorManager(config)
+
+	addr := common.HexToAddress("0x999")
+
+	// Try to claim for non-existent validator
+	_, err := vm.ClaimRewards(addr)
+	if err != ErrValidatorNotFound {
+		t.Errorf("expected error %v, got %v", ErrValidatorNotFound, err)
+	}
+}
+
+func TestValidatorManager_ClaimRewards_NotActive(t *testing.T) {
+	config := DefaultStakingConfig()
+	vm := NewInMemoryValidatorManager(config)
+
+	addr := common.HexToAddress("0x1")
+
+	// Add inactive validator
+	validator := &ValidatorInfo{
+		Address:     addr,
+		Type:        VoterTypeCore,
+		Status:      ValidatorStatusInactive,
+		StakeAmount: big.NewInt(1000),
+		VotingPower: 1,
+	}
+	vm.AddValidator(validator)
+
+	// Try to claim rewards
+	_, err := vm.ClaimRewards(addr)
+	if err != ErrValidatorNotActive {
+		t.Errorf("expected error %v, got %v", ErrValidatorNotActive, err)
+	}
+}

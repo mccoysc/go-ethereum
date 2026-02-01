@@ -287,3 +287,32 @@ func TestBootstrapContract_GetAllFounders(t *testing.T) {
 		t.Error("not all founders found in list")
 	}
 }
+
+func TestBootstrapContract_IsBootstrapPhase(t *testing.T) {
+	allowedMR := [32]byte{1, 2, 3}
+	verifier := &MockSGXVerifier{
+		mrenclaveToReturn:  allowedMR,
+		hardwareIDToReturn: "hw",
+	}
+
+	bc := NewBootstrapContract(allowedMR, 3, verifier)
+
+	// Initially in bootstrap phase
+	if !bc.IsBootstrapPhase() {
+		t.Error("should be in bootstrap phase initially")
+	}
+
+	// Register founders until max
+	for i := 0; i < 3; i++ {
+		addr := common.BigToAddress(common.Big1)
+		addr[19] = byte(i)
+		hwID := [32]byte{}
+		hwID[0] = byte(i)
+		bc.RegisterFounder(addr, allowedMR, hwID, []byte("quote"))
+	}
+
+	// Should no longer be in bootstrap phase
+	if bc.IsBootstrapPhase() {
+		t.Error("should not be in bootstrap phase after reaching max founders")
+	}
+}

@@ -19,6 +19,7 @@ package governance
 import (
 	"testing"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/security"
 )
 
@@ -341,5 +342,68 @@ func TestUpgradeModeChecker_ShouldRejectOldVersionPeer(t *testing.T) {
 	checker = NewUpgradeModeChecker(config, oldMR)
 	if checker.ShouldRejectOldVersionPeer(newMR) {
 		t.Error("old version node is not considered new, so returns false")
+	}
+}
+
+func TestUpgradeModeChecker_ValidateTransaction(t *testing.T) {
+	oldMR := [32]byte{1, 2, 3}
+	newMR := [32]byte{4, 5, 6}
+
+	// Upgrade in progress
+	config := &MockSecurityConfigReader{
+		whitelist: []MREnclaveEntry{
+			{MRENCLAVE: oldMR, Status: StatusActive, AddedAt: 100},
+			{MRENCLAVE: newMR, Status: StatusActive, AddedAt: 200},
+		},
+		upgrade: &security.UpgradeConfig{
+			UpgradeCompleteBlock: 1000,
+		},
+		syncState: &security.SecretDataSyncState{
+			SyncedBlock: 500,
+		},
+	}
+
+	// Create a dummy transaction
+	tx := &types.Transaction{}
+
+	// New version node should reject transactions during upgrade
+	checker := NewUpgradeModeChecker(config, newMR)
+	err := checker.ValidateTransaction(tx)
+	if err != ErrUpgradeReadOnlyMode {
+		t.Errorf("expected error %v, got %v", ErrUpgradeReadOnlyMode, err)
+	}
+
+	// Old version node should not reject
+	checker = NewUpgradeModeChecker(config, oldMR)
+	err = checker.ValidateTransaction(tx)
+	if err != nil {
+		t.Errorf("old version node should not reject transactions, got %v", err)
+	}
+
+	// After upgrade complete, new node should not reject
+	config.syncState.SyncedBlock = 1000
+	checker = NewUpgradeModeChecker(config, newMR)
+	err = checker.ValidateTransaction(tx)
+	if err != nil {
+		t.Errorf("should not reject after upgrade complete, got %v", err)
+	}
+}
+
+func TestUpgradeModeChecker_ValidateTransaction_NoUpgrade(t *testing.T) {
+	localMR := [32]byte{1, 2, 3}
+
+	// No upgrade - single MRENCLAVE
+	config := &MockSecurityConfigReader{
+		whitelist: []MREnclaveEntry{
+			{MRENCLAVE: localMR, Status: StatusActive},
+		},
+	}
+
+	tx := &types.Transaction{}
+
+	checker := NewUpgradeModeChecker(config, localMR)
+	err := checker.ValidateTransaction(tx)
+	if err != nil {
+		t.Errorf("should not reject when no upgrade in progress, got %v", err)
 	}
 }

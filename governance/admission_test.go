@@ -275,3 +275,123 @@ func TestAdmissionController_UnregisterValidator(t *testing.T) {
 		t.Error("reverse lookup should be removed")
 	}
 }
+
+func TestAdmissionController_RecordDisconnection(t *testing.T) {
+	whitelistCfg := DefaultWhitelistConfig()
+	voting := NewMockVotingManager()
+	whitelist := NewInMemoryWhitelistManager(whitelistCfg, voting)
+	verifier := &MockSGXVerifier{}
+	ac := NewSGXAdmissionController(whitelist, verifier)
+
+	nodeID := common.BytesToHash([]byte("node1"))
+	mrenclave := [32]byte{1, 2, 3}
+
+	// First record connection
+	ac.RecordConnection(nodeID, mrenclave)
+
+	// Verify connected
+	status, err := ac.GetAdmissionStatus(nodeID)
+	if err != nil {
+		t.Fatalf("failed to get status: %v", err)
+	}
+	if status.ConnectedAt == 0 {
+		t.Error("should be connected")
+	}
+
+	// Record disconnection
+	err = ac.RecordDisconnection(nodeID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify disconnected
+	status, err = ac.GetAdmissionStatus(nodeID)
+	if err != nil {
+		t.Fatalf("failed to get status: %v", err)
+	}
+	if status.ConnectedAt != 0 {
+		t.Error("should be disconnected (ConnectedAt should be 0)")
+	}
+}
+
+func TestAdmissionController_RecordDisconnection_NodeNotFound(t *testing.T) {
+	whitelistCfg := DefaultWhitelistConfig()
+	voting := NewMockVotingManager()
+	whitelist := NewInMemoryWhitelistManager(whitelistCfg, voting)
+	verifier := &MockSGXVerifier{}
+	ac := NewSGXAdmissionController(whitelist, verifier)
+
+	nodeID := common.BytesToHash([]byte("nonexistent"))
+
+	// Try to disconnect non-existent node
+	err := ac.RecordDisconnection(nodeID)
+	if err != ErrNodeNotFound {
+		t.Errorf("expected error %v, got %v", ErrNodeNotFound, err)
+	}
+}
+
+func TestSGXVerifierAdapter(t *testing.T) {
+	// Create adapter
+	adapter := NewSGXVerifierAdapter(true)
+	if adapter == nil {
+		t.Fatal("adapter should not be nil")
+	}
+
+	// Test with valid quote structure (432+ bytes)
+	quote := make([]byte, 500)
+	// Fill MRENCLAVE at offset 112
+	for i := 0; i < 32; i++ {
+		quote[112+i] = byte(i + 1)
+	}
+	// Fill MRSIGNER at offset 176
+	for i := 0; i < 32; i++ {
+		quote[176+i] = byte(i + 1)
+	}
+
+	err := adapter.VerifyQuote(quote)
+	// In test environment without full SGX setup, this may fail, which is expected
+	t.Logf("VerifyQuote result (may fail in test env): %v", err)
+
+	// Test ExtractMREnclave - should work even in test env
+	mrenclave, err := adapter.ExtractMREnclave(quote)
+	if err != nil {
+		t.Fatalf("ExtractMREnclave failed: %v", err)
+	}
+	// Verify MRENCLAVE was extracted (should not be all zeros)
+	allZero := true
+	for _, b := range mrenclave {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		t.Error("MRENCLAVE should not be all zeros")
+	}
+
+	// Test ExtractHardwareID - may fail without proper quote structure
+	hardwareID, err := adapter.ExtractHardwareID(quote)
+	if err != nil {
+		// This is expected to fail with minimal quote structure
+		t.Logf("ExtractHardwareID failed (expected in test env): %v", err)
+	} else if hardwareID == "" {
+		t.Error("if no error, hardware ID should not be empty")
+	}
+}
+
+func TestSGXVerifierAdapter_InvalidQuote(t *testing.T) {
+	adapter := NewSGXVerifierAdapter(true)
+
+	// Test with too short quote
+	shortQuote := make([]byte, 100)
+
+	_, err := adapter.ExtractMREnclave(shortQuote)
+	if err == nil {
+		t.Error("should fail with short quote")
+	}
+
+	_, err = adapter.ExtractHardwareID(shortQuote)
+	if err == nil {
+		t.Error("should fail with short quote")
+	}
+}
