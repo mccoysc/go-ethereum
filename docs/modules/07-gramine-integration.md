@@ -1488,4 +1488,305 @@ ARCHITECTURE.md (总体架构)
 4. **排查问题**：通过模块验证脚本定位集成问题
 
 **总结**：本模块是连接 ARCHITECTURE.md 总体设计与具体实现（01-06 模块）的桥梁，提供了将所有组件整合为完整 X Chain 节点的实践方案。
+
+## 开发工作流优化
+
+### 快速迭代开发流程
+
+在开发测试阶段，频繁重新编译 geth 并重建整个 Docker 镜像非常耗时。本节提供优化的开发工作流，支持快速迭代。
+
+#### 问题：传统 Docker 构建流程慢
+
+```bash
+# 传统方式：每次都要重建整个镜像（5-10 分钟）
+make geth
+docker build -t xchain-node:latest .
+docker run xchain-node:latest
+```
+
+**痛点**：
+- Docker 镜像构建耗时长
+- 每次代码改动都要完整构建
+- 影响开发效率
+
+#### 解决方案：本地快速 Manifest 重生成
+
+仓库提供了 `gramine/` 目录下的快速开发脚本：
+
+```bash
+# 新方式：只重新编译 + 快速重新生成 manifest（30-40 秒）
+make geth                          # 重新编译（约 30 秒）
+cd gramine
+./rebuild-manifest.sh dev          # 快速重新生成 manifest（约 5 秒）
+./run-dev.sh direct               # 在模拟器中运行（无需 SGX 硬件）
+```
+
+**优势**：
+- ✅ 时间从 5-10 分钟降低到 30-40 秒
+- ✅ 支持 gramine-direct 模拟模式（无需 SGX 硬件）
+- ✅ 支持 gramine-sgx 真实模式（需要 SGX 硬件）
+- ✅ 使用 MRSIGNER sealing 避免数据迁移
+
+### gramine-direct 模拟模式
+
+**gramine-direct** 是 Gramine 的模拟运行模式，在用户空间模拟 SGX enclave 环境。
+
+#### 使用场景
+
+| 场景 | gramine-direct | gramine-sgx |
+|------|----------------|-------------|
+| **功能开发** | ✅ 推荐 | 可选 |
+| **快速测试** | ✅ 推荐 | 较慢 |
+| **安全测试** | ❌ 不适用 | ✅ 必需 |
+| **生产环境** | ❌ 禁止 | ✅ 必需 |
+
+#### 运行 gramine-direct 模式
+
+```bash
+cd gramine
+./run-dev.sh direct
+```
+
+**特性**：
+- 无需 SGX 硬件支持
+- 快速启动（几秒钟）
+- 完整的应用功能测试
+- 加密分区仍然工作（但不受 SGX 保护）
+
+**限制**：
+- ❌ 无真实 SGX 保护
+- ❌ 无远程证明功能
+- ❌ 性能特性可能不同
+
+#### 运行 gramine-sgx 模式
+
+```bash
+cd gramine
+./run-dev.sh sgx
+```
+
+**要求**：
+- CPU 支持 SGX
+- BIOS 启用 SGX
+- 安装 SGX 驱动
+
+### 开发模式 vs 生产模式
+
+#### 开发模式（MRSIGNER sealing）
+
+```bash
+./rebuild-manifest.sh dev
+```
+
+**配置**：
+- 使用 **MRSIGNER** 作为 sealing key
+- Debug 模式启用
+- 允许过期的 TCB
+
+**优势**：
+- ✅ 重新编译后数据**不需要迁移**
+- ✅ 同一个签名密钥，MRSIGNER 不变
+- ✅ 快速迭代开发
+
+**工作原理**：
+```
+编译 v1 → 签名 → MRENCLAVE-v1, MRSIGNER-A → 加密数据用 MRSIGNER-A
+      ↓
+重新编译 v2 → 签名（同一密钥）→ MRENCLAVE-v2, MRSIGNER-A → 仍可访问数据！
+```
+
+#### 生产模式（MRENCLAVE sealing）
+
+```bash
+./rebuild-manifest.sh prod
+```
+
+**配置**：
+- 使用 **MRENCLAVE** 作为 sealing key
+- Debug 模式关闭
+- 严格 TCB 验证
+
+**优势**：
+- ✅ 最高安全性
+- ✅ 代码绑定的数据保护
+
+**限制**：
+- ❌ 重新编译后数据**需要迁移**
+- ❌ 每次代码改变 MRENCLAVE 都会变化
+
+### 完整开发工作流示例
+
+#### 第一次设置
+
+```bash
+# 1. 生成签名密钥
+cd gramine
+./setup-signing-key.sh
+
+# 2. 编译 geth
+cd ..
+make geth
+
+# 3. 生成 manifest
+cd gramine
+./rebuild-manifest.sh dev
+
+# 4. 运行测试
+./run-dev.sh direct
+```
+
+#### 日常开发迭代
+
+```bash
+# 1. 修改代码
+vim ../consensus/sgx/consensus.go
+
+# 2. 重新编译
+cd ..
+make geth
+
+# 3. 快速重新生成 manifest（只需几秒）
+cd gramine
+./rebuild-manifest.sh dev
+
+# 4. 测试
+./run-dev.sh direct  # 快速功能测试
+
+# 或者完整测试
+./run-dev.sh sgx     # 需要 SGX 硬件
+```
+
+#### 准备发布
+
+```bash
+# 切换到生产模式
+./rebuild-manifest.sh prod
+
+# SGX 环境测试
+./run-dev.sh sgx
+
+# 构建生产 Docker 镜像
+cd ..
+docker build -t xchain-node:v1.0.0 .
+```
+
+### 开发脚本说明
+
+#### rebuild-manifest.sh
+
+快速重新生成和签名 Gramine manifest。
+
+```bash
+# 开发模式（默认）
+./rebuild-manifest.sh dev
+
+# 生产模式
+./rebuild-manifest.sh prod
+```
+
+**执行步骤**：
+1. 从模板生成 manifest（gramine-manifest）
+2. 签名 manifest（gramine-sgx-sign）
+3. 提取 MRENCLAVE 值
+
+**生成文件**：
+- `geth.manifest` - 生成的 manifest
+- `geth.manifest.sgx` - 签名的 manifest
+- `MRENCLAVE.txt` - MRENCLAVE 值
+
+#### run-dev.sh
+
+快速运行节点（支持 direct/sgx 模式）。
+
+```bash
+# 模拟模式（无需 SGX）
+./run-dev.sh direct
+
+# SGX 模式（需要 SGX 硬件）
+./run-dev.sh sgx
+```
+
+**功能**：
+- 检查 geth 二进制
+- 检查 manifest 文件（不存在则自动生成）
+- 创建必要的数据目录
+- 启动节点
+
+#### setup-signing-key.sh
+
+生成或管理 Gramine manifest 签名密钥。
+
+```bash
+./setup-signing-key.sh
+```
+
+**注意**：
+- 签名密钥影响 MRSIGNER
+- 开发环境可以随意生成
+- 生产环境必须妥善保管
+
+### 性能对比
+
+| 操作 | 传统 Docker 方式 | 新的快速方式 | 时间节省 |
+|------|------------------|--------------|---------|
+| 重新编译 geth | 30 秒 | 30 秒 | - |
+| 构建 Docker 镜像 | 5-10 分钟 | - | - |
+| 生成 manifest | - | 5 秒 | - |
+| 启动测试 | 30 秒 | 5 秒 (direct) | 83% |
+| **总计** | **6-11 分钟** | **40 秒** | **93%** |
+
+### 故障排除
+
+#### gramine-manifest: command not found
+
+```bash
+# 安装 Gramine
+sudo apt install gramine
+```
+
+#### /dev/sgx_enclave: No such device
+
+- 确认 CPU 支持 SGX
+- 在 BIOS 中启用 SGX
+- 安装 SGX 驱动
+
+**解决方案**：使用 gramine-direct 模式进行开发测试
+
+```bash
+./run-dev.sh direct  # 无需 SGX 硬件
+```
+
+#### Permission denied
+
+某些操作可能需要 sudo 权限：
+
+```bash
+sudo ./run-dev.sh sgx
+```
+
+### 最佳实践
+
+1. **开发阶段**：使用 `gramine-direct` + `MRSIGNER sealing`
+2. **集成测试**：使用 `gramine-sgx` + `MRSIGNER sealing`
+3. **安全测试**：使用 `gramine-sgx` + `MRENCLAVE sealing`
+4. **生产环境**：使用 `gramine-sgx` + `MRENCLAVE sealing`
+
+### 相关文件
+
+开发工作流相关文件位于 `gramine/` 目录：
+
+```
+gramine/
+├── README.md                    # 开发工作流详细文档
+├── geth.manifest.template       # Manifest 模板
+├── rebuild-manifest.sh          # 快速重新生成脚本
+├── run-dev.sh                   # 运行脚本（direct/sgx）
+├── setup-signing-key.sh         # 签名密钥管理
+├── enclave-key.pem             # 签名密钥（自动生成，不提交）
+├── geth.manifest               # 生成的 manifest（不提交）
+├── geth.manifest.sgx           # 签名的 manifest（不提交）
+└── MRENCLAVE.txt               # MRENCLAVE 值（不提交）
+```
+
+查看 `gramine/README.md` 获取更多详细信息和示例。
 ```

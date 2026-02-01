@@ -58,3 +58,11 @@ cmd/rlpdump/rlpdump
 cmd/workload/workload
 cmd/keeper/keeper
 coverage.out
+
+# Gramine 生成的文件
+gramine/*.manifest
+gramine/*.manifest.sgx
+gramine/enclave-key.pem
+gramine/enclave-key.pem.backup.*
+gramine/MRENCLAVE.txt
+gramine/MRSIGNER.txt
