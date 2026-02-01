@@ -10,13 +10,13 @@
 
 ## 设计理念
 
-### 之前的设计（已弃用）
+### 方案 A（不推荐，文档已修正）
 
 - 启动时读取 Manifest 参数
 - 读取命令行参数
 - **比对两者，如果不一致则退出进程**
 
-### 更新后的设计（推荐）
+### 方案 B（推荐，文档已采用）
 
 - 启动时读取 Manifest 参数
 - 读取命令行参数
@@ -43,14 +43,14 @@
 
 ### 1. 参数处理流程
 
-**之前**：
+**方案 A（文档原描述，不推荐）**：
 ```
 1. 加载 Manifest 参数
 2. 加载 CLI 参数
 3. 合并参数：Manifest 覆盖 CLI，不一致则退出进程
 ```
 
-**现在**：
+**方案 B（文档已修正，推荐）**：
 ```
 1. 加载 Manifest 参数
 2. 加载 CLI 参数
@@ -59,7 +59,7 @@
 
 ### 2. MergeAndValidate 函数
 
-**之前**：
+**方案 A（文档原描述）**：
 ```go
 // 检查是否与 Manifest 一致
 if ok && cliValue != manifestValue {
@@ -67,7 +67,7 @@ if ok && cliValue != manifestValue {
 }
 ```
 
-**现在**：
+**方案 B（文档已修正）**：
 ```go
 // 如果 Manifest 中已存在，直接忽略 CLI 参数
 if _, exists := pv.manifestParams[param.Name]; exists {
@@ -83,17 +83,17 @@ if _, exists := pv.manifestParams[param.Name]; exists {
 
 ### 4. 注意事项
 
-**之前**：
+**方案 A（文档原描述）**：
 > 参数校验：安全参数必须与 Manifest 一致，不一致则退出进程
 
-**现在**：
+**方案 B（文档已修正）**：
 > 参数处理：安全参数以 Manifest 为准，命令行传入的同名参数被忽略，无需比对
 
 ## 影响范围
 
-### 已更新的文档
+### 已修正的文档
 
-- `/docs/modules/06-data-storage-sync.md`：所有相关章节已更新
+- `/docs/modules/06-data-storage-sync.md`：所有相关章节已修正
 
 ### 未实现的代码
 
@@ -153,7 +153,7 @@ geth --datadir=/tmp/data --rpc-port=8545
 
 ## 总结
 
-这次文档更新澄清了 Manifest 参数处理的设计理念：
+这次文档修正澄清了 Manifest 参数处理的设计理念：
 
 - ✅ **简化**：去除不必要的比对和退出逻辑
 - ✅ **明确**：Manifest 是唯一权威来源
@@ -162,5 +162,5 @@ geth --datadir=/tmp/data --rpc-port=8545
 
 ---
 
-**更新日期**：2026-02-01  
+**文档修正日期**：2026-02-01  
 **相关 PR**：copilot/clarify-manifest-parameter-handling
