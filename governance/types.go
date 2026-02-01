@@ -109,9 +109,16 @@ type Vote struct {
 // VoterType represents the type of voter
 type VoterType uint8
 
+// ValidatorType is an alias for VoterType for compatibility with architecture documentation
+type ValidatorType = VoterType
+
 const (
 	VoterTypeCore      VoterType = 0x01 // 核心验证者
 	VoterTypeCommunity VoterType = 0x02 // 社区验证者
+	
+	// Aliases for architecture document compatibility
+	CoreValidator      = VoterTypeCore
+	CommunityValidator = VoterTypeCommunity
 )
 
 // ValidatorStatus represents the status of a validator
@@ -125,15 +132,22 @@ const (
 )
 
 // ValidatorInfo represents information about a validator
+// Compatible with both module documentation and architecture documentation
 type ValidatorInfo struct {
 	Address      common.Address  // 验证者地址
-	Type         VoterType       // 验证者类型
+	Type         VoterType       // 验证者类型 (ValidatorType in architecture doc)
 	MRENCLAVE    [32]byte        // 当前 MRENCLAVE
-	StakeAmount  *big.Int        // 质押金额
-	JoinedAt     uint64          // 加入区块
+	StakeAmount  *big.Int        // 质押金额 (StakedAmount in architecture doc)
+	JoinedAt     uint64          // 加入区块 (block number, not time.Time for consistency)
 	LastActiveAt uint64          // 最后活跃区块
 	VotingPower  uint64          // 投票权重
 	Status       ValidatorStatus // 状态
+	
+	// Optional fields for architecture document compatibility
+	// These are derived/computed fields and not stored directly
+	// PublicKey can be derived from Address
+	// NodeUptime can be computed from progressive permission manager
+	// SGXVerified can be checked via admission controller
 }
 
 // AdmissionStatus represents the admission status of a node
@@ -243,4 +257,24 @@ func DefaultProgressivePermissionConfig() *ProgressivePermissionConfig {
 		StandardUptimeThreshold: 0.95,   // 95%
 		FullUptimeThreshold:     0.99,   // 99%
 	}
+}
+
+// Helper methods for ValidatorInfo to provide architecture document compatibility
+
+// GetJoinedTime returns the join time as a Unix timestamp
+// Note: In implementation we use block numbers, but this provides time conversion
+func (v *ValidatorInfo) GetJoinedTime(blockTime uint64) uint64 {
+// blockTime is seconds per block (e.g., 15 seconds)
+// This is an approximation since we don't have exact timestamps
+return v.JoinedAt * blockTime
+}
+
+// StakedAmount is an alias for StakeAmount (architecture doc compatibility)
+func (v *ValidatorInfo) StakedAmount() *big.Int {
+return v.StakeAmount
+}
+
+// GetValidatorType returns the validator type (architecture doc uses "ValidatorType")
+func (v *ValidatorInfo) GetValidatorType() ValidatorType {
+return v.Type
 }

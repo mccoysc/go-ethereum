@@ -52,12 +52,29 @@ func CalculateCreate2Address(deployer common.Address, salt [32]byte, initCodeHas
 
 // PredictGovernanceAddress predicts the governance contract address
 // The governance contract is assumed to be deployed at nonce 0
+//
+// MANIFEST INTEGRATION:
+// These predicted addresses must be written into the Gramine manifest file as:
+//   XCHAIN_GOVERNANCE_CONTRACT=<predicted_address>
+// This ensures the address is embedded in the MRENCLAVE measurement and cannot
+// be tampered with at runtime. The manifest is part of the SGX enclave configuration.
 func PredictGovernanceAddress(deployer common.Address) common.Address {
 	return CalculateContractAddress(deployer, 0)
 }
 
 // PredictSecurityConfigAddress predicts the security config contract address
 // The security config contract is assumed to be deployed at nonce 1
+//
+// MANIFEST INTEGRATION:
+// These predicted addresses must be written into the Gramine manifest file as:
+//   XCHAIN_SECURITY_CONFIG_CONTRACT=<predicted_address>
+// This ensures the address is embedded in the MRENCLAVE measurement.
+//
+// Example manifest configuration:
+//   loader.env.XCHAIN_GOVERNANCE_CONTRACT = "0x..."
+//   loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "0x..."
+//
+// These values become part of the enclave's trusted computing base (TCB).
 func PredictSecurityConfigAddress(deployer common.Address) common.Address {
 	return CalculateContractAddress(deployer, 1)
 }
