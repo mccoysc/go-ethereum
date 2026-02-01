@@ -30,6 +30,14 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 )
 
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // ManifestSignatureVerifier verifies Gramine manifest file signatures
 // Based on Gramine official documentation:
 // https://gramine.readthedocs.io/en/stable/manifest-syntax.html
@@ -46,7 +54,15 @@ type ManifestSignatureVerifier struct {
 
 // NewManifestSignatureVerifier creates a new manifest signature verifier
 // The public key can be loaded from environment variable or default location
+//
+// SECURITY: Only allows test mode with explicit SGX_TEST_MODE=true
 func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
+	// Check if test mode is explicitly enabled
+	if os.Getenv("SGX_TEST_MODE") == "true" {
+		log.Warn("⚠️  SGX_TEST_MODE=true - Creating test verifier (INSECURE)")
+		return &ManifestSignatureVerifier{publicKey: nil}, nil
+	}
+	
 	// Try to load public key from environment variable first
 	pubKeyPath := os.Getenv("GRAMINE_SIGSTRUCT_KEY_PATH")
 	if pubKeyPath == "" {
@@ -56,6 +72,7 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 			"/etc/gramine/signing_key.pub",  // System-wide installation
 			"./enclave-key.pub",             // Build directory
 			"./signing_key.pub",             // Alternative name
+			"gramine/enclave-key.pub",       // Relative path
 		}
 
 		for _, path := range possiblePaths {
@@ -67,18 +84,19 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 	}
 
 	if pubKeyPath == "" {
-		// In test mode or non-SGX mode, return a verifier that always succeeds
-		if os.Getenv("SGX_TEST_MODE") == "true" || os.Getenv("IN_SGX") != "1" {
-			return &ManifestSignatureVerifier{publicKey: nil}, nil
-		}
-		return nil, fmt.Errorf("no public key found for manifest signature verification")
+		return nil, fmt.Errorf("SECURITY: No public key found for manifest signature verification. " +
+			"Searched standard locations. " +
+			"Set GRAMINE_SIGSTRUCT_KEY_PATH or place signing_key.pub in standard location. " +
+			"For testing only: set SGX_TEST_MODE=true")
 	}
 
 	// Load public key
 	pubKey, err := loadRSAPublicKey(pubKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load public key: %w", err)
+		return nil, fmt.Errorf("failed to load public key from %s: %w", pubKeyPath, err)
 	}
+	
+	log.Info("Loaded manifest signing public key", "path", pubKeyPath, "bits", pubKey.N.BitLen())
 
 	return &ManifestSignatureVerifier{
 		publicKey: pubKey,
@@ -307,46 +325,56 @@ func VerifyCurrentManifestFile() error {
 
 // ValidateManifestIntegrity performs manifest signature verification
 // 
-// 重要：虽然Gramine在启动时已验证manifest签名（签名不对起不来），
-// 但应用程序要读取manifest文件内容时，必须再次验证签名，
-// 因为文件可能在Gramine启动后被修改。
+// 安全要求：
+// 1. 必须找到manifest文件
+// 2. 必须找到签名文件
+// 3. 必须验证RSA签名
+// 4. 必须验证MRENCLAVE匹配
+// 5. 不允许跳过任何步骤
 //
-// 流程：
-// 1. 定位manifest文件（遵循Gramine规范，不硬编码路径）
-// 2. 验证manifest签名
-// 3. 验证通过后才能读取配置
+// 唯一例外：设置环境变量 SGX_TEST_MODE=true 时允许跳过
+// （仅用于单元测试，生产环境必须删除）
 func ValidateManifestIntegrity() error {
-	// Step 1: 检查是否在Gramine环境中
-	gramineVersion := os.Getenv("GRAMINE_VERSION")
-	if gramineVersion == "" {
-		// 非Gramine环境，开发模式
-		log.Info("Not running under Gramine - skipping manifest verification")
+	// 检查是否明确设置了测试模式
+	testMode := os.Getenv("SGX_TEST_MODE")
+	if testMode == "true" {
+		log.Warn("⚠️  SGX_TEST_MODE=true - Manifest verification SKIPPED")
+		log.Warn("⚠️  THIS IS INSECURE - Only use for testing!")
+		log.Warn("⚠️  MUST NOT be used in production")
 		return nil
 	}
 	
-	log.Info("Running under Gramine", "version", gramineVersion)
+	log.Info("=== Validating Manifest Integrity ===")
 	
-	// Step 2: 检查Gramine是否已验证manifest（通过MRENCLAVE存在性）
+	// Step 1: 检查运行环境
+	gramineVersion := os.Getenv("GRAMINE_VERSION")
+	if gramineVersion != "" {
+		log.Info("Running under Gramine", "version", gramineVersion)
+	} else {
+		// 不在Gramine环境但仍然需要验证manifest
+		log.Warn("Not running under Gramine - but manifest verification is REQUIRED")
+	}
+	
+	// Step 2: 检查MRENCLAVE（如果可用）
 	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
 	if mrenclave == "" {
 		mrenclave = os.Getenv("SGX_MRENCLAVE")
 	}
 	if mrenclave != "" {
-		log.Info("Gramine verified manifest at startup", "MRENCLAVE", mrenclave[:16]+"...")
+		log.Info("MRENCLAVE available for verification", "MRENCLAVE", mrenclave[:min(16, len(mrenclave))]+"...")
 	} else {
-		log.Warn("MRENCLAVE not found - Gramine may not have verified manifest")
+		log.Warn("MRENCLAVE not found in environment")
+		// 注意：验证时如果需要MRENCLAVE但没有，会失败
 	}
 	
-	// Step 3: 应用层必须自己验证manifest文件签名
-	// 因为文件可能在Gramine启动后被修改
-	log.Info("Step 3: Application verifying manifest signature...")
-	
-	// 3.1 定位manifest文件（遵循Gramine规范）
+	// Step 3: 定位manifest文件（必须存在）
+	log.Info("Step 1: Locating manifest file...")
 	manifestPath, err := findManifestFile()
 	if err != nil {
-		return fmt.Errorf("cannot locate manifest file: %w", err)
+		return fmt.Errorf("SECURITY: Cannot locate manifest file: %w. " +
+			"Manifest verification is REQUIRED. Set SGX_TEST_MODE=true only for testing.", err)
 	}
-	log.Info("Located manifest file", "path", manifestPath)
+	log.Info("✓ Manifest file located", "path", manifestPath)
 	
 	// 3.2 验证签名
 	verifier, err := NewManifestSignatureVerifier()
