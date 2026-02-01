@@ -293,3 +293,83 @@ func TestConcurrentAccess(t *testing.T) {
 		<-done
 	}
 }
+
+func TestMergeAndValidate_AllSources(t *testing.T) {
+	validator := NewParameterValidator()
+
+	// Test with all three sources (include all required params)
+	manifestParams := map[string]string{
+		"manifest_param":       "manifest_value",
+		"shared_param":         "from_manifest",
+		"encrypted_path":       "/data/secrets",
+		"secret_path":          "/secrets",
+		"governance_contract":  "0x1234567890abcdef1234567890abcdef12345678",
+		"security_config_contract": "0xfedcba9876543210fedcba9876543210fedcba98",
+	}
+	chainParams := map[string]interface{}{
+		"chain_param":  "chain_value",
+		"shared_param": "from_chain",
+	}
+	cliParams := map[string]interface{}{
+		"cli_param":    "cli_value",
+		"shared_param": "from_cli",
+	}
+
+	merged, err := validator.MergeAndValidate(manifestParams, chainParams, cliParams)
+	if err != nil {
+		t.Fatalf("Failed to merge params: %v", err)
+	}
+
+	// Manifest param should win
+	if merged["shared_param"] != "from_manifest" {
+		t.Errorf("Expected manifest priority, got %v", merged["shared_param"])
+	}
+
+	// All unique params should be present
+	if merged["manifest_param"] != "manifest_value" {
+		t.Error("Missing manifest param")
+	}
+	if merged["chain_param"] != "chain_value" {
+		t.Error("Missing chain param")
+	}
+	if merged["cli_param"] != "cli_value" {
+		t.Error("Missing CLI param")
+	}
+}
+
+func TestCheckSecurityParams_WithoutMerge(t *testing.T) {
+	validator := NewParameterValidator()
+
+	// Should return error when called without merging first
+	err := validator.CheckSecurityParams()
+	if err == nil {
+		t.Error("Expected error when checking security params without merge")
+	}
+}
+
+func TestMergeAndValidate_EmptyParams(t *testing.T) {
+	validator := NewParameterValidator()
+
+	// Test with all empty params - should fail due to missing required params
+	_, err := validator.MergeAndValidate(nil, nil, nil)
+	if err == nil {
+		t.Error("Expected error for missing required parameters")
+	}
+	
+	// Provide all required parameters
+	manifestParams := map[string]string{
+		"encrypted_path":       "/data/secrets",
+		"secret_path":          "/secrets",
+		"governance_contract":  "0x1234567890abcdef1234567890abcdef12345678",
+		"security_config_contract": "0xfedcba9876543210fedcba9876543210fedcba98",
+	}
+	merged, err := validator.MergeAndValidate(manifestParams, nil, nil)
+	if err != nil {
+		t.Fatalf("Failed to merge with required params: %v", err)
+	}
+
+	if merged["encrypted_path"] != "/data/secrets" {
+		t.Errorf("Expected encrypted_path, got %v", merged)
+	}
+}
+

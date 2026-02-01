@@ -411,7 +411,192 @@ if err != nil {
 t.Fatalf("Failed to read synced secret: %v", err)
 }
 
-if string(data) != "secret-data-1" {
-t.Errorf("Expected 'secret-data-1', got %s", string(data))
+	if string(data) != "secret-data-1" {
+		t.Errorf("Expected 'secret-data-1', got %s", string(data))
+	}
 }
+
+func TestCheckPeerHealth(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	tmpDir := t.TempDir()
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	syncManager, err := createTestSyncManager(t, tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create sync manager: %v", err)
+	}
+
+	// Generate a valid mock quote
+	quote := generateValidMockQuote(t, []byte("test-data"))
+
+	// Add a peer with old sync time
+	peerID := common.BytesToHash([]byte("peer1"))
+	mrenclave := [32]byte{4, 5, 6}
+	syncManager.AddPeer(peerID, mrenclave, quote)
+
+	// Manually set the peer's sync status and last sync time to simulate old sync
+	syncManager.mu.Lock()
+	if peer, exists := syncManager.peers[peerID]; exists {
+		peer.SyncStatus = SyncStatusCompleted
+		peer.LastSync = uint64(time.Now().Unix()) - 3700 // More than 1 hour ago
+	}
+	syncManager.mu.Unlock()
+
+	// Call checkPeerHealth
+	syncManager.checkPeerHealth()
+
+	// Verify the peer status changed to pending
+	syncManager.mu.RLock()
+	peer := syncManager.peers[peerID]
+	syncManager.mu.RUnlock()
+
+	if peer.SyncStatus != SyncStatusPending {
+		t.Errorf("Expected peer status to be Pending after health check, got %v", peer.SyncStatus)
+	}
 }
+
+func TestVerifyAndApplySync_InvalidRequestID(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	tmpDir := t.TempDir()
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	syncManager, err := createTestSyncManager(t, tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create sync manager: %v", err)
+	}
+
+	// Create sync response with invalid request ID
+	response := &SyncResponse{
+		RequestID: common.BytesToHash([]byte("invalid")),
+		PeerID:    common.BytesToHash([]byte("peer1")),
+		Secrets:   []SecretData{},
+		Timestamp: uint64(time.Now().Unix()),
+	}
+
+	// Should fail with invalid request ID
+	err = syncManager.VerifyAndApplySync(response)
+	if err == nil {
+		t.Fatal("Expected error for invalid request ID")
+	}
+}
+
+func TestVerifyAndApplySync_PeerNotInWhitelist(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	tmpDir := t.TempDir()
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	syncManager, err := createTestSyncManager(t, tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create sync manager: %v", err)
+	}
+
+	// Generate a valid mock quote
+	quote := generateValidMockQuote(t, []byte("test-data"))
+
+	// Add peer but not to whitelist
+	peerID := common.BytesToHash([]byte("peer1"))
+	mrenclave := [32]byte{4, 5, 6}
+	syncManager.AddPeer(peerID, mrenclave, quote)
+
+	// Create a sync request first so there's a valid request ID
+	syncManager.mu.Lock()
+	requestID := common.BytesToHash([]byte("request1"))
+	syncManager.syncRequests[requestID] = &SyncRequest{
+		RequestID:   requestID,
+		PeerID:      peerID,
+		SecretTypes: []SecretDataType{SecretTypePrivateKey},
+		Timestamp:   uint64(time.Now().Unix()),
+	}
+	syncManager.mu.Unlock()
+
+	// Create sync response
+	response := &SyncResponse{
+		RequestID: requestID,
+		PeerID:    peerID,
+		Secrets:   []SecretData{},
+		Timestamp: uint64(time.Now().Unix()),
+	}
+
+	// Should fail - peer not in whitelist
+	err = syncManager.VerifyAndApplySync(response)
+	if err == nil {
+		t.Fatal("Expected error for peer not in whitelist")
+	}
+}
+
+func TestHandleSyncRequest_PeerNotInWhitelist(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	tmpDir := t.TempDir()
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	syncManager, err := createTestSyncManager(t, tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create sync manager: %v", err)
+	}
+
+	// Generate a valid mock quote
+	quote := generateValidMockQuote(t, []byte("test-data"))
+
+	// Add peer but not to whitelist
+	peerID := common.BytesToHash([]byte("peer1"))
+	mrenclave := [32]byte{4, 5, 6}
+	syncManager.AddPeer(peerID, mrenclave, quote)
+
+	// Create sync request
+	request := &SyncRequest{
+		RequestID:   common.BytesToHash([]byte("request1")),
+		PeerID:      peerID,
+		SecretTypes: []SecretDataType{SecretTypePrivateKey},
+		Timestamp:   uint64(time.Now().Unix()),
+	}
+
+	// Should fail - peer not in whitelist
+	_, err = syncManager.HandleSyncRequest(request)
+	if err == nil {
+		t.Fatal("Expected error for peer not in whitelist")
+	}
+}
+
+func TestVerifyMREnclaveConstantTime_Mismatch(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	tmpDir := t.TempDir()
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	syncManager, err := createTestSyncManager(t, tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create sync manager: %v", err)
+	}
+
+	// Test MRENCLAVE verification
+	// Add an allowed enclave
+	allowed := [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
+	syncManager.UpdateAllowedEnclaves([][32]byte{allowed})
+
+	// Test with matching MRENCLAVE
+	if !syncManager.verifyMREnclaveConstantTime(allowed) {
+		t.Error("Expected MRENCLAVE verification to succeed for allowed enclave")
+	}
+
+	// Test with non-matching MRENCLAVE
+	notAllowed := [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 99}
+	if syncManager.verifyMREnclaveConstantTime(notAllowed) {
+		t.Error("Expected MRENCLAVE verification to fail for non-allowed enclave")
+	}
+}
+
+

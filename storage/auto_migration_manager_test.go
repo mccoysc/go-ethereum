@@ -290,3 +290,120 @@ func TestSetUpgradeCompleteBlock(t *testing.T) {
 		t.Errorf("Expected block %d, got %d", blockNumber, manager.upgradeCompleteBlock)
 	}
 }
+
+func TestCheckAndMigrate_NoUpgradeBlock(t *testing.T) {
+	syncManager := &MockSyncManager{}
+	securityConfigAddr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+
+	manager, err := NewAutoMigrationManager(syncManager, nil, securityConfigAddr)
+	if err != nil {
+		t.Fatalf("Failed to create manager: %v", err)
+	}
+
+	// Set permission level
+	mrenclave := [32]byte{1, 2, 3}
+	manager.UpdatePermissionLevel(mrenclave, PermissionFull)
+
+	// Without upgrade block, should not migrate
+	migrated, err := manager.CheckAndMigrate()
+	if err != nil {
+		t.Fatalf("CheckAndMigrate failed: %v", err)
+	}
+	if migrated {
+		t.Error("Expected no migration without upgrade block")
+	}
+}
+
+func TestCheckAndMigrate_WithUpgradeBlock(t *testing.T) {
+	syncManager := &MockSyncManager{}
+	securityConfigAddr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+
+	manager, err := NewAutoMigrationManager(syncManager, nil, securityConfigAddr)
+	if err != nil {
+		t.Fatalf("Failed to create manager: %v", err)
+	}
+
+	// Set permission level and upgrade block
+	mrenclave := [32]byte{1, 2, 3}
+	manager.UpdatePermissionLevel(mrenclave, PermissionFull)
+	manager.SetUpgradeCompleteBlock(1000)
+
+	// Should migrate
+	migrated, err := manager.CheckAndMigrate()
+	if err != nil {
+		t.Fatalf("CheckAndMigrate failed: %v", err)
+	}
+	if !migrated {
+		t.Error("Expected migration to occur")
+	}
+
+	// Second call while in progress should return false
+	// (Since we're using Full permission, it completes immediately in our mock)
+}
+
+func TestGetDailyLimit_AllLevels(t *testing.T) {
+	syncManager := &MockSyncManager{}
+	securityConfigAddr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+
+	manager, err := NewAutoMigrationManager(syncManager, nil, securityConfigAddr)
+	if err != nil {
+		t.Fatalf("Failed to create manager: %v", err)
+	}
+
+	// Test each permission level
+	testCases := []struct {
+		level    PermissionLevel
+		expected uint64
+	}{
+		{PermissionBasic, 10},       // BasicDailyMigrationLimit
+		{PermissionStandard, 100},   // StandardDailyMigrationLimit
+		{PermissionFull, 0},         // No limit
+	}
+
+	for _, tc := range testCases {
+		result := manager.getDailyLimit(tc.level)
+		if result != tc.expected {
+			t.Errorf("For level %v, expected %d, got %d", tc.level, tc.expected, result)
+		}
+	}
+
+	// Test unknown level - use a value outside the range
+	unknownLevel := PermissionLevel(255)
+	result := manager.getDailyLimit(unknownLevel)
+	if result != 0 {
+		t.Errorf("For unknown level, expected 0, got %d", result)
+	}
+}
+
+func TestMonitoringLoop_Cancellation(t *testing.T) {
+	syncManager := &MockSyncManager{}
+	securityConfigAddr := common.HexToAddress("0x1234567890abcdef1234567890abcdef12345678")
+
+	manager, err := NewAutoMigrationManager(syncManager, nil, securityConfigAddr)
+	if err != nil {
+		t.Fatalf("Failed to create manager: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// Start monitoring
+	go manager.monitoringLoop(ctx)
+
+	// Let it run briefly
+	time.Sleep(100 * time.Millisecond)
+
+	// Cancel and verify it stops
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	// monitoringRunning should be false after cancellation
+	manager.mu.RLock()
+	running := manager.monitoringRunning
+	manager.mu.RUnlock()
+
+	if running {
+		t.Error("Expected monitoring to stop after cancellation")
+	}
+}
+
+

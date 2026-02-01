@@ -260,3 +260,128 @@ func TestConcurrentWriteAndRead(t *testing.T) {
 		}
 	}
 }
+
+func TestSecureDelete_ErrorCases(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	tmpDir := t.TempDir()
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	partition, err := NewEncryptedPartition(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create partition: %v", err)
+	}
+
+	// Test secure delete on non-existent file
+	err = partition.SecureDelete("/nonexistent/file")
+	if err == nil {
+		t.Error("Expected error for non-existent file")
+	}
+
+	// Test secure delete on directory (should fail)
+	err = partition.SecureDelete(tmpDir)
+	if err == nil {
+		t.Error("Expected error for directory")
+	}
+
+	// Test secure delete on read-only file
+	readOnlyFile := tmpDir + "/readonly"
+	if err := os.WriteFile(readOnlyFile, []byte("test"), 0400); err != nil {
+		t.Fatalf("Failed to create read-only file: %v", err)
+	}
+
+	err = partition.SecureDelete(readOnlyFile)
+	if err == nil {
+		t.Error("Expected error for read-only file")
+	}
+}
+
+func TestWriteSecret_ErrorCases(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	tmpDir := t.TempDir()
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	partition, err := NewEncryptedPartition(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create partition: %v", err)
+	}
+
+	// Test writing to invalid path (contains path traversal)
+	err = partition.WriteSecret("../../../etc/passwd", []byte("data"))
+	if err == nil {
+		t.Error("Expected error for path traversal attempt")
+	}
+
+	// Test writing with empty name
+	err = partition.WriteSecret("", []byte("data"))
+	if err == nil {
+		t.Error("Expected error for empty secret name")
+	}
+}
+
+func TestDeleteSecret_ErrorCases(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	tmpDir := t.TempDir()
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", tmpDir)
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	partition, err := NewEncryptedPartition(tmpDir)
+	if err != nil {
+		t.Fatalf("Failed to create partition: %v", err)
+	}
+
+	// Test deleting non-existent secret
+	err = partition.DeleteSecret("nonexistent")
+	if err == nil {
+		t.Error("Expected error for non-existent secret")
+	}
+
+	// Test deleting with path traversal
+	err = partition.DeleteSecret("../../../etc/passwd")
+	if err == nil {
+		t.Error("Expected error for path traversal attempt")
+	}
+}
+
+func TestListSecrets_ErrorCases(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	// Test with non-existent directory
+	partition := &EncryptedPartitionImpl{
+		basePath: "/nonexistent/directory",
+	}
+
+	_, err := partition.ListSecrets()
+	if err == nil {
+		t.Error("Expected error for non-existent directory")
+	}
+}
+
+func TestNewEncryptedPartition_ErrorCases(t *testing.T) {
+	setupTestEnvironment(t)
+	defer cleanupTestEnvironment(t)
+
+	// Test with non-encrypted path
+	os.Setenv("GRAMINE_ENCRYPTED_PATHS", "/tmp")
+	defer os.Unsetenv("GRAMINE_ENCRYPTED_PATHS")
+
+	_, err := NewEncryptedPartition("/unencrypted/path")
+	if err == nil {
+		t.Error("Expected error for non-encrypted path")
+	}
+
+	// Test with empty path
+	_, err = NewEncryptedPartition("")
+	if err == nil {
+		t.Error("Expected error for empty path")
+	}
+}
+
