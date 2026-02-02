@@ -54,8 +54,7 @@ start_test_node() {
     # Key flags for PoA-SGX:
     # --networkid 762385986 (X Chain network ID)
     # --nodiscover (disable P2P discovery for testing)
-    # --mine (enable mining/block production)
-    # Mining is required for PoA-SGX to produce blocks
+    # No --mine flag needed for PoA-SGX (consensus handles block production)
     $geth --datadir "$datadir" \
         --networkid 762385986 \
         --port "$port" \
@@ -66,9 +65,6 @@ start_test_node() {
         --http.corsdomain "*" \
         --nodiscover \
         --maxpeers 0 \
-        --mine \
-        --miner.threads 1 \
-        --miner.etherbase "0x0000000000000000000000000000000000000000" \
         --allow-insecure-unlock \
         --verbosity 3 \
         > "$datadir/geth.log" 2>&1 &
@@ -77,7 +73,7 @@ start_test_node() {
     echo $pid > "$datadir/geth.pid"
     
     # Wait for node to start
-    local max_attempts=30
+    local max_attempts=60
     local attempt=0
     while [ $attempt -lt $max_attempts ]; do
         if curl -s -X POST -H "Content-Type: application/json" \
@@ -92,6 +88,10 @@ start_test_node() {
     
     echo "Failed to start node after $max_attempts seconds"
     echo "Check logs at: $datadir/geth.log"
+    if [ -f "$datadir/geth.log" ]; then
+        echo "=== Last 20 lines of log ==="
+        tail -20 "$datadir/geth.log"
+    fi
     return 1
 }
 
