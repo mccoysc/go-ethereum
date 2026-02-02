@@ -1,0 +1,98 @@
+# docker-compose.yml
+# X Chain Node Docker Compose Configuration
+# Deploys X Chain node with Gramine SGX support
+
+version: '3.8'
+
+services:
+  xchain-node:
+    image: ghcr.io/mccoysc/xchain-node:latest
+    container_name: xchain-node
+    
+    # SGX device access
+    devices:
+      - /dev/sgx_enclave:/dev/sgx_enclave
+      - /dev/sgx_provision:/dev/sgx_provision
+    
+    # Volume mappings
+    volumes:
+      # Encrypted partitions (SGX sealed data)
+      - ./data/encrypted:/data/encrypted
+      - ./data/secrets:/data/secrets
+      - ./data/wallet:/data/wallet
+      
+      # Logs
+      - ./logs:/app/logs
+      
+      # AESM service socket (for remote attestation)
+      - /var/run/aesmd:/var/run/aesmd
+    
+    # Port mappings
+    ports:
+      - "8545:8545"   # RPC
+      - "8546:8546"   # WebSocket
+      - "30303:30303" # P2P
+      - "30303:30303/udp" # P2P UDP
+    
+    # Environment variables
+    environment:
+      # Network configuration
+      - XCHAIN_NETWORK_ID=762385986
+      - XCHAIN_DATA_DIR=/data/wallet/chaindata
+      
+      # Port configuration
+      - XCHAIN_RPC_PORT=8545
+      - XCHAIN_WS_PORT=8546
+      - XCHAIN_P2P_PORT=30303
+      
+      # Fixed manifest parameters (for reference, actual values come from manifest)
+      # These cannot be overridden as they affect MRENCLAVE
+      - XCHAIN_GOVERNANCE_CONTRACT=0x0000000000000000000000000000000000001001
+      - XCHAIN_SECURITY_CONFIG_CONTRACT=0x0000000000000000000000000000000000001002
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545", "-X", "POST", "-H", "Content-Type: application/json", "-d", '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Resource limits (adjust based on your needs)
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+    
+    # Network configuration
+    networks:
+      - xchain-network
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+networks:
+  xchain-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+
+# Note: For production deployment, consider:
+# 1. Using Docker secrets for sensitive data
+# 2. Setting up proper monitoring and alerting
+# 3. Configuring backup for encrypted partitions
+# 4. Using a reverse proxy for RPC endpoints
+# 5. Implementing rate limiting and DDoS protection

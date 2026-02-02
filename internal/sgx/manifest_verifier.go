@@ -17,6 +17,7 @@
 package sgx
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -25,7 +26,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/ethereum/go-ethereum/log"
 )
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 // ManifestSignatureVerifier verifies Gramine manifest file signatures
 // Based on Gramine official documentation:
@@ -43,6 +54,9 @@ type ManifestSignatureVerifier struct {
 
 // NewManifestSignatureVerifier creates a new manifest signature verifier
 // The public key can be loaded from environment variable or default location
+//
+// SECURITY: NO test mode bypass allowed
+// For testing: provide real test manifest and signing key
 func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 	// Try to load public key from environment variable first
 	pubKeyPath := os.Getenv("GRAMINE_SIGSTRUCT_KEY_PATH")
@@ -53,6 +67,8 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 			"/etc/gramine/signing_key.pub",  // System-wide installation
 			"./enclave-key.pub",             // Build directory
 			"./signing_key.pub",             // Alternative name
+			"gramine/enclave-key.pub",       // Relative path
+			"test/keys/test-signing-key.pub", // Test key location
 		}
 
 		for _, path := range possiblePaths {
@@ -64,18 +80,19 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 	}
 
 	if pubKeyPath == "" {
-		// In test mode or non-SGX mode, return a verifier that always succeeds
-		if os.Getenv("SGX_TEST_MODE") == "true" || os.Getenv("IN_SGX") != "1" {
-			return &ManifestSignatureVerifier{publicKey: nil}, nil
-		}
-		return nil, fmt.Errorf("no public key found for manifest signature verification")
+		return nil, fmt.Errorf("SECURITY: No public key found for manifest signature verification. " +
+			"Searched standard locations. " +
+			"Set GRAMINE_SIGSTRUCT_KEY_PATH or place signing_key.pub in standard location. " +
+			"For testing: create test key with 'openssl genrsa -3 -out test-signing-key.pem 3072'")
 	}
 
 	// Load public key
 	pubKey, err := loadRSAPublicKey(pubKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load public key: %w", err)
+		return nil, fmt.Errorf("failed to load public key from %s: %w", pubKeyPath, err)
 	}
+	
+	log.Info("Loaded manifest signing public key", "path", pubKeyPath, "bits", pubKey.N.BitLen())
 
 	return &ManifestSignatureVerifier{
 		publicKey: pubKey,
@@ -86,43 +103,108 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 // According to Gramine spec:
 // - manifestPath should be the .manifest.sgx file
 // - signaturePath should be the .manifest.sgx.sig file (auto-detected if empty)
+//
+// CRITICAL SECURITY STEPS:
+// 1. 定位签名文件 (.manifest.sgx.sig)
+// 2. 验证manifest文件的RSA签名
+// 3. 从签名文件中提取MRENCLAVE
+// 4. 验证签名中的MRENCLAVE与当前运行的enclave一致
+//
+// NO bypass allowed - always performs full verification
 func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string, signaturePath string) error {
-	// In test mode, skip verification
-	if v.publicKey == nil {
-		return nil
-	}
-
+	log.Info("Step 1: Locating manifest signature file...")
+	
 	// Auto-detect signature path if not provided
 	// Gramine convention: <app>.manifest.sgx -> <app>.manifest.sgx.sig
+	// or <app>.manifest -> <app>.manifest.sig
 	if signaturePath == "" {
-		if filepath.Ext(manifestPath) == ".sgx" {
+		ext := filepath.Ext(manifestPath)
+		if ext == ".sgx" {
+			signaturePath = manifestPath + ".sig"
+		} else if ext == ".manifest" {
 			signaturePath = manifestPath + ".sig"
 		} else {
-			// If not .sgx extension, assume it needs .manifest.sgx.sig
+			// Assume it's app name, add .manifest.sgx.sig
 			signaturePath = manifestPath + ".manifest.sgx.sig"
 		}
 	}
+	
+	// Verify signature file exists
+	if _, err := os.Stat(signaturePath); err != nil {
+		return fmt.Errorf("signature file not found: %s (%w)", signaturePath, err)
+	}
+	
+	log.Info("Signature file located", "path", signaturePath)
 
+	log.Info("Step 2: Reading manifest and signature files...")
+	
 	// Read manifest file (.manifest.sgx)
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return fmt.Errorf("failed to read manifest file: %w", err)
 	}
+	
+	log.Info("Manifest file read", "size", len(manifestData))
 
 	// Read signature file (.manifest.sgx.sig)
+	// Gramine signature file contains SIGSTRUCT (1808 bytes)
 	signatureData, err := os.ReadFile(signaturePath)
 	if err != nil {
 		return fmt.Errorf("failed to read signature file %s: %w", signaturePath, err)
 	}
+	
+	log.Info("Signature file read", "size", len(signatureData))
+	
+	log.Info("Step 3: Verifying RSA signature...")
 
 	// Gramine uses SHA256 hash and RSA-3072 signature
 	hash := sha256.Sum256(manifestData)
 
-	// Verify RSA signature (PKCS#1 v1.5)
-	err = rsa.VerifyPKCS1v15(v.publicKey, crypto.SHA256, hash[:], signatureData)
-	if err != nil {
-		return fmt.Errorf("manifest signature verification failed: %w", err)
+	// The signature file contains SIGSTRUCT which includes the RSA signature
+	// Extract signature from SIGSTRUCT (at specific offset for Gramine)
+	// SIGSTRUCT format: https://software.intel.com/content/www/us/en/develop/download/intel-sgx-sdk-developer-reference-for-linux-os.html
+	if len(signatureData) < 384 {
+		return fmt.Errorf("signature file too small: %d bytes", len(signatureData))
 	}
+	
+	// Extract RSA signature from SIGSTRUCT (offset 128, length 384 for RSA-3072)
+	rsaSignature := signatureData[128:512]
+
+	// Verify RSA signature (PKCS#1 v1.5)
+	err = rsa.VerifyPKCS1v15(v.publicKey, crypto.SHA256, hash[:], rsaSignature)
+	if err != nil {
+		return fmt.Errorf("manifest RSA signature verification failed: %w", err)
+	}
+	
+	log.Info("✓ RSA signature verified successfully")
+	
+	log.Info("Step 4: Extracting and verifying MRENCLAVE...")
+	
+	// Extract MRENCLAVE from SIGSTRUCT (offset 960, length 32)
+	if len(signatureData) < 992 {
+		return fmt.Errorf("signature file too small to contain MRENCLAVE")
+	}
+	
+	manifestMREnclave := signatureData[960:992]
+	
+	log.Info("MRENCLAVE from manifest signature", "mrenclave", fmt.Sprintf("%x", manifestMREnclave))
+	
+	// Get current enclave's MRENCLAVE from Gramine pseudo filesystem
+	currentMREnclaveBytes, err := getCurrentMREnclaveFromGramine()
+	if err != nil {
+		return fmt.Errorf("SECURITY: Cannot retrieve current enclave MRENCLAVE: %w", err)
+	}
+	
+	log.Info("Current enclave MRENCLAVE", "mrenclave", fmt.Sprintf("%x", currentMREnclaveBytes))
+	
+	// Compare MRENCLAVEs (both are now byte arrays)
+	if !bytes.Equal(manifestMREnclave, currentMREnclaveBytes) {
+		return fmt.Errorf("MRENCLAVE MISMATCH! Manifest MRENCLAVE does not match current enclave. " +
+			"This indicates the manifest file has been tampered with or replaced. " +
+			"Manifest: %x, Current: %x", manifestMREnclave, currentMREnclaveBytes)
+	}
+	
+	log.Info("✓ MRENCLAVE verified - manifest matches current enclave")
 
 	return nil
 }
@@ -131,9 +213,10 @@ func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string,
 // NOTE: In Gramine SGX, the manifest is verified at launch time by Gramine itself.
 // This function provides additional runtime verification.
 func (v *ManifestSignatureVerifier) VerifyCurrentManifest() error {
-	// In test mode, skip verification
+	// Public key must be available
 	if v.publicKey == nil {
-		return nil
+		return fmt.Errorf("SECURITY: Cannot verify manifest - no public key loaded. " +
+			"Manifest verification is REQUIRED for security.")
 	}
 
 	// Try to find the SGX manifest file
@@ -225,98 +308,100 @@ func VerifyCurrentManifestFile() error {
 	return verifier.VerifyCurrentManifest()
 }
 
-// ValidateManifestIntegrity performs a complete manifest integrity check
-// According to Gramine security model:
-// 1. Gramine verifies manifest signature at startup
-// 2. MRENCLAVE is calculated from the signed manifest
-// 3. Application should verify it's running in SGX mode with correct measurements
+// ValidateManifestIntegrity performs manifest signature verification
+// 
+// 安全要求：
+// 1. 必须找到manifest文件
+// 2. 必须找到签名文件
+// 3. 必须验证RSA签名
+// 4. 必须验证MRENCLAVE匹配
+// 5. 不允许跳过任何步骤
+//
+// 测试：如果需要测试，应该提供真实的测试manifest和签名文件，
+// 而不是跳过验证。
 func ValidateManifestIntegrity() error {
-	// Check if we're in SGX mode
-	inSGX := os.Getenv("IN_SGX") == "1" || os.Getenv("GRAMINE_SGX") == "1"
-
-	// In test mode, skip all checks
-	if os.Getenv("SGX_TEST_MODE") == "true" {
-		return nil
+	log.Info("=== Validating Manifest Integrity ===")
+	
+	// Step 1: 检查运行环境 - 必须在Gramine下
+	gramineVersion := os.Getenv("GRAMINE_VERSION")
+	if gramineVersion == "" {
+		return fmt.Errorf("SECURITY: GRAMINE_VERSION not set - manifest verification requires Gramine environment. " +
+			"For testing: export GRAMINE_VERSION=test")
 	}
-
-	if !inSGX {
-		// Not running in SGX - in production this should be an error
-		// For development/testing, we allow it
-		return nil
+	log.Info("Running under Gramine", "version", gramineVersion)
+	
+	// Step 2: 获取当前enclave的MRENCLAVE
+	// 注意：不要使用RA_TLS_MRENCLAVE（那是用于对端验证的）
+	// 应该从Gramine伪文件系统获取当前enclave的MRENCLAVE
+	mrenclave, err := getCurrentMREnclaveFromGramine()
+	if err != nil {
+		return fmt.Errorf("SECURITY: Cannot get current enclave MRENCLAVE: %w. " +
+			"This is REQUIRED for manifest verification.", err)
 	}
-
-	// 1. Verify we have MRENCLAVE (proves Gramine verified the manifest)
-	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
-	if mrenclave == "" {
-		// Try alternative environment variable
-		mrenclave = os.Getenv("SGX_MRENCLAVE")
+	log.Info("Current enclave MRENCLAVE retrieved", "MRENCLAVE", fmt.Sprintf("%x", mrenclave[:min(16, len(mrenclave))])+"...")
+	
+	// Step 3: 定位manifest文件（必须存在）
+	log.Info("Step 1: Locating manifest file...")
+	manifestPath, err := findManifestFile()
+	if err != nil {
+		return fmt.Errorf("SECURITY: Cannot locate manifest file: %w. " +
+			"For testing, provide a test manifest file with valid signature.", err)
 	}
-
-	if mrenclave == "" {
-		return fmt.Errorf("running in SGX mode but MRENCLAVE not found - manifest was not properly verified by Gramine")
+	log.Info("✓ Manifest file located", "path", manifestPath)
+	
+	// 3.2 验证签名
+	verifier, err := NewManifestSignatureVerifier()
+	if err != nil {
+		return fmt.Errorf("failed to create manifest verifier: %w", err)
 	}
-
-	// 2. Verify we have MRSIGNER (proves the manifest was signed)
-	mrsigner := os.Getenv("RA_TLS_MRSIGNER")
-	if mrsigner == "" {
-		mrsigner = os.Getenv("SGX_MRSIGNER")
+	
+	if err := verifier.VerifyManifestSignature(manifestPath, ""); err != nil {
+		return fmt.Errorf("manifest signature verification FAILED: %w", err)
 	}
-
-	if mrsigner == "" {
-		return fmt.Errorf("running in SGX mode but MRSIGNER not found - manifest signature missing")
-	}
-
-	// 3. Optional: Verify manifest file signature again (defense in depth)
-	// Note: Gramine already verified this at startup, but we can double-check
-	// This is optional and may not work if manifest files are not accessible at runtime
-	manifestPath, err := GetManifestPath()
-	if err == nil {
-		// Manifest file is accessible, verify its signature
-		if err := VerifyManifestFile(manifestPath); err != nil {
-			return fmt.Errorf("runtime manifest signature verification failed: %w", err)
-		}
-	}
-	// If manifest file is not accessible, that's OK - Gramine already verified it
-
+	
+	log.Info("✓ Manifest signature verified by application")
+	
 	return nil
 }
 
-// GetManifestPath returns the path to the SGX manifest file
-// Follows Gramine naming convention: <app>.manifest.sgx
-func GetManifestPath() (string, error) {
-	// Check environment variable first
-	manifestPath := os.Getenv("GRAMINE_MANIFEST_PATH")
-	if manifestPath != "" {
-		if _, err := os.Stat(manifestPath); err == nil {
-			return manifestPath, nil
+// findManifestFile locates the manifest file following Gramine conventions
+// 遵循Gramine规范，不硬编码路径
+func findManifestFile() (string, error) {
+	// Method 1: Use environment variable (Gramine standard)
+	if path := os.Getenv("GRAMINE_MANIFEST_PATH"); path != "" {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
 		}
 	}
-
-	// Determine application name
+	
+	// Method 2: Use current working directory + app name
+	// Gramine convention: executable is in same dir as manifest
 	appName := os.Getenv("GRAMINE_APP_NAME")
 	if appName == "" {
-		appName = "geth"
-	}
-
-	// Try Gramine standard locations
-	possiblePaths := []string{
-		fmt.Sprintf("/gramine/app_files/%s.manifest.sgx", appName),
-		fmt.Sprintf("/gramine/%s.manifest.sgx", appName),
-		fmt.Sprintf("./%s.manifest.sgx", appName),
-		fmt.Sprintf("/app/%s.manifest.sgx", appName),
-	}
-
-	for _, path := range possiblePaths {
-		if _, err := os.Stat(path); err == nil {
-			// Also check if signature file exists (.manifest.sgx.sig)
-			sigPath := path + ".sig"
-			if _, err := os.Stat(sigPath); err == nil {
-				return path, nil
-			}
+		// Get app name from executable path
+		if exe, err := os.Executable(); err == nil {
+			appName = filepath.Base(exe)
+		} else {
+			appName = "geth" // fallback
 		}
 	}
+	
+	// Try: <appname>.manifest.sgx in current directory
+	manifestName := appName + ".manifest.sgx"
+	if _, err := os.Stat(manifestName); err == nil {
+		return manifestName, nil
+	}
+	
+	// Method 3: Check /proc/self/root (Gramine mounts)
+	// 注意：这是Gramine的特殊路径，应用看到的是映射后的路径
+	
+	return "", fmt.Errorf("manifest file not found (tried GRAMINE_MANIFEST_PATH env var and %s)", manifestName)
+}
 
-	return "", fmt.Errorf("manifest file not found in standard Gramine locations")
+// GetManifestPath returns the path to the SGX manifest file
+// 遵循Gramine规范：优先使用环境变量，不硬编码路径
+func GetManifestPath() (string, error) {
+	return findManifestFile()
 }
 
 // MustVerifyManifest verifies the manifest and panics if verification fails
@@ -327,19 +412,17 @@ func MustVerifyManifest() {
 	}
 }
 
-// GetMRENCLAVE returns the MRENCLAVE measurement from environment
-// This proves the manifest was verified by Gramine
+// GetMRENCLAVE returns the MRENCLAVE measurement of the currently running enclave
+// Uses Gramine pseudo filesystem - NOT RA_TLS_MRENCLAVE (which is for peer verification)
 func GetMRENCLAVE() (string, error) {
-	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
-	if mrenclave == "" {
-		mrenclave = os.Getenv("SGX_MRENCLAVE")
+	// Get current enclave MRENCLAVE from Gramine pseudo filesystem
+	mrenclave, err := getCurrentMREnclaveFromGramine()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current enclave MRENCLAVE: %w", err)
 	}
 
-	if mrenclave == "" {
-		return "", fmt.Errorf("MRENCLAVE not found in environment")
-	}
-
-	return mrenclave, nil
+	// Convert to hex string
+	return fmt.Sprintf("%x", mrenclave), nil
 }
 
 // GetMRSIGNER returns the MRSIGNER measurement from environment
@@ -355,4 +438,98 @@ func GetMRSIGNER() (string, error) {
 	}
 
 	return mrsigner, nil
+}
+
+// ReadContractAddressesFromManifest reads contract addresses from verified manifest
+// 必须先调用 ValidateManifestIntegrity() 验证签名后才能调用此函数
+func ReadContractAddressesFromManifest() (governance, security string, err error) {
+// 1. 定位manifest文件
+manifestPath, err := findManifestFile()
+if err != nil {
+return "", "", fmt.Errorf("cannot locate manifest: %w", err)
+}
+
+// 2. 再次验证签名（防御性编程）
+verifier, err := NewManifestSignatureVerifier()
+if err != nil {
+return "", "", fmt.Errorf("failed to create verifier: %w", err)
+}
+
+if err := verifier.VerifyManifestSignature(manifestPath, ""); err != nil {
+return "", "", fmt.Errorf("manifest signature verification failed: %w", err)
+}
+
+// 3. 读取manifest文件
+data, err := os.ReadFile(manifestPath)
+if err != nil {
+return "", "", fmt.Errorf("failed to read manifest: %w", err)
+}
+
+// 4. 解析manifest文件获取环境变量
+// Gramine manifest格式：loader.env.VARNAME = "value"
+govAddr := parseManifestEnvVar(data, "XCHAIN_GOVERNANCE_CONTRACT")
+secAddr := parseManifestEnvVar(data, "XCHAIN_SECURITY_CONFIG_CONTRACT")
+
+if govAddr == "" || secAddr == "" {
+return "", "", fmt.Errorf("contract addresses not found in manifest")
+}
+
+log.Info("Contract addresses read from manifest",
+"governance", govAddr,
+"security", secAddr)
+
+return govAddr, secAddr, nil
+}
+
+// parseManifestEnvVar extracts environment variable value from manifest content
+// Gramine manifest format: loader.env.VARNAME = "value"
+func parseManifestEnvVar(data []byte, varName string) string {
+	// Simple line-by-line parsing
+	lines := bytes.Split(data, []byte("\n"))
+	prefix := []byte(fmt.Sprintf("loader.env.%s", varName))
+	
+	for _, line := range lines {
+		line = bytes.TrimSpace(line)
+		if bytes.HasPrefix(line, prefix) {
+			// Extract value between quotes
+			parts := bytes.Split(line, []byte("\""))
+			if len(parts) >= 2 {
+				return string(parts[1])
+			}
+		}
+	}
+	
+	return ""
+}
+
+// getCurrentMREnclaveFromGramine retrieves the MRENCLAVE of the currently running enclave
+// Uses Gramine pseudo filesystem - NOT RA_TLS_MRENCLAVE which is for peer verification
+//
+// ONLY METHOD: Read from /dev/attestation/my_target_info
+// NO FALLBACK ALLOWED - if this fails, the whole operation must fail
+func getCurrentMREnclaveFromGramine() ([]byte, error) {
+	// Read from /dev/attestation/my_target_info (Gramine pseudo-fs)
+	// This file contains TARGETINFO structure where MRENCLAVE is at offset 0
+	targetInfoPath := "/dev/attestation/my_target_info"
+	data, err := os.ReadFile(targetInfoPath)
+	if err != nil {
+		return nil, fmt.Errorf("SECURITY: Cannot read %s: %w. " +
+			"This Gramine pseudo-filesystem file is REQUIRED to get current enclave MRENCLAVE. " +
+			"Ensure application is running under Gramine SGX.", targetInfoPath, err)
+	}
+	
+	if len(data) < 32 {
+		return nil, fmt.Errorf("SECURITY: Invalid TARGETINFO data from %s: got %d bytes, need at least 32. " +
+			"MRENCLAVE must be present at offset 0.", targetInfoPath, len(data))
+	}
+	
+	// MRENCLAVE is first 32 bytes of TARGETINFO
+	mrenclave := make([]byte, 32)
+	copy(mrenclave, data[0:32])
+	
+	log.Info("Retrieved current enclave MRENCLAVE from Gramine pseudo-fs", 
+		"source", targetInfoPath,
+		"mrenclave", fmt.Sprintf("%x", mrenclave))
+	
+	return mrenclave, nil
 }
