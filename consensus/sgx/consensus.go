@@ -148,6 +148,27 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Create DCAP verifier directly to get concrete type
 	verifier := internalsgx.NewDCAPVerifier(true)
 	
+	// In mock mode, add the mock MRENCLAVE to the whitelist
+	if os.Getenv("XCHAIN_SGX_MODE") == "mock" {
+		log.Warn("SGX Mock Mode: Adding mock MRENCLAVE to whitelist")
+		mockMREnclave, err := internalsgx.ReadMREnclaveMock()
+		if err != nil {
+			log.Warn("Failed to read mock MRENCLAVE", "error", err)
+		} else {
+			verifier.AddAllowedMREnclave(mockMREnclave)
+			log.Info("Mock MRENCLAVE added to whitelist", "mrenclave", fmt.Sprintf("%x", mockMREnclave))
+		}
+		
+		// Also add mock MRSIGNER to whitelist
+		mockMRSigner, err := internalsgx.ReadMRSignerMock()
+		if err != nil {
+			log.Warn("Failed to read mock MRSIGNER", "error", err)
+		} else {
+			verifier.AddAllowedMRSigner(mockMRSigner)
+			log.Info("Mock MRSIGNER added to whitelist", "mrsigner", fmt.Sprintf("%x", mockMRSigner))
+		}
+	}
+	
 	log.Info("=== SGX Consensus Engine Initialized ===")
 	log.Info("Next: Contract addresses", 
 		"governance", governanceAddr.Hex(),

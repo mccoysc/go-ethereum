@@ -70,6 +70,24 @@ func readMRSigner() ([]byte, error) {
 	return nil, fmt.Errorf("MRSIGNER not available - extract from Quote in real SGX")
 }
 
+// ReadMREnclaveMock exports the mock MRENCLAVE value for testing.
+// This is the same value used by the attestor in mock mode.
+func ReadMREnclaveMock() ([]byte, error) {
+	hash := sha256.Sum256([]byte("mock-mrenclave-for-testing"))
+	mrenclave := make([]byte, 32)
+	copy(mrenclave, hash[:])
+	return mrenclave, nil
+}
+
+// ReadMRSignerMock exports the mock MRSIGNER value for testing.
+// This is the same value used by the attestor in mock mode.
+func ReadMRSignerMock() ([]byte, error) {
+	hash := sha256.Sum256([]byte("mock-mrsigner-for-testing"))
+	mrsigner := make([]byte, 32)
+	copy(mrsigner, hash[:])
+	return mrsigner, nil
+}
+
 // generateQuoteViaGramine generates an SGX Quote using Gramine's /dev/attestation interface.
 // This function is used by both native and fallback implementations for Quote-only operations.
 func generateQuoteViaGramine(reportData []byte) ([]byte, error) {

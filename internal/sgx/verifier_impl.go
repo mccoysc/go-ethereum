@@ -154,6 +154,20 @@ func (v *DCAPVerifier) RemoveAllowedMREnclave(mrenclave []byte) {
 	delete(v.allowedMREnclave, string(mrenclave))
 }
 
+// AddAllowedMRSigner adds an MRSIGNER to the whitelist.
+func (v *DCAPVerifier) AddAllowedMRSigner(mrsigner []byte) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.allowedMRSigner[string(mrsigner)] = true
+}
+
+// RemoveAllowedMRSigner removes an MRSIGNER from the whitelist.
+func (v *DCAPVerifier) RemoveAllowedMRSigner(mrsigner []byte) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	delete(v.allowedMRSigner, string(mrsigner))
+}
+
 // verifyQuoteSignature verifies the quote signature.
 // In a real implementation, this would call Intel DCAP libraries via CGO.
 // For now, we provide a mock implementation for testing.
