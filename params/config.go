@@ -515,13 +515,16 @@ func (c CliqueConfig) String() string {
 
 // SGXConfig is the consensus engine configs for SGX-based PoA sealing.
 type SGXConfig struct {
-	Period uint64 `json:"period"` // Number of seconds between blocks to enforce
-	Epoch  uint64 `json:"epoch"`  // Epoch length to reset votes and checkpoint
+	Period             uint64         `json:"period"`             // Number of seconds between blocks to enforce
+	Epoch              uint64         `json:"epoch"`              // Epoch length to reset votes and checkpoint
+	GovernanceContract common.Address `json:"governanceContract"` // Address of the governance contract
+	SecurityConfig     common.Address `json:"securityConfig"`     // Address of the security config contract
+	IncentiveContract  common.Address `json:"incentiveContract"`  // Address of the incentive contract
 }
 
 // String implements the stringer interface, returning the consensus engine details.
-func (c *SGXConfig) String() string {
-	return fmt.Sprintf("sgx(period: %d, epoch: %d)", c.Period, c.Epoch)
+func (c SGXConfig) String() string {
+	return fmt.Sprintf("sgx(period: %d, epoch: %d, governance: %s)", c.Period, c.Epoch, c.GovernanceContract.Hex())
 }
 
 // String implements the fmt.Stringer interface, returning a string representation
@@ -1394,7 +1397,7 @@ type Rules struct {
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsAmsterdam, IsVerkle                                   bool
-	IsSGX                                                   bool
+	IsSGX                                                   bool // SGX consensus enabled
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1427,6 +1430,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsAmsterdam:      isMerge && c.IsAmsterdam(num, timestamp),
 		IsVerkle:         isVerkle,
 		IsEIP4762:        isVerkle,
-		IsSGX:            c.SGX != nil, // SGX consensus uses remote attestation instead of PoW
+		IsSGX:            c.SGX != nil, // SGX consensus is enabled if config exists
 	}
 }

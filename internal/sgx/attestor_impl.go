@@ -335,7 +335,7 @@ func (a *GramineAttestor) GetProducerID() ([]byte, error) {
 	// Derive Ethereum address from public key
 	pubKeyBytes := elliptic.Marshal(a.privateKey.Curve, a.privateKey.PublicKey.X, a.privateKey.PublicKey.Y)
 	hash := crypto.Keccak256(pubKeyBytes[1:]) // Skip the 0x04 prefix
-	return hash[12:], nil // Take last 20 bytes as Ethereum address
+	return hash[12:], nil                     // Take last 20 bytes as Ethereum address
 }
 
 // SignInEnclave signs data using the enclave's private key.
@@ -343,12 +343,12 @@ func (a *GramineAttestor) GetProducerID() ([]byte, error) {
 func (a *GramineAttestor) SignInEnclave(data []byte) ([]byte, error) {
 	// Hash the data
 	hash := crypto.Keccak256(data)
-	
+
 	// Sign using private key
 	signature, err := crypto.Sign(hash, a.privateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign: %w", err)
 	}
-	
+
 	return signature, nil
 }
