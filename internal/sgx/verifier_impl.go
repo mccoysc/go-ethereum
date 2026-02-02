@@ -462,35 +462,258 @@ func (v *DCAPVerifier) extractQuoteFromCertificate(certPEM []byte) ([]byte, erro
 }
 
 // extractQuoteFromRawDER extracts quote from raw DER certificate bytes
-// This avoids issues with non-standard X.509 extensions
+// Matches gramine sgx-quote-verify.js extractExtensionByOid function
 func (v *DCAPVerifier) extractQuoteFromRawDER(derBytes []byte) ([]byte, error) {
-	// OID for Intel SGX Quote: 1.2.840.113741.1.13.1
-	// In DER encoding: 06 0B 2A 86 48 86 F8 4D 01 0D 01
-	sgxQuoteOID := []byte{0x06, 0x0B, 0x2A, 0x86, 0x48, 0x86, 0xF8, 0x4D, 0x01, 0x0D, 0x01}
+	// Try multiple OIDs
+	// TCG DICE: 2.23.133.5.4.9
+	tcgOID := v.oidToBytes("2.23.133.5.4.9")
+	// Intel SGX v2: 1.2.840.113741.1.13.2  
+	intelOIDv2 := v.oidToBytes("1.2.840.113741.1.13.2")
+	// Intel SGX v1: 1.2.840.113741.1.13.1
+	intelOIDv1 := v.oidToBytes("1.2.840.113741.1.13.1")
 	
-	// Search for the OID in the DER bytes
-	for i := 0; i < len(derBytes)-len(sgxQuoteOID); i++ {
-		if bytes.Equal(derBytes[i:i+len(sgxQuoteOID)], sgxQuoteOID) {
-			// Found OID, now extract the value
-			// Skip past OID
-			pos := i + len(sgxQuoteOID)
+	for _, targetOID := range [][]byte{tcgOID, intelOIDv2, intelOIDv1} {
+		value, err := v.extractExtensionByOid(derBytes, targetOID)
+		if err == nil && value != nil {
+			return value, nil
+		}
+	}
+	
+	return nil, errors.New("no SGX quote extension found")
+}
+
+// oidToBytes converts OID string like "1.2.840.113741" to DER-encoded bytes
+// Matches JS oidToBytes function
+func (v *DCAPVerifier) oidToBytes(oid string) []byte {
+	parts := []int{}
+	for _, part := range bytes.Split([]byte(oid), []byte(".")) {
+		num := 0
+		for _, b := range part {
+			num = num*10 + int(b-'0')
+		}
+		parts = append(parts, num)
+	}
+	
+	if len(parts) < 2 {
+		return nil
+	}
+	
+	// First byte encodes first two parts
+	result := []byte{byte(parts[0]*40 + parts[1])}
+	
+	// Encode remaining parts
+	for i := 2; i < len(parts); i++ {
+		value := parts[i]
+		if value == 0 {
+			result = append(result, 0)
+			continue
+		}
+		
+		encoded := []byte{}
+		for value > 0 {
+			b := byte(value & 0x7F)
+			value >>= 7
+			if len(encoded) > 0 {
+				b |= 0x80
+			}
+			encoded = append([]byte{b}, encoded...)
+		}
+		result = append(result, encoded...)
+	}
+	
+	// Prepend tag and length
+	return append([]byte{0x06, byte(len(result))}, result...)
+}
+
+// extractExtensionByOid extracts extension value by OID from DER certificate
+// Matches JS extractExtensionByOid function exactly
+func (v *DCAPVerifier) extractExtensionByOid(derBuffer []byte, targetOidBytes []byte) ([]byte, error) {
+	pos := 0
+	
+	readLength := func() (int, error) {
+		if pos >= len(derBuffer) {
+			return 0, errors.New("unexpected end of DER data")
+		}
+		first := derBuffer[pos]
+		pos++
+		
+		if (first & 0x80) == 0 {
+			return int(first), nil
+		}
+		
+		numOctets := int(first & 0x7F)
+		if numOctets == 0 || numOctets > 4 {
+			return 0, errors.New("invalid DER length encoding")
+		}
+		
+		length := 0
+		for i := 0; i < numOctets; i++ {
+			if pos >= len(derBuffer) {
+				return 0, errors.New("unexpected end of DER data")
+			}
+			length = (length << 8) | int(derBuffer[pos])
+			pos++
+		}
+		return length, nil
+	}
+	
+	skipValue := func(length int) error {
+		pos += length
+		if pos > len(derBuffer) {
+			return errors.New("DER value extends beyond buffer")
+		}
+		return nil
+	}
+	
+	readBytes := func(length int) ([]byte, error) {
+		if pos+length > len(derBuffer) {
+			return nil, errors.New("not enough bytes to read")
+		}
+		bytes := derBuffer[pos : pos+length]
+		pos += length
+		return bytes, nil
+	}
+	
+	matchesOid := func(oidBytes []byte) bool {
+		if len(oidBytes) != len(targetOidBytes) {
+			return false
+		}
+		for i := 0; i < len(oidBytes); i++ {
+			if oidBytes[i] != targetOidBytes[i] {
+				return false
+			}
+		}
+		return true
+	}
+	
+	// Certificate must start with SEQUENCE
+	if derBuffer[pos] != 0x30 {
+		return nil, errors.New("certificate must start with SEQUENCE tag")
+	}
+	pos++
+	_, err := readLength()
+	if err != nil {
+		return nil, err
+	}
+	
+	// TBSCertificate must be a SEQUENCE
+	if derBuffer[pos] != 0x30 {
+		return nil, errors.New("TBSCertificate must be a SEQUENCE")
+	}
+	pos++
+	tbsLength, err := readLength()
+	if err != nil {
+		return nil, err
+	}
+	tbsEnd := pos + tbsLength
+	
+	// Search for extensions in TBSCertificate
+	for pos < tbsEnd {
+		tag := derBuffer[pos]
+		
+		// Extensions have tag 0xA3
+		if tag == 0xA3 {
+			pos++
+			_, err := readLength()
+			if err != nil {
+				return nil, err
+			}
 			
-			// The structure after OID is typically:
-			// OCTET STRING tag (04) + length + quote data
-			if pos < len(derBytes) && derBytes[pos] == 0x04 {
-				pos++
-				// Read length
-				length, bytesRead := v.parseDERLength(derBytes[pos:])
-				pos += bytesRead
-				
-				if pos+length <= len(derBytes) {
-					return derBytes[pos : pos+length], nil
+			// Extensions must be a SEQUENCE
+			if derBuffer[pos] != 0x30 {
+				return nil, errors.New("extensions must be a SEQUENCE")
+			}
+			pos++
+			extensionsLength, err := readLength()
+			if err != nil {
+				return nil, err
+			}
+			extensionsEnd := pos + extensionsLength
+			
+			// Iterate through extensions
+			for pos < extensionsEnd {
+				if derBuffer[pos] != 0x30 {
+					break
 				}
+				pos++
+				extLength, err := readLength()
+				if err != nil {
+					return nil, err
+				}
+				extEnd := pos + extLength
+				
+				// Read OID
+				if derBuffer[pos] != 0x06 {
+					pos = extEnd
+					continue
+				}
+				oidTag := derBuffer[pos]
+				pos++
+				oidLength, err := readLength()
+				if err != nil {
+					pos = extEnd
+					continue
+				}
+				oidBytes, err := readBytes(oidLength)
+				if err != nil {
+					pos = extEnd
+					continue
+				}
+				// Prepend tag and length to match format
+				fullOidBytes := append([]byte{oidTag, byte(oidLength)}, oidBytes...)
+				
+				// Check for critical flag
+				if pos < extEnd && derBuffer[pos] == 0x01 {
+					pos++
+					boolLength, _ := readLength()
+					_, _ = readBytes(boolLength)
+				}
+				
+				// Read extension value (OCTET STRING)
+				if pos >= extEnd {
+					pos = extEnd
+					continue
+				}
+				
+				if derBuffer[pos] != 0x04 {
+					pos = extEnd
+					continue
+				}
+				pos++
+				valueLength, err := readLength()
+				if err != nil {
+					pos = extEnd
+					continue
+				}
+				valueBytes, err := readBytes(valueLength)
+				if err != nil {
+					pos = extEnd
+					continue
+				}
+				
+				// Check if OID matches
+				if matchesOid(fullOidBytes) {
+					return valueBytes, nil
+				}
+				
+				pos = extEnd
+			}
+			
+			return nil, errors.New("extension not found")
+		} else {
+			// Skip other fields
+			pos++
+			length, err := readLength()
+			if err != nil {
+				return nil, err
+			}
+			if err := skipValue(length); err != nil {
+				return nil, err
 			}
 		}
 	}
 	
-	return nil, errors.New("SGX Quote OID not found in DER")
+	return nil, errors.New("extensions not found in certificate")
 }
 
 // parseDERLength parses DER length encoding
