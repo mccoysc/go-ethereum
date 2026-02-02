@@ -518,3 +518,58 @@ return i
 }
 return -1
 }
+
+// GetWhitelistFromManifest reads whitelist configuration from manifest
+func GetWhitelistFromManifest() ([]string, []string, error) {
+manifestPath, err := GetManifestPath()
+if err != nil {
+return nil, nil, err
+}
+
+config, err := ReadManifestConfig(manifestPath)
+if err != nil {
+return nil, nil, err
+}
+
+var mrenclaves []string
+var mrsigners []string
+
+// Read MRENCLAVE whitelist (comma-separated)
+if mrenclavesStr, ok := config["XCHAIN_ALLOWED_MRENCLAVES"]; ok && mrenclavesStr != "" {
+// Split by comma and trim spaces
+for _, item := range splitByComma(mrenclavesStr) {
+item = trimSpace(item)
+if item != "" {
+mrenclaves = append(mrenclaves, item)
+}
+}
+}
+
+// Read MRSIGNER whitelist (comma-separated)
+if mrsignersStr, ok := config["XCHAIN_ALLOWED_MRSIGNERS"]; ok && mrsignersStr != "" {
+for _, item := range splitByComma(mrsignersStr) {
+item = trimSpace(item)
+if item != "" {
+mrsigners = append(mrsigners, item)
+}
+}
+}
+
+return mrenclaves, mrsigners, nil
+}
+
+// splitByComma splits a string by comma
+func splitByComma(s string) []string {
+var parts []string
+start := 0
+for i := 0; i < len(s); i++ {
+if s[i] == ',' {
+parts = append(parts, s[start:i])
+start = i + 1
+}
+}
+if start < len(s) {
+parts = append(parts, s[start:])
+}
+return parts
+}

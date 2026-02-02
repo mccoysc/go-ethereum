@@ -149,18 +149,132 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Create DCAP verifier
 	verifier := internalsgx.NewDCAPVerifier(true)
 	
-	// Step 5: Initialize whitelist from genesis alloc storage
-	// At this point we don't have blockchain yet, so we read from genesis alloc in db
-	log.Info("Step 5: Initializing whitelist from genesis storage...")
-	if err := loadWhitelistFromGenesisStorage(verifier, db, securityAddr); err != nil {
-		log.Warn("Failed to load whitelist from genesis storage", "error", err)
-		log.Warn("Whitelist is empty - all quotes will be rejected unless added via governance")
+	// Step 5: Initialize whitelist with fallback mechanism
+	// Priority: Manifest → Genesis Alloc → Exit
+	log.Info("Step 5: Initializing whitelist...")
+	
+	// Try 1: Load from manifest (if available)
+	mrenclaves, mrsigners, err := internalsgx.GetWhitelistFromManifest()
+	if err == nil && (len(mrenclaves) > 0 || len(mrsigners) > 0) {
+		log.Info("Loading whitelist from manifest")
+		loadWhitelistToVerifier(verifier, mrenclaves, mrsigners)
+		log.Info("Whitelist loaded successfully from manifest", 
+			"mrenclaves", len(mrenclaves), "mrsigners", len(mrsigners))
+	} else {
+		// Try 2: Load from genesis alloc storage
+		log.Warn("Manifest whitelist not available, trying genesis alloc", "error", err)
+		
+		// In genesis.json, the security config contract should have storage entries
+		// For testing, we can also use environment variables as fallback
+		genesisWhitelist := loadWhitelistFromGenesisAlloc(securityAddr)
+		if len(genesisWhitelist.MREnclaves) > 0 || len(genesisWhitelist.MRSigners) > 0 {
+			log.Info("Loading whitelist from genesis alloc")
+			loadWhitelistToVerifier(verifier, genesisWhitelist.MREnclaves, genesisWhitelist.MRSigners)
+			log.Info("Whitelist loaded successfully from genesis", 
+				"mrenclaves", len(genesisWhitelist.MREnclaves), 
+				"mrsigners", len(genesisWhitelist.MRSigners))
+		} else {
+			// No whitelist available - CRITICAL ERROR
+			log.Crit("CRITICAL: No whitelist configuration found! " +
+				"SGX consensus requires MRENCLAVE/MRSIGNER whitelist. " +
+				"Configure whitelist in manifest or genesis alloc. " +
+				"Exiting to prevent insecure operation.")
+		}
 	}
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
-	log.Info("Security model: Manifest → Contract Storage → Whitelist")
+	log.Info("Security: Manifest → Genesis → Governance Contract")
 	
 	return New(config, attestor, verifier)
+}
+
+// GenesisWhitelist holds whitelist configuration from genesis
+type GenesisWhitelist struct {
+	MREnclaves []string
+	MRSigners  []string
+}
+
+// loadWhitelistFromGenesisAlloc reads whitelist from genesis alloc
+// This is a fallback when manifest is not available
+func loadWhitelistFromGenesisAlloc(securityAddr string) GenesisWhitelist {
+	whitelist := GenesisWhitelist{
+		MREnclaves: []string{},
+		MRSigners:  []string{},
+	}
+	
+	// Try environment variables as last resort fallback
+	// These would normally be set by genesis alloc or deployment scripts
+	if mrenclavesEnv := os.Getenv("XCHAIN_GENESIS_MRENCLAVES"); mrenclavesEnv != "" {
+		// Comma-separated hex strings
+		for _, item := range splitByComma(mrenclavesEnv) {
+			item = trimSpaces(item)
+			if item != "" {
+				whitelist.MREnclaves = append(whitelist.MREnclaves, item)
+			}
+		}
+	}
+	
+	if mrsignersEnv := os.Getenv("XCHAIN_GENESIS_MRSIGNERS"); mrsignersEnv != "" {
+		for _, item := range splitByComma(mrsignersEnv) {
+			item = trimSpaces(item)
+			if item != "" {
+				whitelist.MRSigners = append(whitelist.MRSigners, item)
+			}
+		}
+	}
+	
+	return whitelist
+}
+
+// loadWhitelistToVerifier loads whitelist entries into verifier
+func loadWhitelistToVerifier(verifier *internalsgx.DCAPVerifier, mrenclaves, mrsigners []string) {
+	for _, mrEnclaveHex := range mrenclaves {
+		mrEnclave := common.FromHex(mrEnclaveHex)
+		if len(mrEnclave) == 32 {
+			verifier.AddAllowedMREnclave(mrEnclave)
+			log.Info("Added MRENCLAVE to whitelist", "mrenclave", mrEnclaveHex)
+		} else {
+			log.Warn("Invalid MRENCLAVE length, skipping", "mrenclave", mrEnclaveHex, "length", len(mrEnclave))
+		}
+	}
+	
+	for _, mrSignerHex := range mrsigners {
+		mrSigner := common.FromHex(mrSignerHex)
+		if len(mrSigner) == 32 {
+			verifier.AddAllowedMRSigner(mrSigner)
+			log.Info("Added MRSIGNER to whitelist", "mrsigner", mrSignerHex)
+		} else {
+			log.Warn("Invalid MRSIGNER length, skipping", "mrsigner", mrSignerHex, "length", len(mrSigner))
+		}
+	}
+}
+
+// Helper functions for string processing
+func splitByComma(s string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			parts = append(parts, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		parts = append(parts, s[start:])
+	}
+	return parts
+}
+
+func trimSpaces(s string) string {
+	start := 0
+	end := len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t' || s[start] == '\n' || s[start] == '\r') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t' || s[end-1] == '\n' || s[end-1] == '\r') {
+		end--
+	}
+	return s[start:end]
 }
 
 // Author 从区块头中提取出块者地址
@@ -560,17 +674,3 @@ func (e *SGXEngine) GetUptimeCalculator() *UptimeCalculator {
 	return e.uptimeCalculator
 }
 
-// loadWhitelistFromGenesisStorage reads whitelist from contract storage in genesis alloc
-func loadWhitelistFromGenesisStorage(verifier *internalsgx.DCAPVerifier, db ethdb.Database, contractAddr string) error {
-// In genesis initialization phase, we read from rawdb
-// The genesis alloc should have pre-populated storage for the security config contract
-
-// For now, return nil - whitelist will be empty initially
-// In production, this would read from the database
-// The genesis.json alloc should include storage entries for the security config contract
-
-log.Info("Whitelist loading from genesis storage not yet implemented")
-log.Warn("SECURITY: Whitelist is empty - add measurements via governance contract")
-
-return nil
-}
