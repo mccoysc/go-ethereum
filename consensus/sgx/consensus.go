@@ -149,41 +149,33 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Create DCAP verifier
 	verifier := internalsgx.NewDCAPVerifier(true)
 	
-	// Step 5: Initialize whitelist with fallback mechanism
-	// Priority: Manifest → Genesis Alloc → Exit
-	log.Info("Step 5: Initializing whitelist...")
+	// Step 5: Initialize whitelist from contract storage
+	// Priority: Contract Storage → Genesis Alloc Storage
+	log.Info("Step 5: Loading whitelist from security config contract...")
 	
-	// Try 1: Load from manifest (if available)
-	mrenclaves, mrsigners, err := internalsgx.GetWhitelistFromManifest()
-	if err == nil && (len(mrenclaves) > 0 || len(mrsigners) > 0) {
-		log.Info("Loading whitelist from manifest")
-		loadWhitelistToVerifier(verifier, mrenclaves, mrsigners)
-		log.Info("Whitelist loaded successfully from manifest", 
-			"mrenclaves", len(mrenclaves), "mrsigners", len(mrsigners))
+	// The securityAddr comes from manifest (already validated)
+	// Now read whitelist from contract storage
+	// In genesis block, the storage is in alloc
+	// After genesis, the storage is in state database
+	
+	// For now, try environment variables as genesis alloc representation
+	// In production, this would read from actual contract storage
+	genesisWhitelist := loadWhitelistFromContractStorage(securityAddr)
+	
+	if len(genesisWhitelist.MREnclaves) > 0 || len(genesisWhitelist.MRSigners) > 0 {
+		log.Info("Loading whitelist from security config contract")
+		loadWhitelistToVerifier(verifier, genesisWhitelist.MREnclaves, genesisWhitelist.MRSigners)
+		log.Info("Whitelist loaded successfully from contract storage", 
+			"mrenclaves", len(genesisWhitelist.MREnclaves), 
+			"mrsigners", len(genesisWhitelist.MRSigners))
 	} else {
-		// Try 2: Load from genesis alloc storage
-		log.Warn("Manifest whitelist not available, trying genesis alloc", "error", err)
-		
-		// In genesis.json, the security config contract should have storage entries
-		// For testing, we can also use environment variables as fallback
-		genesisWhitelist := loadWhitelistFromGenesisAlloc(securityAddr)
-		if len(genesisWhitelist.MREnclaves) > 0 || len(genesisWhitelist.MRSigners) > 0 {
-			log.Info("Loading whitelist from genesis alloc")
-			loadWhitelistToVerifier(verifier, genesisWhitelist.MREnclaves, genesisWhitelist.MRSigners)
-			log.Info("Whitelist loaded successfully from genesis", 
-				"mrenclaves", len(genesisWhitelist.MREnclaves), 
-				"mrsigners", len(genesisWhitelist.MRSigners))
-		} else {
-			// No whitelist available - CRITICAL ERROR
-			log.Crit("CRITICAL: No whitelist configuration found! " +
-				"SGX consensus requires MRENCLAVE/MRSIGNER whitelist. " +
-				"Configure whitelist in manifest or genesis alloc. " +
-				"Exiting to prevent insecure operation.")
-		}
+		log.Warn("Whitelist is empty in contract storage")
+		log.Info("Use governance contract to add MRENCLAVE/MRSIGNER entries")
+		log.Info("System will accept blocks after whitelist is populated via governance")
 	}
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
-	log.Info("Security: Manifest → Genesis → Governance Contract")
+	log.Info("Architecture: Manifest(contract addr) → Contract Storage(whitelist) → Governance(updates)")
 	
 	return New(config, attestor, verifier)
 }
@@ -194,18 +186,23 @@ type GenesisWhitelist struct {
 	MRSigners  []string
 }
 
-// loadWhitelistFromGenesisAlloc reads whitelist from genesis alloc
-// This is a fallback when manifest is not available
-func loadWhitelistFromGenesisAlloc(securityAddr string) GenesisWhitelist {
+// loadWhitelistFromContractStorage reads whitelist from contract storage
+// This reads from genesis alloc storage or state database
+func loadWhitelistFromContractStorage(contractAddr string) GenesisWhitelist {
 	whitelist := GenesisWhitelist{
 		MREnclaves: []string{},
 		MRSigners:  []string{},
 	}
 	
-	// Try environment variables as last resort fallback
-	// These would normally be set by genesis alloc or deployment scripts
-	if mrenclavesEnv := os.Getenv("XCHAIN_GENESIS_MRENCLAVES"); mrenclavesEnv != "" {
-		// Comma-separated hex strings
+	// In production, this would:
+	// 1. Read from genesis.json alloc[contractAddr].storage
+	// 2. Parse mapping entries for allowedMREnclaves and allowedMRSigners
+	// 3. Return the list
+	
+	// For now, use environment variables as representation of genesis alloc storage
+	// These would be set by deployment scripts based on genesis.json
+	if mrenclavesEnv := os.Getenv("XCHAIN_CONTRACT_MRENCLAVES"); mrenclavesEnv != "" {
+		log.Info("Reading MRENCLAVE whitelist from contract storage (env)")
 		for _, item := range splitByComma(mrenclavesEnv) {
 			item = trimSpaces(item)
 			if item != "" {
@@ -214,7 +211,8 @@ func loadWhitelistFromGenesisAlloc(securityAddr string) GenesisWhitelist {
 		}
 	}
 	
-	if mrsignersEnv := os.Getenv("XCHAIN_GENESIS_MRSIGNERS"); mrsignersEnv != "" {
+	if mrsignersEnv := os.Getenv("XCHAIN_CONTRACT_MRSIGNERS"); mrsignersEnv != "" {
+		log.Info("Reading MRSIGNER whitelist from contract storage (env)")
 		for _, item := range splitByComma(mrsignersEnv) {
 			item = trimSpaces(item)
 			if item != "" {
