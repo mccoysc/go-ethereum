@@ -21,6 +21,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // InstanceID represents a unique hardware identifier for an SGX CPU.
@@ -205,45 +207,118 @@ func extractEPIDInstanceID(quote []byte) []byte {
 }
 
 // extractDCAPInstanceID extracts the platform instance ID from a DCAP quote.
-// DCAP quotes include certification data with platform-specific identifiers.
+// 
+// Recommended approach: FMSPC + PCK Public Key
+// - FMSPC: Family-Model-Stepping-Platform-CustomSKU (6 bytes, from PCK cert)
+// - PCK Public Key: Platform Certification Key public key (from PCK cert)
+// - Combination ensures unique identification per platform
+//
+// Fallback: PPID (Platform Provisioning ID) if FMSPC extraction fails
 func extractDCAPInstanceID(quote []byte) []byte {
-	// DCAP quote structure (v3):
-	// - Quote header: 48 bytes
-	// - ISV enclave report: 384 bytes (total 432)
-	// - Quote signature data: variable
-	//
-	// The signature data for DCAP includes:
-	// - ECDSA signature
-	// - Attestation key
-	// - Certification data (QE Report, QE Report Signature, Auth Data)
-	// - PCK Certificate Chain
-	//
-	// Platform identifiers include:
-	// - PPID (Platform Provisioning ID) - from certification data
-	// - CPUSVN (CPU Security Version Number) - in report body
-	// - PCESVN (PCE Security Version Number) - from QE report
-	// - FMSPC (Family-Model-Stepping-Platform-CustomSKU) - from cert
-
 	if len(quote) < 432 {
 		return nil
 	}
 
-	// For simplified implementation, create composite ID from:
-	// 1. CPUSVN (16 bytes at offset 64 in report)
-	// 2. Report data subset (for uniqueness across same platform)
+	offset := 432 // Start of signature data
 
-	instanceID := make([]byte, 32)
+	// Navigate to certification data
+	// Skip signature
+	if len(quote) < offset+4 {
+		return extractFallbackInstanceID(quote)
+	}
+	sigLen := binary.LittleEndian.Uint32(quote[offset : offset+4])
+	offset += 4 + int(sigLen)
 
-	// Copy CPUSVN (16 bytes from offset 64)
-	if len(quote) >= 80 {
-		copy(instanceID[0:16], quote[64:80])
+	// Skip attestation public key (64 bytes)
+	offset += 64
+
+	// Skip QE Report (384 bytes)
+	offset += 384
+
+	// Skip QE Report Signature
+	if len(quote) < offset+4 {
+		return extractFallbackInstanceID(quote)
+	}
+	qeReportSigLen := binary.LittleEndian.Uint32(quote[offset : offset+4])
+	offset += 4 + int(qeReportSigLen)
+
+	// Skip QE Auth Data
+	if len(quote) < offset+2 {
+		return extractFallbackInstanceID(quote)
+	}
+	qeAuthDataLen := binary.LittleEndian.Uint16(quote[offset : offset+2])
+	offset += 2 + int(qeAuthDataLen)
+
+	// Read Cert Data Type
+	if len(quote) < offset+2 {
+		return extractFallbackInstanceID(quote)
+	}
+	certDataType := binary.LittleEndian.Uint16(quote[offset : offset+2])
+	offset += 2
+
+	// Read Cert Data Size
+	if len(quote) < offset+4 {
+		return extractFallbackInstanceID(quote)
+	}
+	certDataSize := binary.LittleEndian.Uint32(quote[offset : offset+4])
+	offset += 4
+
+	// For PCK certificate chain (Type 1-4), extract FMSPC + PCK Public Key
+	if certDataType >= 1 && certDataType <= 4 && len(quote) >= offset+int(certDataSize) {
+		certData := quote[offset : offset+int(certDataSize)]
+		
+		// Extract FMSPC and PCK Public Key from certificate chain
+		// For simplicity, hash the entire cert chain which includes both
+		// In production, would parse X.509 cert to extract FMSPC extension and public key
+		// FMSPC is in SGX extension OID 1.2.840.113741.1.13.1.4
+		// PCK Public Key is in the certificate's SubjectPublicKeyInfo
+		
+		// Hash cert data to create unique instance ID
+		// This includes FMSPC + PCK Public Key + other unique platform info
+		instanceID := crypto.Keccak256(certData)
+		return instanceID
 	}
 
-	// Copy part of attributes (16 bytes from offset 96)
+	// For PPID-based certification (Type 5-6), use PPID as fallback
+	if certDataType == 5 || certDataType == 6 && len(quote) >= offset+16 {
+		ppid := make([]byte, 16)
+		copy(ppid, quote[offset:offset+16])
+		
+		// Extend to 32 bytes
+		instanceID := crypto.Keccak256(ppid)
+		return instanceID
+	}
+
+	// Final fallback
+	return extractFallbackInstanceID(quote)
+}
+
+// extractFallbackInstanceID creates a fallback instance ID from basic quote fields.
+// This should only be used when PCK certificate extraction fails.
+func extractFallbackInstanceID(quote []byte) []byte {
+	if len(quote) < 432 {
+		return nil
+	}
+
+	// Create composite ID from:
+	// 1. CPUSVN (16 bytes at offset 48)
+	// 2. Attributes (16 bytes at offset 96)
+	// Hash them together for uniqueness
+	
+	composite := make([]byte, 32)
+	
+	// Copy CPUSVN
+	if len(quote) >= 64 {
+		copy(composite[0:16], quote[48:64])
+	}
+	
+	// Copy Attributes
 	if len(quote) >= 112 {
-		copy(instanceID[16:32], quote[96:112])
+		copy(composite[16:32], quote[96:112])
 	}
-
+	
+	// Hash for better distribution
+	instanceID := crypto.Keccak256(composite)
 	return instanceID
 }
 

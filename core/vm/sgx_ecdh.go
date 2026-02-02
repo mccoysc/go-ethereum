@@ -46,14 +46,6 @@ func (c *SGXECDH) Run(input []byte) ([]byte, error) {
 // Input format: keyID (32 bytes) + peerPubKey (64 bytes) + optional kdfParams (variable)
 // Output format: newKeyID (32 bytes)
 func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 0. Check if this is a read-only call (eth_call)
-	// ECDH generates shared secret and creates new key, MUST be a transaction
-	if ctx.ReadOnly {
-		return nil, errors.New("ECDH cannot be called in read-only mode (eth_call). " +
-			"This operation generates shared secret and creates new keys on-chain. " +
-			"Use eth_sendTransaction to ensure key exchange is recorded.")
-	}
-	
 	// 1. Parse input
 	if len(input) < 96 {
 		return nil, errors.New("invalid input: expected keyID (32 bytes) + peerPubKey (64 bytes)")

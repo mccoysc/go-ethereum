@@ -39,10 +39,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Go 1.21（添加重试和更好的错误处理）
-RUN wget --timeout=30 --tries=3 https://go.dev/dl/go1.21.6.linux-amd64.tar.gz || \
-    wget --timeout=30 --tries=3 https://golang.google.cn/dl/go1.21.6.linux-amd64.tar.gz || \
-    (echo "Failed to download Go" && exit 1) && \
+# 安装 Go 1.21
+RUN wget -q https://go.dev/dl/go1.21.6.linux-amd64.tar.gz && \
     tar -C /usr/local -xzf go1.21.6.linux-amd64.tar.gz && \
     rm go1.21.6.linux-amd64.tar.gz
 

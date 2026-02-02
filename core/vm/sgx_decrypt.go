@@ -48,17 +48,8 @@ func (c *SGXDecrypt) Run(input []byte) ([]byte, error) {
 
 // RunWithContext executes the contract with SGX context
 // Input format: keyID (32 bytes) + ciphertext (variable: nonce + encrypted + tag)
-// Output format: plaintext (variable) - ONLY in read-only mode
+// Output format: plaintext (variable)
 func (c *SGXDecrypt) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 0. CRITICAL: DECRYPT returns secret data (plaintext)
-	// In writable mode (transaction), return values go on-chain
-	// Therefore, DECRYPT can ONLY be used in read-only mode (eth_call)
-	if !ctx.ReadOnly {
-		return nil, errors.New("DECRYPT can ONLY be called in read-only mode (eth_call). " +
-			"Plaintext is secret data and cannot be returned in transactions (which go on-chain). " +
-			"Use eth_call for off-chain decryption queries.")
-	}
-	
 	// 1. Parse input
 	if len(input) < 32 {
 		return nil, errors.New("invalid input: missing key ID")
@@ -90,10 +81,8 @@ func (c *SGXDecrypt) RunWithContext(ctx *SGXContext, input []byte) ([]byte, erro
 	}
 	
 	// 5. Record permission usage (increment counter)
-	// NOTE: In read-only mode, this does NOT persist (no state change)
-	// This is acceptable for read operations
 	_ = ctx.PermissionManager.UsePermission(keyID, ctx.Caller, PermissionDecrypt)
 	
-	// 6. Return plaintext (ONLY in read-only mode, never goes on-chain)
+	// 6. Return plaintext
 	return plaintext, nil
 }

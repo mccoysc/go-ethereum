@@ -31,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/sgx"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/filtermaps"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -459,6 +460,18 @@ func (s *Ethereum) Start() error {
 	// start log indexer
 	s.filterMaps.Start()
 	go s.updateFilterMapsHeads()
+	
+	// Initialize SGX block producer if using SGX consensus
+	if sgxEngine, ok := s.engine.(*sgx.SGXEngine); ok {
+		log.Info("SGX engine detected, initializing block producer")
+		txPoolAdapter := sgx.NewTxPoolAdapter(s.txPool)
+		if err := sgxEngine.InitBlockProducer(txPoolAdapter, s.blockchain); err != nil {
+			log.Error("Failed to initialize SGX block producer", "err", err)
+		} else {
+			log.Info("SGX block producer started successfully")
+		}
+	}
+	
 	return nil
 }
 

@@ -26,31 +26,71 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/big"
+	"os"
 	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 // GramineAttestor implements the Attestor interface using Gramine's
 // /dev/attestation interface for Quote generation.
 // Note: For full RA-TLS support, use GramineRATLSAttestor with CGO.
 type GramineAttestor struct {
-	privateKey *ecdsa.PrivateKey
-	mrenclave  []byte
-	mrsigner   []byte
-	isSGX      bool // Whether we're running in a real SGX environment
+	privateKey      *ecdsa.PrivateKey // P-384 for RA-TLS
+	signingKey      *ecdsa.PrivateKey // secp256k1 for Ethereum block signing
+	mrenclave       []byte
+	mrsigner        []byte
+	isSGX           bool // Whether we're running in a real SGX environment
 }
 
 // NewGramineAttestor creates a new Gramine-based attestor.
 // It will detect if running in an SGX environment and fall if not.
-// This implementation uses P-384 curve as required by the specification.
+// This implementation uses P-384 curve for RA-TLS as required by the specification,
+// and secp256k1 for Ethereum block signing.
 func NewGramineAttestor() (*GramineAttestor, error) {
-	// Generate TLS key pair using P-384 (SECP384R1) as required by spec
+	// Generate TLS key pair using P-384 (SECP384R1) as required by RA-TLS spec
 	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate key: %w", err)
+		return nil, fmt.Errorf("failed to generate TLS key: %w", err)
+	}
+
+	// Generate or derive signing key using secp256k1 for Ethereum compatibility
+	var signingKey *ecdsa.PrivateKey
+	
+	// Check if we're in SGX mode or mock mode
+	sgxMode := os.Getenv("XCHAIN_SGX_MODE")
+	
+	if sgxMode == "mock" {
+		// In mock mode, use a deterministic key for testing
+		// This ensures the same ProducerID across restarts
+		// Real SGX would use sealing key to persist this
+		log.Warn("SGX Mock Mode: Using deterministic test key (NOT for production!)")
+		
+		// Use a fixed seed for deterministic key generation in test mode
+		// In production, this should be derived from SGX sealing key
+		deterministicSeed := []byte("xchain-sgx-test-key-do-not-use-in-production")
+		hash := crypto.Keccak256(deterministicSeed)
+		signingKey, err = crypto.ToECDSA(hash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create deterministic signing key: %w", err)
+		}
+	} else {
+		// In real SGX mode, we should derive the key from SGX sealing key
+		// For now, generate randomly (TODO: implement sealing key derivation)
+		signingKey, err = crypto.GenerateKey()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate signing key: %w", err)
+		}
+		
+		// TODO: In production SGX, derive from sealing key:
+		// sealingKey := getSGXSealingKey()
+		// signingKey = deriveFromSealingKey(sealingKey)
 	}
 
 	attestor := &GramineAttestor{
 		privateKey: privateKey,
+		signingKey: signingKey,
 	}
 
 	// Read MRENCLAVE using helper function
@@ -59,6 +99,17 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 		return nil, fmt.Errorf("failed to read MRENCLAVE: %w", err)
 	}
 	attestor.mrenclave = mrenclave
+	
+	// Read MRSIGNER using helper function
+	mrsigner, err := readMRSigner()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read MRSIGNER: %w", err)
+	}
+	attestor.mrsigner = mrsigner
+	
+	// Determine if we're in real SGX environment
+	attestor.isSGX = (sgxMode != "mock")
+	
 	return attestor, nil
 }
 
@@ -325,4 +376,66 @@ func (a *GramineAttestor) GetMRSigner() []byte {
 	result := make([]byte, len(a.mrsigner))
 	copy(result, a.mrsigner)
 	return result
+}
+
+// GetProducerID returns the producer ID (Ethereum address, 20 bytes)
+// derived from the public key used for signing blocks.
+// GetProducerID returns the CPU instance ID as the producer identifier.
+// In SGX PoA consensus, each physical CPU can only act as one producer.
+// The instance ID is extracted from the Quote and ensures uniqueness per hardware.
+func (a *GramineAttestor) GetProducerID() ([]byte, error) {
+	// Generate a minimal Quote to extract instance ID
+	// We use a fixed nonce since we only need the instance ID
+	nonce := make([]byte, 32)
+	quote, err := a.GenerateQuote(nonce)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate quote for instance ID: %w", err)
+	}
+	
+	// Extract instance ID from the quote
+	instanceID, err := ExtractInstanceID(quote)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract instance ID: %w", err)
+	}
+	
+	// Use first 20 bytes of instance ID as Ethereum-compatible address
+	// This ensures compatibility with address-based systems
+	producerID := make([]byte, 20)
+	if len(instanceID.CPUInstanceID) >= 20 {
+		copy(producerID, instanceID.CPUInstanceID[:20])
+	} else {
+		// Pad with zeros if instance ID is shorter
+		copy(producerID, instanceID.CPUInstanceID)
+	}
+	
+	return producerID, nil
+}
+
+// GetSigningKey returns the secp256k1 signing key for external access.
+// This is needed for extracting the public key to embed in Quote.
+func (a *GramineAttestor) GetSigningKey() *ecdsa.PrivateKey {
+	return a.signingKey
+}
+
+// GetSigningPublicKey returns the signing public key in uncompressed format (65 bytes).
+// Format: 0x04 + X coordinate (32 bytes) + Y coordinate (32 bytes)
+func (a *GramineAttestor) GetSigningPublicKey() []byte {
+	return crypto.FromECDSAPub(&a.signingKey.PublicKey)
+}
+
+// SignInEnclave signs data using the enclave's private key.
+// Returns an ECDSA signature (65 bytes: r + s + v).
+// SignInEnclave signs data using the enclave's secp256k1 signing key.
+// This produces an Ethereum-compatible ECDSA signature.
+func (a *GramineAttestor) SignInEnclave(data []byte) ([]byte, error) {
+	// Hash the data
+	hash := crypto.Keccak256(data)
+
+	// Sign using secp256k1 signing key (Ethereum-compatible)
+	signature, err := crypto.Sign(hash, a.signingKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign: %w", err)
+	}
+
+	return signature, nil
 }

@@ -42,10 +42,6 @@ type SGXContext struct {
 	// Timestamp
 	Timestamp uint64
 	
-	// ReadOnly indicates if this is a read-only call (eth_call)
-	// State-modifying operations must check this and fail if true
-	ReadOnly bool
-	
 	// Key storage
 	KeyStore KeyStore
 	

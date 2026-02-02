@@ -22,6 +22,10 @@ type Attestor interface {
 
 	// GetProducerID 获取出块者 ID（以太坊地址，20 字节）
 	GetProducerID() ([]byte, error)
+	
+	// GetSigningPublicKey 获取签名公钥（用于写入Quote）
+	// 返回未压缩格式的secp256k1公钥（65字节：0x04 + X + Y）
+	GetSigningPublicKey() []byte
 }
 
 // Verifier SGX 验证接口
@@ -34,11 +38,23 @@ type Verifier interface {
 	// VerifySignature 验证 ECDSA 签名
 	// data: 被签名的数据
 	// signature: ECDSA 签名（65 字节）
-	// producerID: 出块者 ID（以太坊地址，20 字节）
-	VerifySignature(data, signature, producerID []byte) error
+	// publicKey: 签名公钥（65字节未压缩格式：0x04 + X + Y）
+	VerifySignature(data, signature, publicKey []byte) error
 
 	// ExtractProducerID 从 SGX Quote 中提取出块者 ID
 	ExtractProducerID(quote []byte) ([]byte, error)
+	
+	// ExtractQuoteUserData 从 SGX Quote 中提取 userData 字段
+	// 用于验证Quote中嵌入的数据（如区块哈希或公钥）
+	ExtractQuoteUserData(quote []byte) ([]byte, error)
+	
+	// ExtractPublicKeyFromQuote 从 SGX Quote 的 ReportData 中提取公钥
+	// 返回未压缩格式的secp256k1公钥（65字节：0x04 + X + Y）
+	ExtractPublicKeyFromQuote(quote []byte) ([]byte, error)
+	
+	// ExtractInstanceID 从 SGX Quote 中提取CPU实例ID
+	// Instance ID用于确保一个CPU只能作为一个生产者
+	ExtractInstanceID(quote []byte) ([]byte, error)
 }
 
 // TxPool 交易池接口
@@ -50,7 +66,7 @@ type TxPool interface {
 	PendingCount() int
 
 	// Add 添加交易
-	Add(txs []*types.Transaction, local bool, sync bool) []error
+	Add(txs []*types.Transaction, sync bool) []error
 
 	// Remove 移除交易
 	Remove(txHash common.Hash)

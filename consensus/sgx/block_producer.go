@@ -2,12 +2,17 @@ package sgx
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/trie"
 )
 
 // BlockProducer 区块生产者
@@ -102,12 +107,20 @@ func (bp *BlockProducer) tryProduceBlock() {
 		}
 	}
 
-	if !bp.onDemandCtrl.ShouldProduceBlock(bp.lastBlockTime, pendingTxCount, pendingGasTotal) {
+	shouldProduce := bp.onDemandCtrl.ShouldProduceBlock(bp.lastBlockTime, pendingTxCount, pendingGasTotal)
+	
+	if !shouldProduce {
 		return
 	}
 
 	// 生产区块
+	log.Info("BlockProducer: Attempting to produce block", 
+		"pendingTxs", pendingTxCount,
+		"pendingGas", pendingGasTotal,
+		"elapsed", time.Since(bp.lastBlockTime))
+	
 	if err := bp.produceBlock(); err != nil {
+		log.Error("BlockProducer: Failed to produce block", "err", err)
 		return
 	}
 
@@ -123,24 +136,26 @@ func (bp *BlockProducer) produceBlock() error {
 	
 	pending := bp.txPool.Pending(false)
 	var transactions []*types.Transaction
-	gasUsed := uint64(0)
+	gasLimit := uint64(0)
 	
 	// 收集交易直到达到 Gas 限制或交易数量限制
 	for _, txs := range pending {
 		for _, tx := range txs {
-			if gasUsed+tx.Gas() > bp.config.MaxGasPerBlock {
+			if gasLimit+tx.Gas() > bp.config.MaxGasPerBlock {
 				break
 			}
 			if len(transactions) >= int(bp.config.MaxTxPerBlock) {
 				break
 			}
 			transactions = append(transactions, tx)
-			gasUsed += tx.Gas()
+			gasLimit += tx.Gas()
 		}
 		if len(transactions) >= int(bp.config.MaxTxPerBlock) {
 			break
 		}
 	}
+	
+	log.Info("BlockProducer: Collected transactions", "count", len(transactions), "gasLimit", gasLimit)
 	
 	// 2. 获取父区块并创建区块头
 	parent := bp.chain.CurrentBlock()
@@ -152,19 +167,110 @@ func (bp *BlockProducer) produceBlock() error {
 		ParentHash: parent.Hash(),
 		Number:     new(big.Int).Add(parent.Number, big.NewInt(1)),
 		GasLimit:   bp.config.MaxGasPerBlock,
-		GasUsed:    gasUsed,
+		GasUsed:    0, // Will be set after execution
 		Time:       uint64(time.Now().Unix()),
 		Difficulty: big.NewInt(1), // PoA-SGX 固定难度为 1
+		Coinbase:   common.Address{}, // Will be set by Prepare
 	}
 	
 	// 3. 调用 engine.Prepare() 准备区块头
 	if err := bp.engine.Prepare(bp.chain, header); err != nil {
+		log.Error("BlockProducer: Failed to prepare header", "err", err)
 		return err
 	}
 	
-	// Transaction execution, state updates, Finalize and Seal operations
-	// are handled by the external block production flow (e.g., miner package).
-	// BlockProducer focuses on on-demand block triggering logic.
+	// 4. 获取父区块的状态数据库
+	parentBlock := bp.chain.GetBlock(parent.Hash(), parent.Number.Uint64())
+	if parentBlock == nil {
+		return fmt.Errorf("parent block not found")
+	}
+	
+	// 5. 创建 StateDB - 使用 BlockChain 的接口
+	// 我们需要访问底层的 core.BlockChain 来获取 StateAt
+	coreChain, ok := bp.chain.(*core.BlockChain)
+	if !ok {
+		return fmt.Errorf("chain is not *core.BlockChain")
+	}
+	
+	statedb, err := coreChain.StateAt(parentBlock.Root())
+	if err != nil {
+		log.Error("BlockProducer: Failed to get state", "err", err, "root", parentBlock.Root())
+		return err
+	}
+	
+	// 6. 执行交易
+	processor := core.NewStateProcessor(coreChain)
+	vmConfig := vm.Config{}
+	
+	body := &types.Body{
+		Transactions: transactions,
+		Uncles:       nil,
+		Withdrawals:  nil,
+	}
+	
+	// 创建临时区块用于处理
+	tempBlock := types.NewBlock(header, body, nil, trie.NewStackTrie(nil))
+	
+	// 处理区块中的所有交易
+	result, err := processor.Process(tempBlock, statedb, vmConfig)
+	if err != nil {
+		log.Error("BlockProducer: Failed to process transactions", "err", err)
+		return err
+	}
+	
+	// 更新区块头的 GasUsed, Bloom和ReceiptHash
+	header.GasUsed = result.GasUsed
+	header.Bloom = types.MergeBloom(result.Receipts)
+	header.ReceiptHash = types.DeriveSha(result.Receipts, trie.NewStackTrie(nil))
+	
+	log.Info("BlockProducer: Transactions processed", "gasUsed", result.GasUsed, "receipts", len(result.Receipts))
+	
+	// 7. Finalize 区块（计算状态根，分配奖励）
+	bp.engine.Finalize(bp.chain, header, statedb, body)
+	
+	// 提交状态更改 (需要3个参数)
+	root, err := statedb.Commit(header.Number.Uint64(), true, true)
+	if err != nil {
+		log.Error("BlockProducer: Failed to commit state", "err", err)
+		return err
+	}
+	header.Root = root
+	
+	// 8. 创建最终区块
+	finalBlock := types.NewBlock(header, body, result.Receipts, trie.NewStackTrie(nil))
+	
+	// 9. Seal 区块（添加 SGX Quote）- 使用goroutine和channel
+	resultCh := make(chan *types.Block, 1)
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	
+	err = bp.engine.Seal(bp.chain, finalBlock, resultCh, stopCh)
+	if err != nil {
+		log.Error("BlockProducer: Failed to seal block", "err", err)
+		return err
+	}
+	
+	// Wait for sealed block with timeout
+	var sealedBlock *types.Block
+	select {
+	case sealedBlock = <-resultCh:
+		// Success
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("timeout waiting for block seal")
+	}
+	
+	// 10. 插入区块到链中
+	_, err = coreChain.InsertChain(types.Blocks{sealedBlock})
+	if err != nil {
+		log.Error("BlockProducer: Failed to insert block", "err", err, "number", sealedBlock.NumberU64())
+		return err
+	}
+	
+	log.Info("BlockProducer: Block produced successfully", 
+		"number", sealedBlock.NumberU64(), 
+		"hash", sealedBlock.Hash().Hex(),
+		"txs", len(transactions),
+		"gasUsed", header.GasUsed)
 	
 	return nil
 }

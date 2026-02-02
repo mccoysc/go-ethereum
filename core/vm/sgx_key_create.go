@@ -44,14 +44,6 @@ func (c *SGXKeyCreate) Run(input []byte) ([]byte, error) {
 // Input format: keyType (1 byte)
 // Output format: keyID (32 bytes)
 func (c *SGXKeyCreate) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 0. Check if this is a read-only call (eth_call)
-	// KEY_CREATE modifies state (creates keys, stores metadata) and MUST be a transaction
-	if ctx.ReadOnly {
-		return nil, errors.New("KEY_CREATE cannot be called in read-only mode (eth_call). " +
-			"This operation creates and stores keys on-chain. " +
-			"Use eth_sendTransaction to ensure the key creation is recorded on-chain.")
-	}
-	
 	// 1. Parse input
 	if len(input) < 1 {
 		return nil, errors.New("invalid input: missing key type")

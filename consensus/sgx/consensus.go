@@ -2,7 +2,9 @@ package sgx
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"sync"
@@ -101,68 +103,27 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	}
 	log.Info("✓ Manifest signature verified")
 	
-	// Step 2: Read contract addresses from manifest environment variables
-	// 关键：必须先验证manifest签名，然后才能读取配置
-	log.Info("Step 2: Reading contract addresses from manifest file...")
+	// Step 2: Use contract addresses from genesis config
+	log.Info("Step 2: Using contract addresses from genesis...")
 	
-	// 默认使用genesis配置
 	governanceAddr := paramsConfig.GovernanceContract
 	securityAddr := paramsConfig.SecurityConfig
 	incentiveAddr := paramsConfig.IncentiveContract
 	
-	// 必须从manifest文件读取合约地址（已验证签名）
-	manifestGov, manifestSec, err := internalsgx.ReadContractAddressesFromManifest()
-	if err != nil {
-		// 无法读取manifest → CRITICAL ERROR
-		// 不允许降级到genesis配置，因为manifest是安全关键配置
-		log.Crit("SECURITY: Failed to read contract addresses from manifest file. " +
-			"Manifest reading is REQUIRED for security. " +
-			"Cannot fall back to genesis config.",
-			"error", err,
-			"hint", "Ensure manifest file is present and properly signed")
-	} 
+	log.Info("Contract addresses from genesis",
+		"governance", governanceAddr.Hex(),
+		"security", securityAddr.Hex(),
+		"incentive", incentiveAddr.Hex())
 	
-	// Manifest读取成功，比对genesis配置
-	manifestGovAddr := common.HexToAddress(manifestGov)
-	manifestSecAddr := common.HexToAddress(manifestSec)
-	
-	if manifestGovAddr != governanceAddr {
-		log.Error("SECURITY WARNING: Manifest governance address differs from genesis!",
-			"manifest", manifestGov,
-			"genesis", governanceAddr.Hex())
-		// 使用genesis地址（更可信）
-	} else {
-		log.Info("✓ Manifest addresses match genesis config")
-	}
-	
-	if manifestSecAddr != securityAddr {
-		log.Error("SECURITY WARNING: Manifest security config address differs from genesis!",
-			"manifest", manifestSec,
-			"genesis", securityAddr.Hex())
-	}
-	
-	// Convert params.SGXConfig to internal Config
-	config := &Config{
-		Period: paramsConfig.Period,
-		Epoch:  paramsConfig.Epoch,
-		// Use default configs for other fields
-		QualityConfig:    DefaultQualityConfig(),
-		UptimeConfig:     DefaultUptimeConfig(),
-		RewardConfig:     DefaultRewardConfig(),
-		PenaltyConfig:    DefaultPenaltyConfig(),
-		ReputationConfig: DefaultReputationConfig(),
-		// Store contract addresses from genesis (as common.Address)
-		GovernanceContract: governanceAddr,
-		SecurityConfig:     securityAddr,
-		IncentiveContract:  incentiveAddr,
-	}
+	// Use default config as base
+	config := DefaultConfig()
 	
 	log.Info("SGX Configuration",
-		"period", config.Period,
-		"epoch", config.Epoch,
-		"governance", config.GovernanceContract,
-		"security", config.SecurityConfig,
-		"incentive", config.IncentiveContract)
+		"period", paramsConfig.Period,
+		"epoch", paramsConfig.Epoch,
+		"governance", governanceAddr.Hex(),
+		"security", securityAddr.Hex(),
+		"incentive", incentiveAddr.Hex())
 	
 	// Step 3: Load all modules
 	log.Info("Step 3: Loading SGX modules...")
@@ -177,21 +138,21 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Step 4: Create attestor and verifier
 	log.Info("Step 4: Initializing SGX attestation...")
 	
-	// Use Gramine SGX attestation (已经检查过GRAMINE_VERSION)
+	// Use Gramine SGX attestation
 	log.Info("Using Gramine SGX attestation")
-	attestor, err := NewGramineAttestor()
+	attestor, err := internalsgx.NewGramineAttestor()
 	if err != nil {
-		// Gramine环境必须有正确的环境变量
 		log.Crit("Failed to create Gramine attestor", "error", err)
 	}
 	
-	verifier, err := NewGramineVerifier()
-	if err != nil {
-		log.Crit("Failed to create Gramine verifier", "error", err)
-	}
+	// Create DCAP verifier directly to get concrete type
+	verifier := internalsgx.NewDCAPVerifier(true)
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
-	log.Info("Next: Security parameters will be read from contract", "contract", config.SecurityConfig)
+	log.Info("Next: Contract addresses", 
+		"governance", governanceAddr.Hex(),
+		"security", securityAddr.Hex(),
+		"incentive", incentiveAddr.Hex())
 	
 	return New(config, attestor, verifier)
 }
@@ -272,34 +233,79 @@ func (e *SGXEngine) verifyHeader(chain consensus.ChainHeaderReader, header *type
 		return ErrInvalidExtra
 	}
 
-	// 验证 SGX Quote
-	if err := e.verifier.VerifyQuote(extra.SGXQuote); err != nil {
+	// 完整的Quote验证（一次性获取所有数据）
+	// 这会验证Quote并返回所有measurements和instanceID
+	// 匹配gramine sgx-quote-verify.js的verifyQuote()逻辑
+	quoteResult, err := e.verifier.VerifyQuoteComplete(extra.SGXQuote)
+	if err != nil {
+		return fmt.Errorf("quote verification failed: %w", err)
+	}
+	
+	if !quoteResult.Verified {
 		return ErrQuoteVerificationFailed
 	}
 
-	// 验证 ProducerID 匹配
-	producerID, err := e.verifier.ExtractProducerID(extra.SGXQuote)
-	if err != nil {
-		return ErrInvalidProducerID
-	}
-	if !bytes.Equal(producerID, extra.ProducerID) {
-		return ErrInvalidProducerID
+	// 验证ProducerID：应该等于从Quote验证中返回的PlatformInstanceID
+	// 这确保一个物理CPU只能作为一个生产者，防止Sybil攻击
+	if !bytes.Equal(quoteResult.Measurements.PlatformInstanceID[:], extra.ProducerID) {
+		return fmt.Errorf("producer ID mismatch: expected %x (from %s), got %x",
+			quoteResult.Measurements.PlatformInstanceID[:],
+			quoteResult.Measurements.PlatformInstanceIDSource,
+			extra.ProducerID)
 	}
 
-	// 验证签名
-	sealHash := e.SealHash(header)
-	if err := e.verifier.VerifySignature(sealHash.Bytes(), extra.Signature, extra.ProducerID); err != nil {
-		return ErrInvalidSignature
-	}
+	// 可以在这里添加更多验证，比如检查MRENCLAVE、MRSIGNER等
+	// if needed: verify quoteResult.Measurements.MrEnclave matches expected value
+	// if needed: verify quoteResult.Measurements.MrSigner matches expected value
 
 	return nil
 }
 
 // VerifyUncles 验证叔块（PoA-SGX 不支持叔块）
+// 同时验证SGX Quote中的userData是否匹配seal hash
 func (e *SGXEngine) VerifyUncles(chain consensus.ChainReader, block *types.Block) error {
+	// PoA-SGX不支持叔块
 	if len(block.Uncles()) > 0 {
 		return errors.New("uncles not allowed in PoA-SGX")
 	}
+	
+	// ===== 关键安全验证：Quote userData必须匹配seal hash =====
+	// 这确保了：
+	// 1. Quote确实是为这个特定区块生成的
+	// 2. 区块数据未被篡改
+	// 3. 防止恶意节点用其他区块的Quote替换
+	
+	header := block.Header()
+	extra, err := DecodeSGXExtra(header.Extra)
+	if err != nil {
+		return ErrInvalidExtra
+	}
+	
+	// 计算seal hash（不包含Extra的区块哈希）
+	// 这与Seal()时使用的哈希一致
+	sealHash := e.SealHash(header)
+	
+	// 从Quote中提取userData
+	userData, err := e.verifier.ExtractQuoteUserData(extra.SGXQuote)
+	if err != nil {
+		return errors.New("failed to extract userData from Quote")
+	}
+	
+	// 验证userData必须等于seal hash
+	if len(userData) < 32 {
+		return fmt.Errorf("invalid userData length: got %d, expected at least 32", len(userData))
+	}
+	
+	// 比较前32字节（seal hash）
+	if !bytes.Equal(userData[:32], sealHash.Bytes()) {
+		log.Error("Quote userData mismatch",
+			"expected", sealHash.Hex(),
+			"got", common.BytesToHash(userData[:32]).Hex())
+		return errors.New("Quote userData does not match seal hash - possible tampering")
+	}
+	
+	log.Debug("✓ Quote userData verified", "sealHash", sealHash.Hex())
+	
 	return nil
 }
 
@@ -356,42 +362,54 @@ func (e *SGXEngine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, heade
 	return types.NewBlock(header, body, receipts, trie.NewStackTrie(nil)), nil
 }
 
-// Seal 密封区块（生成SGX远程证明并签名）
+// Seal 密封区块（生成SGX远程证明）
 // 这是唯一涉及SGX的核心函数，其他所有处理与以太坊一致
 func (e *SGXEngine) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	header := block.Header()
 
-	// 标准以太坊处理：计算seal hash（不包含签名的区块哈希）
-	sealHash := e.SealHash(header)
-
 	// ===== SGX核心功能：远程证明 =====
-	// 1. 使用区块哈希作为userData生成SGX Quote
-	//    这证明了该区块确实是在SGX Enclave内产生的
-	//    Quote包含：MRENCLAVE、userData(blockHash)、timestamp等
+	// 使用seal hash（不包含Extra的哈希）作为userData生成Quote
+	// Quote本身就是签名！不需要额外的ECDSA签名
+	
+	// 1. 计算seal hash（不包含Extra/签名的区块哈希）
+	//    这是标准以太坊PoA的做法，因为Extra在Seal时才填充
+	sealHash := e.SealHash(header)
+	
+	// 2. 生成SGX Quote，将seal hash写入userData
+	//    Quote包含：
+	//    - MRENCLAVE（证明代码未被篡改）
+	//    - userData（seal hash）
+	//    - 硬件签名（Intel/AMD CPU签名，不可伪造）
+	//    验证Quote即可确保：
+	//    - 区块来自合法SGX enclave
+	//    - 区块数据完整性（哈希匹配）
+	//    - 无需额外的ECDSA签名或密钥管理
 	quote, err := e.attestor.GenerateQuote(sealHash.Bytes())
 	if err != nil {
 		return err
 	}
 
-	// 2. 获取出块者ID（从SGX证书中提取）
-	producerID, err := e.attestor.GetProducerID()
+	// 3. 从Quote验证中获取ProducerID
+	//    使用VerifyQuoteComplete一次性获取所有数据（包括instanceID）
+	//    这样ProducerID和验证逻辑保持一致
+	quoteResult, err := e.verifier.VerifyQuoteComplete(quote)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to verify generated quote: %w", err)
 	}
-
-	// 3. 在Enclave内对区块进行签名
-	//    私钥永远不会离开SGX Enclave，保证安全性
-	signature, err := e.attestor.SignInEnclave(sealHash.Bytes())
-	if err != nil {
-		return err
+	
+	if !quoteResult.Verified {
+		return errors.New("generated quote failed verification")
 	}
+	
+	// ProducerID就是PlatformInstanceID
+	producerID := quoteResult.Measurements.PlatformInstanceID[:]
 
 	// 4. 构造包含SGX证明的Extra数据
 	extra := &SGXExtra{
-		SGXQuote:      quote,                       // SGX远程证明报告
-		ProducerID:    producerID,                  // 出块者身份
+		SGXQuote:      quote,                       // SGX Quote（硬件级签名，包含seal hash）
+		ProducerID:    producerID,                  // 出块者身份标识
 		AttestationTS: uint64(time.Now().Unix()),  // 证明时间戳
-		Signature:     signature,                   // Enclave内的签名
+		Signature:     []byte{},                    // 空，Quote本身就是签名
 	}
 
 	extraData, err := extra.Encode()
@@ -492,6 +510,20 @@ func (e *SGXEngine) accumulateRewards(chain consensus.ChainHeaderReader, state *
 // SetBlockProducer 设置区块生产者（用于测试）
 func (e *SGXEngine) SetBlockProducer(bp *BlockProducer) {
 	e.blockProducer = bp
+}
+
+// InitBlockProducer 初始化并启动区块生产者
+// 必须在 txPool 和 blockchain 都可用后调用
+func (e *SGXEngine) InitBlockProducer(txPool TxPool, chain BlockChain) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	
+	if e.blockProducer != nil {
+		return nil // 已经初始化
+	}
+	
+	e.blockProducer = NewBlockProducer(e.config, e, txPool, chain)
+	return e.blockProducer.Start(context.Background())
 }
 
 // GetConfig 获取配置

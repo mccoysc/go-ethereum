@@ -37,7 +37,7 @@ func (rh *ReorgHandler) HandleReorg(chain BlockChain, txPool TxPool, oldHead, ne
 
 	if len(txsToRevert) > 0 {
 		// 将交易重新加入交易池
-		errs := txPool.Add(txsToRevert, false, false)
+		errs := txPool.Add(txsToRevert, false)
 		for i, err := range errs {
 			if err != nil {
 				_ = txsToRevert[i] // 忽略失败的交易

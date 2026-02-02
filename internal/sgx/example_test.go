@@ -20,12 +20,17 @@ import (
 	"crypto/x509"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/ethereum/go-ethereum/internal/sgx"
 )
 
 // Example_basicQuoteGeneration demonstrates basic SGX Quote generation.
 func Example_basicQuoteGeneration() {
+	// Set mock mode for examples
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create attestor (auto-detects SGX environment)
 	attestor, err := sgx.NewGramineAttestor()
 	if err != nil {
@@ -48,6 +53,10 @@ func Example_basicQuoteGeneration() {
 // Example_certificateGenerationAndVerification demonstrates RA-TLS certificate
 // generation and verification.
 func Example_certificateGenerationAndVerification() {
+	// Set mock mode for examples
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create attestor
 	attestor, err := sgx.NewGramineAttestor()
 	if err != nil {
@@ -118,6 +127,10 @@ func Example_whitelistManagement() {
 
 // Example_quoteExtraction demonstrates extracting information from SGX Quotes.
 func Example_quoteExtraction() {
+	// Set mock mode for examples
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create attestor
 	attestor, err := sgx.NewGramineAttestor()
 	if err != nil {

@@ -17,10 +17,15 @@
 package sgx
 
 import (
+	"os"
 	"testing"
 )
 
 func TestExtractInstanceID(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create a mock attestor to generate a quote
 	attestor, err := NewGramineAttestor()
 	if err != nil {
@@ -58,6 +63,10 @@ func TestExtractInstanceID(t *testing.T) {
 }
 
 func TestExtractInstanceIDTooShort(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Try with a quote that's too short
 	shortQuote := make([]byte, 100)
 
@@ -68,6 +77,10 @@ func TestExtractInstanceIDTooShort(t *testing.T) {
 }
 
 func TestInstanceIDString(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	instanceID := &InstanceID{
 		CPUInstanceID: []byte{0x01, 0x02, 0x03, 0x04},
 		QuoteType:     2,
@@ -82,6 +95,10 @@ func TestInstanceIDString(t *testing.T) {
 }
 
 func TestInstanceIDEqual(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	id1 := &InstanceID{
 		CPUInstanceID: []byte{0x01, 0x02, 0x03},
 		QuoteType:     2,
@@ -117,6 +134,10 @@ func TestInstanceIDEqual(t *testing.T) {
 }
 
 func TestExtractDCAPInstanceID(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create a DCAP quote (quote type 2)
 	quote := make([]byte, 500)
 	quote[2] = 2 // DCAP signature type
@@ -141,6 +162,10 @@ func TestExtractDCAPInstanceID(t *testing.T) {
 }
 
 func TestExtractEPIDInstanceID(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create an EPID quote (quote type 0 or 1)
 	quote := make([]byte, 500)
 	quote[2] = 0 // EPID unlinkable signature type
