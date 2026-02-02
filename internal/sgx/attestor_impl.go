@@ -35,24 +35,33 @@ import (
 // /dev/attestation interface for Quote generation.
 // Note: For full RA-TLS support, use GramineRATLSAttestor with CGO.
 type GramineAttestor struct {
-	privateKey *ecdsa.PrivateKey
-	mrenclave  []byte
-	mrsigner   []byte
-	isSGX      bool // Whether we're running in a real SGX environment
+	privateKey      *ecdsa.PrivateKey // P-384 for RA-TLS
+	signingKey      *ecdsa.PrivateKey // secp256k1 for Ethereum block signing
+	mrenclave       []byte
+	mrsigner        []byte
+	isSGX           bool // Whether we're running in a real SGX environment
 }
 
 // NewGramineAttestor creates a new Gramine-based attestor.
 // It will detect if running in an SGX environment and fall if not.
-// This implementation uses P-384 curve as required by the specification.
+// This implementation uses P-384 curve for RA-TLS as required by the specification,
+// and secp256k1 for Ethereum block signing.
 func NewGramineAttestor() (*GramineAttestor, error) {
-	// Generate TLS key pair using P-384 (SECP384R1) as required by spec
+	// Generate TLS key pair using P-384 (SECP384R1) as required by RA-TLS spec
 	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate key: %w", err)
+		return nil, fmt.Errorf("failed to generate TLS key: %w", err)
+	}
+
+	// Generate signing key using secp256k1 for Ethereum compatibility
+	signingKey, err := crypto.GenerateKey()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate signing key: %w", err)
 	}
 
 	attestor := &GramineAttestor{
 		privateKey: privateKey,
+		signingKey: signingKey,
 	}
 
 	// Read MRENCLAVE using helper function
@@ -331,21 +340,23 @@ func (a *GramineAttestor) GetMRSigner() []byte {
 
 // GetProducerID returns the producer ID (Ethereum address, 20 bytes)
 // derived from the public key used for signing blocks.
+// GetProducerID returns the Ethereum address derived from the secp256k1 signing key.
 func (a *GramineAttestor) GetProducerID() ([]byte, error) {
-	// Derive Ethereum address from public key
-	pubKeyBytes := elliptic.Marshal(a.privateKey.Curve, a.privateKey.PublicKey.X, a.privateKey.PublicKey.Y)
-	hash := crypto.Keccak256(pubKeyBytes[1:]) // Skip the 0x04 prefix
-	return hash[12:], nil                     // Take last 20 bytes as Ethereum address
+	// Derive Ethereum address from secp256k1 public key
+	address := crypto.PubkeyToAddress(a.signingKey.PublicKey)
+	return address.Bytes(), nil
 }
 
 // SignInEnclave signs data using the enclave's private key.
 // Returns an ECDSA signature (65 bytes: r + s + v).
+// SignInEnclave signs data using the enclave's secp256k1 signing key.
+// This produces an Ethereum-compatible ECDSA signature.
 func (a *GramineAttestor) SignInEnclave(data []byte) ([]byte, error) {
 	// Hash the data
 	hash := crypto.Keccak256(data)
 
-	// Sign using private key
-	signature, err := crypto.Sign(hash, a.privateKey)
+	// Sign using secp256k1 signing key (Ethereum-compatible)
+	signature, err := crypto.Sign(hash, a.signingKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to sign: %w", err)
 	}

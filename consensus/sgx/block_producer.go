@@ -109,22 +109,16 @@ func (bp *BlockProducer) tryProduceBlock() {
 
 	shouldProduce := bp.onDemandCtrl.ShouldProduceBlock(bp.lastBlockTime, pendingTxCount, pendingGasTotal)
 	
-	// Debug logging every 10 seconds
-	if time.Since(bp.lastBlockTime) > 10*time.Second {
-		log.Debug("BlockProducer status", 
-			"pendingTxs", pendingTxCount, 
-			"pendingGas", pendingGasTotal,
-			"shouldProduce", shouldProduce,
-			"lastBlock", bp.lastBlockTime.Format("15:04:05"))
-		bp.lastBlockTime = time.Now() // Reset to avoid spam
-	}
-	
 	if !shouldProduce {
 		return
 	}
 
 	// 生产区块
-	log.Info("BlockProducer: Attempting to produce block", "pendingTxs", pendingTxCount)
+	log.Info("BlockProducer: Attempting to produce block", 
+		"pendingTxs", pendingTxCount,
+		"pendingGas", pendingGasTotal,
+		"elapsed", time.Since(bp.lastBlockTime))
+	
 	if err := bp.produceBlock(); err != nil {
 		log.Error("BlockProducer: Failed to produce block", "err", err)
 		return
