@@ -55,26 +55,50 @@ start_test_node() {
     # Setup test environment before starting node
     setup_test_filesystem
     
-    # Set X Chain SGX mode for testing
-    # Note: XCHAIN_ENCRYPTED_PATH and XCHAIN_SECRET_PATH are read from
-    # security config contract, NOT from environment variables (to prevent tampering)
+    # Ensure all environment variables are set for SGX consensus
+    # These MUST be exported before starting geth
+    source "$(dirname "${BASH_SOURCE[0]}")/test_env.sh"
     export XCHAIN_SGX_MODE=mock
+    export GRAMINE_VERSION=test
+    
+    # Create a miner account if not exists
+    local keystore_dir="$datadir/keystore"
+    local miner_account=""
+    if [ ! -d "$keystore_dir" ] || [ -z "$(ls -A $keystore_dir 2>/dev/null)" ]; then
+        echo "Creating miner account..."
+        echo "password" > "$datadir/password.txt"
+        miner_account=$(echo "password" | $geth --datadir "$datadir" account new --password /dev/stdin 2>&1 | grep "Public address" | awk '{print $NF}')
+        echo "Miner account created: $miner_account"
+    else
+        # Get existing account
+        local keyfile=$(ls "$keystore_dir" | head -1)
+        if [ -n "$keyfile" ]; then
+            miner_account="0x$(echo $keyfile | grep -o '[0-9a-fA-F]\{40\}')"
+            echo "Using existing account: $miner_account"
+            echo "password" > "$datadir/password.txt"
+        fi
+    fi
     
     # Start geth in background with PoA-SGX consensus and HTTP RPC enabled
-    # Note: PoA-SGX handles block production automatically, no --mine flag needed
-    $geth --datadir "$datadir" \
+    # Unlock the miner account for block signing
+    # Use nohup and redirect to ensure proper background execution
+    nohup $geth --datadir "$datadir" \
         --networkid 762385986 \
         --port "$port" \
         --http \
         --http.addr "127.0.0.1" \
         --http.port "$rpc_port" \
-        --http.api "eth,net,web3,personal,admin,debug,txpool,sgx" \
+        --http.api "eth,net,web3,personal,admin,debug,txpool,sgx,miner" \
         --http.corsdomain "*" \
         --nodiscover \
         --maxpeers 0 \
         --allow-insecure-unlock \
+        --unlock "$miner_account" \
+        --password "$datadir/password.txt" \
+        --mine \
+        --miner.etherbase "$miner_account" \
         --verbosity 3 \
-        > "$datadir/geth.log" 2>&1 &
+        >> "$datadir/geth.log" 2>&1 &
     
     local pid=$!
     echo $pid > "$datadir/geth.pid"

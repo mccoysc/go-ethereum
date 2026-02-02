@@ -11,10 +11,12 @@
     "istanbulBlock": 0,
     "berlinBlock": 0,
     "londonBlock": 0,
-    "terminalTotalDifficulty": 0,
     "sgx": {
       "period": 15,
-      "epoch": 30000
+      "epoch": 30000,
+      "governanceContract": "0xd9145CCE52D386f254917e481eB44e9943F39138",
+      "securityConfig": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+      "incentiveContract": "0x0000000000000000000000000000000000000000"
     }
   },
   "nonce": "0x0",
