@@ -337,12 +337,7 @@ j0a+5wgfZXmxk4ZE5zjPjWCT6ZzygZrqNyQ=
 
 result, err := verifier.VerifyQuoteComplete(realCert)
 if err != nil {
-	// This certificate has non-standard extensions that cause parsing failures
-	// in standard X.509 parsers. This is expected for raw RA-TLS certificates
-	// with embedded binary quote data.
-	t.Logf("Note: Certificate parsing failed as expected for raw RA-TLS cert: %v", err)
-	t.Skip("Real RA-TLS certificate requires special parser - skipping for now")
-	return
+	t.Fatalf("Failed to verify quote: %v", err)
 }
 
 // Output detailed verification results

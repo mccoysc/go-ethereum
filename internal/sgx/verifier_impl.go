@@ -427,9 +427,17 @@ func (v *DCAPVerifier) extractQuoteFromCertificate(certPEM []byte) ([]byte, erro
 		return nil, errors.New("failed to decode PEM certificate")
 	}
 
+	// Try raw DER extraction first (works with non-standard certs)
+	quote, err := v.extractQuoteFromRawDER(block.Bytes)
+	if err == nil && len(quote) > 0 {
+		return quote, nil
+	}
+
+	// Fall back to standard X.509 parsing
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse certificate: %v", err)
+		// If both methods fail, return error
+		return nil, fmt.Errorf("failed to extract quote from certificate: %v", err)
 	}
 
 	// Try TCG DICE OID first (standard)
@@ -451,6 +459,64 @@ func (v *DCAPVerifier) extractQuoteFromCertificate(certPEM []byte) ([]byte, erro
 	}
 
 	return nil, errors.New("no SGX quote found in certificate extensions")
+}
+
+// extractQuoteFromRawDER extracts quote from raw DER certificate bytes
+// This avoids issues with non-standard X.509 extensions
+func (v *DCAPVerifier) extractQuoteFromRawDER(derBytes []byte) ([]byte, error) {
+	// OID for Intel SGX Quote: 1.2.840.113741.1.13.1
+	// In DER encoding: 06 0B 2A 86 48 86 F8 4D 01 0D 01
+	sgxQuoteOID := []byte{0x06, 0x0B, 0x2A, 0x86, 0x48, 0x86, 0xF8, 0x4D, 0x01, 0x0D, 0x01}
+	
+	// Search for the OID in the DER bytes
+	for i := 0; i < len(derBytes)-len(sgxQuoteOID); i++ {
+		if bytes.Equal(derBytes[i:i+len(sgxQuoteOID)], sgxQuoteOID) {
+			// Found OID, now extract the value
+			// Skip past OID
+			pos := i + len(sgxQuoteOID)
+			
+			// The structure after OID is typically:
+			// OCTET STRING tag (04) + length + quote data
+			if pos < len(derBytes) && derBytes[pos] == 0x04 {
+				pos++
+				// Read length
+				length, bytesRead := v.parseDERLength(derBytes[pos:])
+				pos += bytesRead
+				
+				if pos+length <= len(derBytes) {
+					return derBytes[pos : pos+length], nil
+				}
+			}
+		}
+	}
+	
+	return nil, errors.New("SGX Quote OID not found in DER")
+}
+
+// parseDERLength parses DER length encoding
+func (v *DCAPVerifier) parseDERLength(data []byte) (int, int) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+	
+	firstByte := data[0]
+	if firstByte&0x80 == 0 {
+		// Short form: length is in the first byte
+		return int(firstByte), 1
+	}
+	
+	// Long form: first byte indicates number of length bytes
+	numLengthBytes := int(firstByte & 0x7F)
+	if numLengthBytes > len(data)-1 {
+		return 0, 0
+	}
+	
+	length := 0
+	for i := 0; i < numLengthBytes; i++ {
+		length = (length << 8) | int(data[1+i])
+	}
+	
+	return length, 1 + numLengthBytes
 }
 
 // verifyMeasurementsWhitelist verifies measurements against configured whitelist
