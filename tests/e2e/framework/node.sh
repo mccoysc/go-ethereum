@@ -20,6 +20,11 @@ create_test_datadir() {
     echo "$datadir"
 }
 
+# Alias for create_test_datadir for compatibility
+setup_test_dir() {
+    create_test_datadir "$@"
+}
+
 # Initialize a test node with custom genesis
 init_test_node() {
     local datadir="$1"
