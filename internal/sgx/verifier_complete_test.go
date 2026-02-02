@@ -3,6 +3,7 @@ package sgx
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -337,6 +338,18 @@ ja0jq/3FZWqZrJQMU6wfQG7fvy8Koy8CMQCTb+syU0svPNwwoKYCLErVa4AO2irL
 j0a+5wgfZXmxk4ZE5zjPjWCT6ZzygZrqNyQ=
 -----END CERTIFICATE-----`)
 
+
+// First extract the raw Quote bytes
+quote, err := verifier.ExtractQuoteFromInput(realCert)
+if err != nil {
+	t.Fatalf("Failed to extract quote: %v", err)
+}
+
+// Output Quote in hex format (PRIMARY OUTPUT - DEFAULT)
+fmt.Println("\n=== Quote Data (Hex Format) ===")
+fmt.Printf("Size: %d bytes\n", len(quote))
+fmt.Printf("%x\n\n", quote)
+
 // Call VerifyQuoteComplete
 // API key will be read from INTEL_SGX_API_KEY environment variable
 result, err := verifier.VerifyQuoteComplete(realCert, nil)
@@ -428,4 +441,130 @@ t.Errorf("Expected Attestation Key Type 2 (ECDSA-256), got %d", result.Attestati
 }
 
 t.Log("\n✓ All verifications passed!")
+
+// Output for test_env.sh
+fmt.Println("\n=== For test_env.sh ===")
+fmt.Printf("# Real verified Quote from Gramine RA-TLS certificate\n")
+fmt.Printf("# Size: %d bytes\n", len(quote))
+fmt.Printf("# MRENCLAVE: %x\n", result.Measurements.MrEnclave)
+fmt.Printf("# MRSIGNER: %x\n", result.Measurements.MrSigner)
+fmt.Printf("# Platform Instance ID: %x\n", result.Measurements.PlatformInstanceID)
+fmt.Printf("\nREAL_QUOTE_HEX=\"%x\"\n", quote)
+fmt.Printf("REAL_MRENCLAVE=\"%x\"\n", result.Measurements.MrEnclave)
+fmt.Printf("REAL_MRSIGNER=\"%x\"\n", result.Measurements.MrSigner)
+fmt.Printf("REAL_PLATFORM_INSTANCE_ID=\"%x\"\n", result.Measurements.PlatformInstanceID)
+}
+
+// TestExtractAndPrintQuote extracts Quote from certificate and prints it in hex format
+func TestExtractAndPrintQuote(t *testing.T) {
+// Real RA-TLS certificate from gramine
+realCert := []byte(`-----BEGIN CERTIFICATE-----
+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
+pB1dFkB0xXcMqPmEU8xp35eTRw==
+-----END CERTIFICATE-----`)
+
+fmt.Println("\n=== Extracting Quote from RA-TLS Certificate ===")
+
+verifier := NewDCAPVerifier(true)
+
+// Extract quote using the exported method
+quote, err := verifier.ExtractQuoteFromInput(realCert)
+if err != nil {
+t.Fatalf("Failed to extract quote: %v", err)
+}
+
+fmt.Printf("\n✓ Quote extracted successfully\n")
+fmt.Printf("  Size: %d bytes\n\n", len(quote))
+
+// Verify the quote
+os.Setenv("INTEL_SGX_API_KEY", "a8ece8747e7b4d8d98d23faec065b0b8")
+defer os.Unsetenv("INTEL_SGX_API_KEY")
+
+result, err := verifier.VerifyQuoteComplete(quote, nil)
+if err != nil {
+t.Fatalf("Failed to verify quote: %v", err)
+}
+
+if !result.Verified {
+t.Fatalf("Quote verification failed")
+}
+
+fmt.Println("=== Quote Verification Result ===")
+fmt.Printf("✓ Quote verified successfully\n")
+fmt.Printf("  TCB Status: %s\n", result.TCBStatus)
+fmt.Printf("  MRENCLAVE: %x\n", result.Measurements.MrEnclave)
+fmt.Printf("  MRSIGNER: %x\n", result.Measurements.MrSigner)
+fmt.Printf("  Platform Instance ID: %x\n", result.Measurements.PlatformInstanceID)
+fmt.Printf("  Report Data (first 32 bytes): %x\n\n", result.Measurements.ReportData[:32])
+
+// Output Quote in hex format (default output to screen)
+fmt.Println("=== Quote Data (Hex Format) ===")
+fmt.Printf("%x\n\n", quote)
+
+// Also output in format suitable for test_env.sh
+fmt.Println("=== For test_env.sh ===")
+fmt.Printf("# Real verified Quote from Gramine RA-TLS certificate\n")
+fmt.Printf("# Size: %d bytes\n", len(quote))
+fmt.Printf("# MRENCLAVE: %x\n", result.Measurements.MrEnclave)
+fmt.Printf("# MRSIGNER: %x\n", result.Measurements.MrSigner)
+fmt.Printf("# Platform Instance ID: %x\n", result.Measurements.PlatformInstanceID)
+fmt.Printf("\nREAL_QUOTE_HEX=\"%x\"\n", quote)
+fmt.Printf("REAL_MRENCLAVE=\"%x\"\n", result.Measurements.MrEnclave)
+fmt.Printf("REAL_MRSIGNER=\"%x\"\n", result.Measurements.MrSigner)
+fmt.Printf("REAL_PLATFORM_INSTANCE_ID=\"%x\"\n", result.Measurements.PlatformInstanceID)
+
+t.Log("✓ Quote extracted, verified, and printed in hex format")
 }

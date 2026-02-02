@@ -387,54 +387,12 @@ func (e *SGXEngine) VerifyUncles(chain consensus.ChainReader, block *types.Block
 	// 1. Quote确实是为这个特定区块生成的
 	// 2. 区块数据未被篡改
 	// 3. 防止恶意节点用其他区块的Quote替换
+	//
+	// Implementation is in:
+	// - verify_userdata_production.go (strict validation)
+	// - verify_userdata_testenv.go (lenient validation for testing)
 	
-	header := block.Header()
-	extra, err := DecodeSGXExtra(header.Extra)
-	if err != nil {
-		return ErrInvalidExtra
-	}
-	
-	// 计算seal hash（不包含Extra的区块哈希）
-	// 这与Seal()时使用的哈希一致
-	sealHash := e.SealHash(header)
-	
-	// 从Quote中提取userData
-	userData, err := e.verifier.ExtractQuoteUserData(extra.SGXQuote)
-	if err != nil {
-		return errors.New("failed to extract userData from Quote")
-	}
-	
-	// 验证userData必须等于seal hash
-	if len(userData) < 32 {
-		return fmt.Errorf("invalid userData length: got %d, expected at least 32", len(userData))
-	}
-	
-	// 比较前32字节（seal hash）
-	userDataMatches := bytes.Equal(userData[:32], sealHash.Bytes())
-	
-	// 在测试环境下（SGX_TEST_MODE=true），即使userData不匹配也允许区块
-	// 这是因为测试环境无法生成包含正确sealHash的Quote
-	testMode := os.Getenv("SGX_TEST_MODE") == "true"
-	
-	if !userDataMatches {
-		if testMode {
-			// 测试模式：记录警告但允许区块
-			log.Warn("Quote userData mismatch (allowed in test mode)",
-				"expected", sealHash.Hex(),
-				"got", common.BytesToHash(userData[:32]).Hex(),
-				"testMode", true)
-		} else {
-			// 生产模式：拒绝区块
-			log.Error("Quote userData mismatch",
-				"expected", sealHash.Hex(),
-				"got", common.BytesToHash(userData[:32]).Hex())
-			return errors.New("Quote userData does not match seal hash - possible tampering")
-		}
-	} else {
-		log.Debug("✓ Quote userData verified", "sealHash", sealHash.Hex())
-	}
-	
-	return nil
+	return e.verifyQuoteUserData(block)
 }
 
 // Prepare 准备区块头

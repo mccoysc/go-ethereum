@@ -475,6 +475,13 @@ func (v *DCAPVerifier) setCachedCertificate(cacheDir, key string, data []byte) e
 	return os.WriteFile(cachePath, data, 0644)
 }
 
+// ExtractQuoteFromInput extracts quote from various input formats
+// Supports: PEM certificate, raw quote bytes, base64 encoded quote
+// This is exported so it can be used by tools and tests
+func (v *DCAPVerifier) ExtractQuoteFromInput(input []byte) ([]byte, error) {
+	return v.extractQuoteFromInput(input)
+}
+
 // extractQuoteFromInput extracts quote from various input formats
 // Supports: PEM certificate, raw quote bytes, base64 encoded quote
 func (v *DCAPVerifier) extractQuoteFromInput(input []byte) ([]byte, error) {
