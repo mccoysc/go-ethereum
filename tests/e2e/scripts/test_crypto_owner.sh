@@ -14,6 +14,7 @@ source "$FRAMEWORK_DIR/assertions.sh"
 source "$FRAMEWORK_DIR/node.sh"
 source "$FRAMEWORK_DIR/contracts.sh"
 source "$FRAMEWORK_DIR/crypto.sh"
+source "$FRAMEWORK_DIR/test_env.sh"
 
 # Test configuration
 TEST_NAME="crypto_owner"
