@@ -51,6 +51,10 @@ type Verifier interface {
 	// ExtractPublicKeyFromQuote 从 SGX Quote 的 ReportData 中提取公钥
 	// 返回未压缩格式的secp256k1公钥（65字节：0x04 + X + Y）
 	ExtractPublicKeyFromQuote(quote []byte) ([]byte, error)
+	
+	// ExtractInstanceID 从 SGX Quote 中提取CPU实例ID
+	// Instance ID用于确保一个CPU只能作为一个生产者
+	ExtractInstanceID(quote []byte) ([]byte, error)
 }
 
 // TxPool 交易池接口

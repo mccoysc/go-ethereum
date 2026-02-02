@@ -369,11 +369,35 @@ func (a *GramineAttestor) GetMRSigner() []byte {
 
 // GetProducerID returns the producer ID (Ethereum address, 20 bytes)
 // derived from the public key used for signing blocks.
-// GetProducerID returns the Ethereum address derived from the secp256k1 signing key.
+// GetProducerID returns the CPU instance ID as the producer identifier.
+// In SGX PoA consensus, each physical CPU can only act as one producer.
+// The instance ID is extracted from the Quote and ensures uniqueness per hardware.
 func (a *GramineAttestor) GetProducerID() ([]byte, error) {
-	// Derive Ethereum address from secp256k1 public key
-	address := crypto.PubkeyToAddress(a.signingKey.PublicKey)
-	return address.Bytes(), nil
+	// Generate a minimal Quote to extract instance ID
+	// We use a fixed nonce since we only need the instance ID
+	nonce := make([]byte, 32)
+	quote, err := a.GenerateQuote(nonce)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate quote for instance ID: %w", err)
+	}
+	
+	// Extract instance ID from the quote
+	instanceID, err := ExtractInstanceID(quote)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract instance ID: %w", err)
+	}
+	
+	// Use first 20 bytes of instance ID as Ethereum-compatible address
+	// This ensures compatibility with address-based systems
+	producerID := make([]byte, 20)
+	if len(instanceID.CPUInstanceID) >= 20 {
+		copy(producerID, instanceID.CPUInstanceID[:20])
+	} else {
+		// Pad with zeros if instance ID is shorter
+		copy(producerID, instanceID.CPUInstanceID)
+	}
+	
+	return producerID, nil
 }
 
 // GetSigningKey returns the secp256k1 signing key for external access.

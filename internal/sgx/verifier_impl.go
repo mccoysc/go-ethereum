@@ -297,3 +297,14 @@ func ExtractReportData(quote []byte) ([]byte, error) {
 	copy(result, parsedQuote.ReportData[:])
 	return result, nil
 }
+
+// ExtractInstanceID extracts the CPU instance ID from the SGX Quote.
+// This uses the existing ExtractInstanceID function from the sgx package.
+func (v *DCAPVerifier) ExtractInstanceID(quote []byte) ([]byte, error) {
+instanceID, err := ExtractInstanceID(quote)
+if err != nil {
+return nil, err
+}
+return instanceID.CPUInstanceID, nil
+}
+
