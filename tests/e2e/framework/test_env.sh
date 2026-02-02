@@ -156,56 +156,64 @@ calculate_contract_addresses() {
     echo "SecurityConfigContract: $security_addr"
 }
 
-# Setup mock manifest files for signature verification
+# Setup real signed manifest files for signature verification
+# Uses OpenSSL to generate RSA-3072 key pair and sign manifest
 setup_mock_manifest_files() {
     local manifest_dir="${1:-/tmp/xchain-test-manifest}"
     
-    echo "Setting up mock manifest files at $manifest_dir..."
+    echo "Generating REAL signed manifest files at $manifest_dir..."
     mkdir -p "$manifest_dir"
     
-    # 创建模拟的manifest文件
-    cat > "$manifest_dir/geth.manifest" << 'MANIFEST_EOF'
-# Mock Gramine Manifest for Testing
+    # Use the generate_manifest_signature.sh script
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$script_dir/generate_manifest_signature.sh" ]; then
+        bash "$script_dir/generate_manifest_signature.sh" "$manifest_dir"
+    else
+        # Inline generation if script not found
+        echo "Generating RSA-3072 key pair..."
+        openssl genrsa -out "$manifest_dir/enclave-key.pem" 3072 2>/dev/null
+        openssl rsa -in "$manifest_dir/enclave-key.pem" -pubout -out "$manifest_dir/enclave-key.pub" 2>/dev/null
+        
+        # Create manifest
+        cat > "$manifest_dir/geth.manifest.sgx" << 'MANIFEST_EOF'
+# Gramine Manifest for Testing
 libos.entrypoint = "/app/geth"
 
-# Environment variables
+# Environment variables - Contract addresses (security critical)
 loader.env.XCHAIN_GOVERNANCE_CONTRACT = "0xd9145CCE52D386f254917e481eB44e9943F39138"
 loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 
 # SGX configuration
 sgx.enclave_size = "2G"
 sgx.max_threads = 32
+sgx.remote_attestation = "dcap"
 MANIFEST_EOF
+        
+        # Sign manifest using openssl dgst (correct method)
+        openssl dgst -sha256 -sign "$manifest_dir/enclave-key.pem" \
+            -out "$manifest_dir/geth.manifest.sgx.sig" \
+            "$manifest_dir/geth.manifest.sgx"
+        
+        # Verify signature
+        if openssl dgst -sha256 -verify "$manifest_dir/enclave-key.pub" \
+            -signature "$manifest_dir/geth.manifest.sgx.sig" "$manifest_dir/geth.manifest.sgx" >/dev/null 2>&1; then
+            echo "✓ Manifest signature verified successfully"
+        else
+            echo "✗ Manifest signature verification failed!"
+            return 1
+        fi
+    fi
     
-    # 创建.sgx版本（签名后的manifest）
-    cp "$manifest_dir/geth.manifest" "$manifest_dir/geth.manifest.sgx"
-    
-    # 创建模拟的RSA公钥（用于验证签名）
-    cat > "$manifest_dir/enclave-key.pub" << 'KEY_EOF'
------BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw5nFBZQKCkJXPTnFZ3Cb
-wRN5/1/h9F7c2H8RKT1vN5hQ7VJgQ8dLw7bUPNxX7UuXvKZc9n6cE7TxfpDXJDYH
-IqlxY5uN3p9kZnJiO9TvE0K8DlhN2vKHlQZhXhNfJqpzN8Jd1xQ0sT8q0yMnF0Wf
-cHUdTqPnVMQxL4nFkqXwH3zX9Q3N6qYHp1vKZJxH8tQ4nQ6yM8VwN7vQ5gLXKjLf
-VoKvN1P3qXM4tUjXnQxMnN8L9F5cJ4kQZnX8vH3qF9XqT1QnYHqL4VpX3M1QK9Nf
-7xQZT0qF3nH8XqT0N4vL8Q3F5kZnJiO9TvE0K8DlhN2vKHlQZhXhNfJqpzN8JQID
-AQAB
------END PUBLIC KEY-----
-KEY_EOF
-    
-    # 创建模拟的签名文件（.sig）
-    # 实际的签名是RSA签名的二进制数据，这里用占位符
-    printf 'MOCK_SIGNATURE_DATA_FOR_TESTING' > "$manifest_dir/geth.manifest.sgx.sig"
-    
-    # 设置环境变量指向这些文件
+    # Set environment variables
     export GRAMINE_MANIFEST_PATH="$manifest_dir/geth.manifest.sgx"
     export GRAMINE_SIGSTRUCT_KEY_PATH="$manifest_dir/enclave-key.pub"
     export GRAMINE_APP_NAME="geth"
     
-    echo "Mock manifest files created"
+    echo "✓ Real signed manifest files created and verified"
     echo "  - Manifest: $manifest_dir/geth.manifest.sgx"
     echo "  - Signature: $manifest_dir/geth.manifest.sgx.sig"  
     echo "  - Public key: $manifest_dir/enclave-key.pub"
+    echo "  - Private key: $manifest_dir/enclave-key.pem"
 }
 
 # Verify test environment is properly configured

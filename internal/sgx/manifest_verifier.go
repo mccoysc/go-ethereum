@@ -44,12 +44,6 @@ type ManifestSignatureVerifier struct {
 // NewManifestSignatureVerifier creates a new manifest signature verifier
 // The public key can be loaded from environment variable or default location
 func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
-	// In test mode, always return a verifier that skips signature verification
-	// This allows testing without real Gramine signing keys
-	if os.Getenv("SGX_TEST_MODE") == "true" {
-		return &ManifestSignatureVerifier{publicKey: nil}, nil
-	}
-
 	// Try to load public key from environment variable first
 	pubKeyPath := os.Getenv("GRAMINE_SIGSTRUCT_KEY_PATH")
 	if pubKeyPath == "" {
@@ -70,20 +64,12 @@ func NewManifestSignatureVerifier() (*ManifestSignatureVerifier, error) {
 	}
 
 	if pubKeyPath == "" {
-		// In non-SGX mode, return a verifier that always succeeds
-		if os.Getenv("IN_SGX") != "1" {
-			return &ManifestSignatureVerifier{publicKey: nil}, nil
-		}
 		return nil, fmt.Errorf("no public key found for manifest signature verification")
 	}
 
 	// Load public key
 	pubKey, err := loadRSAPublicKey(pubKeyPath)
 	if err != nil {
-		// If loading fails but we're not in production SGX mode, allow it
-		if os.Getenv("IN_SGX") != "1" {
-			return &ManifestSignatureVerifier{publicKey: nil}, nil
-		}
 		return nil, fmt.Errorf("failed to load public key: %w", err)
 	}
 
