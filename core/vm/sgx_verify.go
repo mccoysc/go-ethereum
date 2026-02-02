@@ -41,14 +41,24 @@ func (c *SGXVerify) RequiredGas(input []byte) uint64 {
 // Input format: hash (32 bytes) + signature (variable) + publicKey (variable)
 // Output format: result (1 byte: 0x01 for valid, 0x00 for invalid)
 func (c *SGXVerify) Run(input []byte) ([]byte, error) {
-	// ECDSA verification: hash (32) + sig (65) + pubkey (64) = 161 bytes
+	// ECDSA verification: hash (32) + sig (65) + pubkey (64 or 65) = 161 or 162 bytes
 	// Ed25519 verification: hash (32) + sig (64) + pubkey (32) = 128 bytes
 	
-	if len(input) == 161 {
+	if len(input) == 161 || len(input) == 162 {
 		// ECDSA verification
 		hash := input[:32]
 		signature := input[32:97]
-		pubKey := input[97:161]
+		pubKey := input[97:]
+		
+		// Remove 0x04 prefix from pubKey if present
+		if len(pubKey) == 65 && pubKey[0] == 0x04 {
+			pubKey = pubKey[1:]
+		}
+		
+		// Verify we have 64 bytes after processing
+		if len(pubKey) != 64 {
+			return []byte{0x00}, nil
+		}
 		
 		// Recover public key from signature
 		recoveredPubKey, err := crypto.SigToPub(hash, signature)
@@ -87,6 +97,6 @@ func (c *SGXVerify) Run(input []byte) ([]byte, error) {
 		return []byte{0x00}, nil
 		
 	} else {
-		return nil, errors.New("invalid input length: expected 161 bytes (ECDSA) or 128 bytes (Ed25519)")
+		return nil, errors.New("invalid input length: expected 161-162 bytes (ECDSA) or 128 bytes (Ed25519)")
 	}
 }
