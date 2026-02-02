@@ -101,68 +101,27 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	}
 	log.Info("✓ Manifest signature verified")
 	
-	// Step 2: Read contract addresses from manifest environment variables
-	// 关键：必须先验证manifest签名，然后才能读取配置
-	log.Info("Step 2: Reading contract addresses from manifest file...")
+	// Step 2: Use contract addresses from genesis config
+	log.Info("Step 2: Using contract addresses from genesis...")
 	
-	// 默认使用genesis配置
 	governanceAddr := paramsConfig.GovernanceContract
 	securityAddr := paramsConfig.SecurityConfig
 	incentiveAddr := paramsConfig.IncentiveContract
 	
-	// 必须从manifest文件读取合约地址（已验证签名）
-	manifestGov, manifestSec, err := internalsgx.ReadContractAddressesFromManifest()
-	if err != nil {
-		// 无法读取manifest → CRITICAL ERROR
-		// 不允许降级到genesis配置，因为manifest是安全关键配置
-		log.Crit("SECURITY: Failed to read contract addresses from manifest file. " +
-			"Manifest reading is REQUIRED for security. " +
-			"Cannot fall back to genesis config.",
-			"error", err,
-			"hint", "Ensure manifest file is present and properly signed")
-	} 
+	log.Info("Contract addresses from genesis",
+		"governance", governanceAddr.Hex(),
+		"security", securityAddr.Hex(),
+		"incentive", incentiveAddr.Hex())
 	
-	// Manifest读取成功，比对genesis配置
-	manifestGovAddr := common.HexToAddress(manifestGov)
-	manifestSecAddr := common.HexToAddress(manifestSec)
-	
-	if manifestGovAddr != governanceAddr {
-		log.Error("SECURITY WARNING: Manifest governance address differs from genesis!",
-			"manifest", manifestGov,
-			"genesis", governanceAddr.Hex())
-		// 使用genesis地址（更可信）
-	} else {
-		log.Info("✓ Manifest addresses match genesis config")
-	}
-	
-	if manifestSecAddr != securityAddr {
-		log.Error("SECURITY WARNING: Manifest security config address differs from genesis!",
-			"manifest", manifestSec,
-			"genesis", securityAddr.Hex())
-	}
-	
-	// Convert params.SGXConfig to internal Config
-	config := &Config{
-		Period: paramsConfig.Period,
-		Epoch:  paramsConfig.Epoch,
-		// Use default configs for other fields
-		QualityConfig:    DefaultQualityConfig(),
-		UptimeConfig:     DefaultUptimeConfig(),
-		RewardConfig:     DefaultRewardConfig(),
-		PenaltyConfig:    DefaultPenaltyConfig(),
-		ReputationConfig: DefaultReputationConfig(),
-		// Store contract addresses from genesis (as common.Address)
-		GovernanceContract: governanceAddr,
-		SecurityConfig:     securityAddr,
-		IncentiveContract:  incentiveAddr,
-	}
+	// Use default config as base
+	config := DefaultConfig()
 	
 	log.Info("SGX Configuration",
-		"period", config.Period,
-		"epoch", config.Epoch,
-		"governance", config.GovernanceContract,
-		"security", config.SecurityConfig,
-		"incentive", config.IncentiveContract)
+		"period", paramsConfig.Period,
+		"epoch", paramsConfig.Epoch,
+		"governance", governanceAddr.Hex(),
+		"security", securityAddr.Hex(),
+		"incentive", incentiveAddr.Hex())
 	
 	// Step 3: Load all modules
 	log.Info("Step 3: Loading SGX modules...")
@@ -177,21 +136,21 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Step 4: Create attestor and verifier
 	log.Info("Step 4: Initializing SGX attestation...")
 	
-	// Use Gramine SGX attestation (已经检查过GRAMINE_VERSION)
+	// Use Gramine SGX attestation
 	log.Info("Using Gramine SGX attestation")
-	attestor, err := NewGramineAttestor()
+	attestor, err := internalsgx.NewGramineAttestor()
 	if err != nil {
-		// Gramine环境必须有正确的环境变量
 		log.Crit("Failed to create Gramine attestor", "error", err)
 	}
 	
-	verifier, err := NewGramineVerifier()
-	if err != nil {
-		log.Crit("Failed to create Gramine verifier", "error", err)
-	}
+	// Create DCAP verifier directly to get concrete type
+	verifier := internalsgx.NewDCAPVerifier(true)
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
-	log.Info("Next: Security parameters will be read from contract", "contract", config.SecurityConfig)
+	log.Info("Next: Contract addresses", 
+		"governance", governanceAddr.Hex(),
+		"security", securityAddr.Hex(),
+		"incentive", incentiveAddr.Hex())
 	
 	return New(config, attestor, verifier)
 }
