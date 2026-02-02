@@ -21,8 +21,13 @@ echo ""
 TEST_DIR=$(setup_test_dir "permissions")
 print_test_env
 
+# Get genesis file
+GENESIS_FILE="$SCRIPT_DIR/../data/genesis.json"
+
 # Initialize and start node
-init_test_node "$TEST_DIR"
+init_test_node "$TEST_DIR" "$GENESIS_FILE"
+assert_success "Node initialization"
+
 start_test_node "$TEST_DIR" 30310 8552
 
 # Test counters

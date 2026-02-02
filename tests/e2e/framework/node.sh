@@ -212,3 +212,10 @@ wait_for_transaction() {
     echo "Transaction not mined after $max_attempts seconds"
     return 1
 }
+
+# Cleanup test directory and node
+cleanup_test() {
+    local test_dir="$1"
+    cleanup_test_node "$test_dir"
+    cleanup_test_filesystem
+}

@@ -126,3 +126,19 @@ hex_to_num() {
     hex="${hex#0x}"
     echo $((16#$hex))
 }
+
+# Alias for call_precompiled_contract
+call_contract() {
+    call_precompiled_contract "$@"
+}
+
+# Make JSON-RPC call
+call_rpc() {
+    local method="$1"
+    local params="$2"
+    local rpc_port="${3:-8545}"
+    
+    curl -s -X POST -H "Content-Type: application/json" \
+        --data "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$params,\"id\":1}" \
+        "http://127.0.0.1:$rpc_port"
+}
