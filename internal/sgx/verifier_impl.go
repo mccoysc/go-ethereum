@@ -26,6 +26,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -333,9 +335,37 @@ type QuoteMeasurements struct {
 // - RA-TLS certificate (PEM format) - quote will be extracted from certificate extensions
 // - Raw quote bytes
 // - Base64 encoded quote
-func (v *DCAPVerifier) VerifyQuoteComplete(input []byte) (*QuoteVerificationResult, error) {
+// Options can include:
+// - apiKey: Intel SGX API key (if not set, read from INTEL_SGX_API_KEY env var)
+// - cacheDir: Directory for caching certificates (default: /tmp/sgx-cert-cache)
+func (v *DCAPVerifier) VerifyQuoteComplete(input []byte, options map[string]interface{}) (*QuoteVerificationResult, error) {
 	result := &QuoteVerificationResult{
 		Verified: false,
+	}
+	
+	// Get API key from options or environment variable
+	apiKey := ""
+	if options != nil {
+		if key, ok := options["apiKey"].(string); ok {
+			apiKey = key
+		}
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("INTEL_SGX_API_KEY")
+	}
+	
+	// Get cache directory from options or use default
+	cacheDir := "/tmp/sgx-cert-cache"
+	if options != nil {
+		if dir, ok := options["cacheDir"].(string); ok {
+			cacheDir = dir
+		}
+	}
+	
+	// Ensure cache directory exists
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		// Log but don't fail if we can't create cache dir
+		fmt.Printf("Warning: failed to create cache directory: %v\n", err)
 	}
 
 	// Extract quote from input (could be certificate or raw quote)
@@ -403,6 +433,32 @@ func (v *DCAPVerifier) VerifyQuoteComplete(input []byte) (*QuoteVerificationResu
 	}
 
 	return result, nil
+}
+
+// getCachedCertificate retrieves a cached certificate by key
+// Returns nil if not found or error reading
+func (v *DCAPVerifier) getCachedCertificate(cacheDir, key string) []byte {
+	if cacheDir == "" {
+		return nil
+	}
+	
+	cachePath := filepath.Join(cacheDir, key)
+	data, err := os.ReadFile(cachePath)
+	if err != nil {
+		return nil
+	}
+	
+	return data
+}
+
+// setCachedCertificate stores a certificate in cache
+func (v *DCAPVerifier) setCachedCertificate(cacheDir, key string, data []byte) error {
+	if cacheDir == "" {
+		return nil
+	}
+	
+	cachePath := filepath.Join(cacheDir, key)
+	return os.WriteFile(cachePath, data, 0644)
 }
 
 // extractQuoteFromInput extracts quote from various input formats

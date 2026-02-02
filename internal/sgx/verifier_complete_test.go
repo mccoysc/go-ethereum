@@ -214,11 +214,15 @@ t.Log("Test passed: VerifyQuoteComplete correctly handles both input formats")
 
 // TestVerifyQuoteCompleteRealCertificate tests verification with a real RA-TLS certificate from gramine
 func TestVerifyQuoteCompleteRealCertificate(t *testing.T) {
-	// Set mock mode for testing
+	// Set mock mode
 	os.Setenv("XCHAIN_SGX_MODE", "mock")
 	defer os.Unsetenv("XCHAIN_SGX_MODE")
-
-verifier := NewDCAPVerifier(true) // mockMode=true for testing
+	
+	// Set Intel SGX API key via environment variable
+	os.Setenv("INTEL_SGX_API_KEY", "a8ece8747e7b4d8d98d23faec065b0b8")
+	defer os.Unsetenv("INTEL_SGX_API_KEY")
+	
+	verifier := NewDCAPVerifier(true) // mockMode=true for testing
 
 // Real RA-TLS certificate from gramine production environment
 realCert := []byte(`-----BEGIN CERTIFICATE-----
@@ -335,11 +339,9 @@ ja0jq/3FZWqZrJQMU6wfQG7fvy8Koy8CMQCTb+syU0svPNwwoKYCLErVa4AO2irL
 j0a+5wgfZXmxk4ZE5zjPjWCT6ZzygZrqNyQ=
 -----END CERTIFICATE-----`)
 
-// Call VerifyQuoteComplete with Intel SGX API key (as required by user)
-options := map[string]interface{}{
-	"apiKey": "a8ece8747e7b4d8d98d23faec065b0b8",
-}
-result, err := verifier.VerifyQuoteComplete(realCert, options)
+// Call VerifyQuoteComplete
+// API key will be read from INTEL_SGX_API_KEY environment variable
+result, err := verifier.VerifyQuoteComplete(realCert, nil)
 if err != nil {
 	t.Logf("Verification error (may be expected if PCCS unavailable): %v", err)
 	// Don't fail the test immediately - we can still check if quote extraction worked
