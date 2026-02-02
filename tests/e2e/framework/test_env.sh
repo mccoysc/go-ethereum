@@ -34,6 +34,9 @@
 export XCHAIN_GOVERNANCE_CONTRACT="0xd9145CCE52D386f254917e481eB44e9943F39138"
 export XCHAIN_SECURITY_CONFIG_CONTRACT="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 
+# Gramine version for testing (required by SGX consensus engine)
+export GRAMINE_VERSION="test"
+
 # Print environment for debugging
 print_test_env() {
     echo "=== Test Environment Configuration ==="
