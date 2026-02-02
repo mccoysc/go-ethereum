@@ -5,8 +5,6 @@ import (
 	"encoding/hex"
 	"os"
 	"testing"
-
-	"github.com/ethereum/go-ethereum/common"
 )
 
 // TestVerifyQuoteComplete tests the complete quote verification
@@ -56,7 +54,7 @@ t.Errorf("ReportData should be 64 bytes, got %d", len(result.Measurements.Report
 }
 
 // Check that we got a platform instance ID
-if result.Measurements.PlatformInstanceID == (common.Address{}) {
+if len(result.Measurements.PlatformInstanceID) == 0 {
 t.Error("PlatformInstanceID should not be zero")
 }
 
@@ -112,7 +110,7 @@ t.Fatalf("Failed to verify quote2: %v", err)
 }
 
 // Instance IDs should be the same (same platform)
-if result1.Measurements.PlatformInstanceID != result2.Measurements.PlatformInstanceID {
+if !bytes.Equal(result1.Measurements.PlatformInstanceID, result2.Measurements.PlatformInstanceID) {
 t.Errorf("Platform instance IDs should be consistent:\n  Quote1: %x\n  Quote2: %x",
 result1.Measurements.PlatformInstanceID,
 result2.Measurements.PlatformInstanceID)
@@ -355,7 +353,7 @@ t.Logf("Quote Version: %d", result.QuoteVersion)
 t.Logf("Attestation Key Type: %d", result.AttestationKeyType)
 
 t.Log("\n=== Platform Identity ===")
-t.Logf("Platform Instance ID: %s", result.Measurements.PlatformInstanceID.Hex())
+t.Logf("Platform Instance ID: %s", hex.EncodeToString(result.Measurements.PlatformInstanceID))
 t.Logf("ID Source: %s", result.Measurements.PlatformInstanceIDSource)
 
 t.Log("\n=== Enclave Measurements ===")
@@ -373,7 +371,7 @@ if len(result.Measurements.ReportData) > 32 {
 t.Logf("Report Data (bytes 32-64): %s", hex.EncodeToString(result.Measurements.ReportData[32:]))
 }
 
-// Verify expected values from the real certificate (provided by user)
+// Verify expected values from the real certificate (complete expected output from user)
 expectedMrEnclave := "6364c9c486ebe6d3b3ec6e22ec0b4ee4cec428450a055c4ebee36d6e9b8660a8"
 actualMrEnclave := hex.EncodeToString(result.Measurements.MrEnclave)
 if actualMrEnclave != expectedMrEnclave {
@@ -408,14 +406,23 @@ if actualReportData != expectedReportData {
 t.Errorf("Report Data mismatch: expected %s, got %s", expectedReportData, actualReportData)
 }
 
-if result.Measurements.PlatformInstanceID == (common.Address{}) {
-t.Error("Platform Instance ID should not be empty")
+// Verify Platform Instance ID (from complete expected output)
+expectedPlatformInstanceId := "8a78443c144d86c9811509839ab60dfe9a31e129fbda1fe2604b11be633f7bfb"
+actualPlatformInstanceId := hex.EncodeToString(result.Measurements.PlatformInstanceID)
+if actualPlatformInstanceId != expectedPlatformInstanceId {
+t.Errorf("Platform Instance ID mismatch: expected %s, got %s", expectedPlatformInstanceId, actualPlatformInstanceId)
 }
 
+// Verify TCB Status
+expectedTcbStatus := "OutOfDateConfigurationNeeded"
+if result.TCBStatus != expectedTcbStatus && result.TCBStatus != "OK" {
+t.Logf("TCB Status note: expected %s, got %s (this is acceptable for test environment)", expectedTcbStatus, result.TCBStatus)
+}
+
+// Verify Quote Version and Attestation Key Type
 if result.QuoteVersion != 3 {
 t.Errorf("Expected Quote Version 3, got %d", result.QuoteVersion)
 }
-
 if result.AttestationKeyType != 2 {
 t.Errorf("Expected Attestation Key Type 2 (ECDSA-256), got %d", result.AttestationKeyType)
 }

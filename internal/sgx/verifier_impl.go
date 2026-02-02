@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
@@ -30,7 +31,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -324,7 +324,7 @@ type QuoteMeasurements struct {
 	IsvSvn                   uint16
 	Attributes               []byte
 	ReportData               []byte
-	PlatformInstanceID       common.Address
+	PlatformInstanceID       []byte // 32-byte hash (SHA-256 of PCK SPKI or PPID)
 	PlatformInstanceIDSource string // "ppid" or "pck-spki" or "cpusvn-composite"
 }
 
@@ -408,8 +408,8 @@ func (v *DCAPVerifier) VerifyQuoteComplete(input []byte, options map[string]inte
 		result.Measurements.PlatformInstanceID = instanceID
 		result.Measurements.PlatformInstanceIDSource = source
 	} else {
-		// Fallback to zero address with error source
-		result.Measurements.PlatformInstanceID = common.Address{}
+		// Fallback to zero bytes with error source
+		result.Measurements.PlatformInstanceID = make([]byte, 32)
 		result.Measurements.PlatformInstanceIDSource = "error: " + err.Error()
 	}
 
@@ -864,20 +864,29 @@ func (v *DCAPVerifier) verifyMeasurementsWhitelist(measurements QuoteMeasurement
 
 // extractPlatformInstanceID extracts platform instance ID following gramine's logic
 // Priority: 1. PPID, 2. PCK SPKI fingerprint, 3. CPUSVN composite
-func (v *DCAPVerifier) extractPlatformInstanceID(quote []byte) (common.Address, string, error) {
+func (v *DCAPVerifier) extractPlatformInstanceID(quote []byte) ([]byte, string, error) {
 	// Try PPID first (most unique identifier)
 	ppid, err := v.extractPPID(quote)
 	if err == nil && len(ppid) >= 16 {
-		// Use first 20 bytes of PPID as address
-		var addr common.Address
-		copy(addr[:], ppid[:20])
-		return addr, "ppid", nil
+		// Return full PPID (or hash to 32 bytes if longer)
+		if len(ppid) == 32 {
+			return ppid, "ppid", nil
+		} else if len(ppid) > 32 {
+			// Hash if too long (use SHA-256 to match gramine)
+			hash := sha256.Sum256(ppid)
+			return hash[:], "ppid", nil
+		} else {
+			// Pad if too short
+			padded := make([]byte, 32)
+			copy(padded, ppid)
+			return padded, "ppid", nil
+		}
 	}
 
 	// Try PCK SPKI fingerprint (production method)
-	addr, err := v.computePCKSPKIFingerprint(quote)
+	instanceID, err := v.computePCKSPKIFingerprint(quote)
 	if err == nil {
-		return addr, "pck-spki", nil
+		return instanceID, "pck-spki", nil
 	}
 
 	// Fallback to CPUSVN + Attributes composite
@@ -885,21 +894,19 @@ func (v *DCAPVerifier) extractPlatformInstanceID(quote []byte) (common.Address, 
 		cpusvn := quote[48 : 48+16]
 		attributes := quote[48+16+4+28 : 48+16+4+28+16]
 		composite := append(cpusvn, attributes...)
-		hash := crypto.Keccak256Hash(composite)
-		return common.BytesToAddress(hash[:]), "cpusvn-composite", nil
+		hash := sha256.Sum256(composite)
+		return hash[:], "cpusvn-composite", nil
 	}
 
-	return common.Address{}, "", errors.New("failed to extract platform instance ID")
+	return nil, "", errors.New("failed to extract platform instance ID")
 }
 
-// ExtractInstanceID extracts the CPU instance ID from the SGX Quote.
-// This is a convenience method that calls VerifyQuoteComplete and returns just the instance ID.
 func (v *DCAPVerifier) ExtractInstanceID(quote []byte) ([]byte, error) {
 	result, err := v.VerifyQuoteComplete(quote, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify quote: %v", err)
 	}
-	return result.Measurements.PlatformInstanceID[:], nil
+	return result.Measurements.PlatformInstanceID, nil
 }
 
 // extractPPID extracts PPID from quote certification data
@@ -950,21 +957,21 @@ func (v *DCAPVerifier) extractPPID(quote []byte) ([]byte, error) {
 // computePCKSPKIFingerprint computes SHA-256 hash of PCK certificate's SPKI
 // This provides a unique, stable platform identifier per gramine implementation
 // Reference: gramine sgx-quote-verify.js computePckSpkiFingerprint()
-func (v *DCAPVerifier) computePCKSPKIFingerprint(quote []byte) (common.Address, error) {
+func (v *DCAPVerifier) computePCKSPKIFingerprint(quote []byte) ([]byte, error) {
 	if len(quote) < 436 {
-		return common.Address{}, errors.New("quote too short for signature data")
+		return nil, errors.New("quote too short for signature data")
 	}
 
 	signatureDataLen := binary.LittleEndian.Uint32(quote[432:436])
 	if len(quote) < 436+int(signatureDataLen) {
-		return common.Address{}, errors.New("quote signature data truncated")
+		return nil, errors.New("quote signature data truncated")
 	}
 
 	// Skip ECDSA signature (64 bytes), attestation pubkey (64 bytes), QE report (384 bytes), QE signature (64 bytes)
 	offset := 436 + 64 + 64 + 384 + 64
 
 	if offset+2 > len(quote) {
-		return common.Address{}, errors.New("no auth data size field")
+		return nil, errors.New("no auth data size field")
 	}
 
 	// Skip auth data
@@ -972,7 +979,7 @@ func (v *DCAPVerifier) computePCKSPKIFingerprint(quote []byte) (common.Address, 
 	offset += 2 + int(authDataSize)
 
 	if offset+6 > len(quote) {
-		return common.Address{}, errors.New("no certification data")
+		return nil, errors.New("no certification data")
 	}
 
 	// Read certification data
@@ -981,42 +988,42 @@ func (v *DCAPVerifier) computePCKSPKIFingerprint(quote []byte) (common.Address, 
 	offset += 6
 
 	if offset+int(certDataSize) > len(quote) {
-		return common.Address{}, errors.New("certification data truncated")
+		return nil, errors.New("certification data truncated")
 	}
 
 	certData := quote[offset : offset+int(certDataSize)]
 
 	// certDataType 5 = PCK cert chain
 	if certDataType != 5 {
-		return common.Address{}, fmt.Errorf("unsupported cert data type: %d", certDataType)
+		return nil, fmt.Errorf("unsupported cert data type: %d", certDataType)
 	}
 
 	// Parse PEM cert chain to extract first (leaf) certificate
 	pemCerts := v.parsePEMCertChain(certData)
 	if len(pemCerts) == 0 {
-		return common.Address{}, errors.New("no certificates in chain")
+		return nil, errors.New("no certificates in chain")
 	}
 
 	// Extract SPKI from leaf certificate and hash it (matching gramine logic)
 	block, _ := pem.Decode(pemCerts[0])
 	if block == nil {
-		return common.Address{}, errors.New("failed to decode PCK certificate")
+		return nil, errors.New("failed to decode PCK certificate")
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to parse PCK certificate: %v", err)
+		return nil, fmt.Errorf("failed to parse PCK certificate: %v", err)
 	}
 
 	// Get SPKI bytes (SubjectPublicKeyInfo)
 	spkiBytes, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
 	if err != nil {
-		return common.Address{}, fmt.Errorf("failed to marshal public key: %v", err)
+		return nil, fmt.Errorf("failed to marshal public key: %v", err)
 	}
 
-	// Compute Keccak256 hash of SPKI for Ethereum compatibility
-	hash := crypto.Keccak256Hash(spkiBytes)
-	return common.BytesToAddress(hash[:]), nil
+	// Compute SHA-256 hash of SPKI to match gramine (not Keccak256!)
+	hash := sha256.Sum256(spkiBytes)
+	return hash[:], nil
 }
 
 // parsePEMCertChain parses a byte array containing PEM certificates
