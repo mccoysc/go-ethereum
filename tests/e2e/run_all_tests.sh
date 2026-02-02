@@ -119,6 +119,8 @@ main() {
     run_test_suite "Read-Only Crypto Operations" "$SCRIPTS_DIR/test_crypto_readonly.sh" || true
     run_test_suite "Crypto Contract Deployment" "$SCRIPTS_DIR/test_crypto_deploy.sh" || true
     run_test_suite "Consensus Block Production" "$SCRIPTS_DIR/test_consensus_production.sh" || true
+    run_test_suite "Permission Features" "$SCRIPTS_DIR/test_permissions.sh" || true
+    run_test_suite "Block Quote Attestation" "$SCRIPTS_DIR/test_block_quote.sh" || true
     
     # Print summary
     print_summary

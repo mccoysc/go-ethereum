@@ -63,7 +63,19 @@ setup_test_filesystem() {
     # 在测试模式下，某些代码路径可能检查文件存在性
     setup_mock_attestation_device
     
-    # 3. 设置mock manifest文件
+    # 3. 创建/dev/attestation符号链接（Gramine标准路径）
+    # 由于/dev需要root权限，我们在测试中使用sudo创建符号链接
+    echo "Creating /dev/attestation symlink to /tmp/xchain-test-dev-attestation..."
+    if [ -w /dev ]; then
+        sudo ln -sf /tmp/xchain-test-dev-attestation /dev/attestation 2>/dev/null || {
+            echo "Warning: Cannot create /dev/attestation symlink (need sudo)"
+            echo "Trying alternative: set LD_PRELOAD to intercept file access"
+        }
+    else
+        echo "Warning: /dev not writable, tests may fail"
+    fi
+    
+    # 4. 设置mock manifest文件
     # 用于manifest签名验证
     setup_mock_manifest_files "$test_dir/manifest"
     
@@ -80,6 +92,8 @@ cleanup_test_filesystem() {
     echo "Cleaning up test filesystem..."
     # Clean up temporary files and mock devices
     rm -rf /tmp/xchain-test-dev-attestation
+    # Remove symlink if it exists
+    sudo rm -f /dev/attestation 2>/dev/null || true
 }
 
 # Calculate contract addresses deterministically
