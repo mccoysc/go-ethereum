@@ -45,6 +45,14 @@ func (c *SGXSign) Run(input []byte) ([]byte, error) {
 // Input format: keyID (32 bytes) + hash (32 bytes)
 // Output format: signature (65 bytes for ECDSA, 64 bytes for Ed25519)
 func (c *SGXSign) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
+	// 0. Check if this is a read-only call (eth_call)
+	// SIGN generates secret signature data and records usage, MUST be a transaction
+	if ctx.ReadOnly {
+		return nil, errors.New("SIGN cannot be called in read-only mode (eth_call). " +
+			"This operation generates signatures and records usage on-chain. " +
+			"Use eth_sendTransaction to ensure the signature operation is recorded.")
+	}
+	
 	// 1. Parse input
 	if len(input) < 64 {
 		return nil, errors.New("invalid input: expected keyID (32 bytes) + hash (32 bytes)")

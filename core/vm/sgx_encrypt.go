@@ -50,6 +50,14 @@ func (c *SGXEncrypt) Run(input []byte) ([]byte, error) {
 // Input format: keyID (32 bytes) + plaintext (variable)
 // Output format: nonce (12 bytes) + ciphertext + tag (16 bytes)
 func (c *SGXEncrypt) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
+	// 0. Check if this is a read-only call (eth_call)
+	// ENCRYPT generates secret ciphertext (with random nonce), MUST be a transaction
+	if ctx.ReadOnly {
+		return nil, errors.New("ENCRYPT cannot be called in read-only mode (eth_call). " +
+			"This operation generates ciphertext with random nonce. " +
+			"Use eth_sendTransaction to ensure encryption is recorded on-chain.")
+	}
+	
 	// 1. Parse input
 	if len(input) < 32 {
 		return nil, errors.New("invalid input: missing key ID")

@@ -45,6 +45,14 @@ func (c *SGXKeyDerive) Run(input []byte) ([]byte, error) {
 // Input format: parentKeyID (32 bytes) + derivationPath (variable)
 // Output format: childKeyID (32 bytes)
 func (c *SGXKeyDerive) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
+	// 0. Check if this is a read-only call (eth_call)
+	// KEY_DERIVE creates new derived keys, MUST be a transaction
+	if ctx.ReadOnly {
+		return nil, errors.New("KEY_DERIVE cannot be called in read-only mode (eth_call). " +
+			"This operation creates derived keys and stores metadata on-chain. " +
+			"Use eth_sendTransaction to ensure key derivation is recorded.")
+	}
+	
 	// 1. Parse input
 	if len(input) < 32 {
 		return nil, errors.New("invalid input: missing parent key ID")
