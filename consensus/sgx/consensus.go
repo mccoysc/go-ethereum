@@ -236,7 +236,7 @@ func (e *SGXEngine) verifyHeader(chain consensus.ChainHeaderReader, header *type
 	// 完整的Quote验证（一次性获取所有数据）
 	// 这会验证Quote并返回所有measurements和instanceID
 	// 匹配gramine sgx-quote-verify.js的verifyQuote()逻辑
-	quoteResult, err := e.verifier.VerifyQuoteComplete(extra.SGXQuote)
+	quoteResult, err := e.verifier.VerifyQuoteComplete(extra.SGXQuote, nil)
 	if err != nil {
 		return fmt.Errorf("quote verification failed: %w", err)
 	}
@@ -392,7 +392,7 @@ func (e *SGXEngine) Seal(chain consensus.ChainHeaderReader, block *types.Block, 
 	// 3. 从Quote验证中获取ProducerID
 	//    使用VerifyQuoteComplete一次性获取所有数据（包括instanceID）
 	//    这样ProducerID和验证逻辑保持一致
-	quoteResult, err := e.verifier.VerifyQuoteComplete(quote)
+	quoteResult, err := e.verifier.VerifyQuoteComplete(quote, nil)
 	if err != nil {
 		return fmt.Errorf("failed to verify generated quote: %w", err)
 	}

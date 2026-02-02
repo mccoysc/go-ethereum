@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	internalsgx "github.com/ethereum/go-ethereum/internal/sgx"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -34,6 +35,12 @@ type Verifier interface {
 	// VerifyQuote 验证 SGX Quote 的有效性
 	// 包括签名验证和 TCB 状态检查
 	VerifyQuote(quote []byte) error
+
+	// VerifyQuoteComplete 执行完整的 Quote 验证并返回所有提取的数据
+	// 这与 gramine sgx-quote-verify.js 的 verifyQuote() 函数相匹配
+	// 输入可以是: RA-TLS 证书 (PEM 格式), 原始 quote 字节, 或 Base64 编码的 quote
+	// options 可以包括: apiKey (Intel SGX API key), cacheDir (证书缓存目录)
+	VerifyQuoteComplete(input []byte, options map[string]interface{}) (*internalsgx.QuoteVerificationResult, error)
 
 	// VerifySignature 验证 ECDSA 签名
 	// data: 被签名的数据
