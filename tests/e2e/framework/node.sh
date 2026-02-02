@@ -82,6 +82,7 @@ start_test_node() {
     # Start geth in background with PoA-SGX consensus and HTTP RPC enabled
     # Unlock the miner account for block signing
     # Use nohup and redirect to ensure proper background execution
+    # Disable auth RPC (Engine API) since SGX doesn't need external beacon client
     nohup $geth --datadir "$datadir" \
         --networkid 762385986 \
         --port "$port" \
@@ -97,6 +98,7 @@ start_test_node() {
         --password "$datadir/password.txt" \
         --mine \
         --miner.etherbase "$miner_account" \
+        --authrpc.port 0 \
         --verbosity 3 \
         >> "$datadir/geth.log" 2>&1 &
     
