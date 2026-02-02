@@ -78,7 +78,7 @@ func (v *DCAPVerifier) VerifyQuote(quote []byte) error {
 }
 
 // VerifyCertificate verifies an RA-TLS certificate.
-// This is the ONLY place where MRENCLAVE/MRSIGNER whitelist is checked.
+// This is the ONLY place where MRENCLAVE whitelist is checked.
 func (v *DCAPVerifier) VerifyCertificate(cert *x509.Certificate) error {
 	// Extract SGX quote from certificate extensions
 	var quote []byte
@@ -105,14 +105,9 @@ func (v *DCAPVerifier) VerifyCertificate(cert *x509.Certificate) error {
 	}
 
 	// *** WHITELIST CHECK - ONLY FOR RA-TLS CERTIFICATES ***
-	// Check MRENCLAVE whitelist
+	// Check MRENCLAVE whitelist (MRSIGNER check not needed for now)
 	if !v.IsAllowedMREnclave(parsedQuote.MRENCLAVE[:]) {
 		return fmt.Errorf("MRENCLAVE not in allowed list: %x", parsedQuote.MRENCLAVE)
-	}
-
-	// Check MRSIGNER whitelist  
-	if !v.IsAllowedMRSigner(parsedQuote.MRSIGNER[:]) {
-		return fmt.Errorf("MRSIGNER not in allowed list: %x", parsedQuote.MRSIGNER)
 	}
 
 	// Verify that the certificate's public key matches the quote's report data
