@@ -17,6 +17,7 @@
 package sgx
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 )
@@ -24,6 +25,15 @@ import (
 // readMREnclave reads the MRENCLAVE from Gramine's /dev/attestation interface.
 // This function is used by both native and fallback implementations.
 func readMREnclave() ([]byte, error) {
+	// Check if we're in mock mode
+	if os.Getenv("XCHAIN_SGX_MODE") == "mock" {
+		// Return a deterministic mock MRENCLAVE for testing
+		hash := sha256.Sum256([]byte("mock-mrenclave-for-testing"))
+		mrenclave := make([]byte, 32)
+		copy(mrenclave, hash[:])
+		return mrenclave, nil
+	}
+
 	// Try to read from /dev/attestation/my_target_info
 	targetInfo, err := os.ReadFile("/dev/attestation/my_target_info")
 	if err != nil {
@@ -40,6 +50,24 @@ func readMREnclave() ([]byte, error) {
 	copy(mrenclave, targetInfo[:32])
 
 	return mrenclave, nil
+}
+
+// readMRSigner reads the MRSIGNER from Gramine's /dev/attestation interface.
+// This function is used by both native and fallback implementations.
+func readMRSigner() ([]byte, error) {
+	// Check if we're in mock mode
+	if os.Getenv("XCHAIN_SGX_MODE") == "mock" {
+		// Return a deterministic mock MRSIGNER for testing
+		hash := sha256.Sum256([]byte("mock-mrsigner-for-testing"))
+		mrsigner := make([]byte, 32)
+		copy(mrsigner, hash[:])
+		return mrsigner, nil
+	}
+
+	// In real SGX environment, MRSIGNER comes from the signing key
+	// It's not directly available from /dev/attestation
+	// For now, return an error indicating it needs to be extracted from Quote
+	return nil, fmt.Errorf("MRSIGNER not available - extract from Quote in real SGX")
 }
 
 // generateQuoteViaGramine generates an SGX Quote using Gramine's /dev/attestation interface.

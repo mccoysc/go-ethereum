@@ -99,6 +99,17 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 		return nil, fmt.Errorf("failed to read MRENCLAVE: %w", err)
 	}
 	attestor.mrenclave = mrenclave
+	
+	// Read MRSIGNER using helper function
+	mrsigner, err := readMRSigner()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read MRSIGNER: %w", err)
+	}
+	attestor.mrsigner = mrsigner
+	
+	// Determine if we're in real SGX environment
+	attestor.isSGX = (sgxMode != "mock")
+	
 	return attestor, nil
 }
 

@@ -18,10 +18,19 @@ package sgx
 
 import (
 	"crypto/x509"
+	"os"
 	"testing"
 )
 
 func TestNewGramineAttestor(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -42,6 +51,10 @@ func TestNewGramineAttestor(t *testing.T) {
 }
 
 func TestGenerateQuote(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -82,6 +95,10 @@ func TestGenerateQuote(t *testing.T) {
 }
 
 func TestGenerateQuoteTooLong(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -96,6 +113,10 @@ func TestGenerateQuoteTooLong(t *testing.T) {
 }
 
 func TestGenerateCertificate(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -133,6 +154,10 @@ func TestGenerateCertificate(t *testing.T) {
 }
 
 func TestGetMREnclave(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -151,6 +176,10 @@ func TestGetMREnclave(t *testing.T) {
 }
 
 func TestGetMRSigner(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -169,6 +198,10 @@ func TestGetMRSigner(t *testing.T) {
 }
 
 func TestMockAttestor(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create mock attestor: %v", err)

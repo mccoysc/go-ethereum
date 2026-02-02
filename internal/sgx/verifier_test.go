@@ -18,10 +18,15 @@ package sgx
 
 import (
 	"crypto/x509"
+	"os"
 	"testing"
 )
 
 func TestNewDCAPVerifier(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	verifier := NewDCAPVerifier(false)
 	if verifier == nil {
 		t.Fatal("Verifier is nil")
@@ -33,6 +38,10 @@ func TestNewDCAPVerifier(t *testing.T) {
 }
 
 func TestVerifyQuote(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create an attestor to generate a test quote
 	attestor, err := NewGramineAttestor()
 	if err != nil {
@@ -58,6 +67,10 @@ func TestVerifyQuote(t *testing.T) {
 }
 
 func TestVerifyQuoteInvalidMREnclave(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -84,6 +97,10 @@ func TestVerifyQuoteInvalidMREnclave(t *testing.T) {
 }
 
 func TestVerifyCertificate(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create attestor and generate certificate
 	attestor, err := NewGramineAttestor()
 	if err != nil {
@@ -114,6 +131,10 @@ func TestVerifyCertificate(t *testing.T) {
 }
 
 func TestVerifyCertificateNoQuote(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	// Create a regular certificate without SGX quote
 	attestor, err := NewGramineAttestor()
 	if err != nil {
@@ -130,6 +151,10 @@ func TestVerifyCertificateNoQuote(t *testing.T) {
 }
 
 func TestIsAllowedMREnclave(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	verifier := NewDCAPVerifier(false)
 
 	mrenclave := make([]byte, 32)
@@ -160,6 +185,10 @@ func TestIsAllowedMREnclave(t *testing.T) {
 }
 
 func TestAddAllowedMREnclave(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	verifier := NewDCAPVerifier(false)
 
 	mrenclave1 := make([]byte, 32)
@@ -182,6 +211,10 @@ func TestAddAllowedMREnclave(t *testing.T) {
 }
 
 func TestRemoveAllowedMREnclave(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	verifier := NewDCAPVerifier(false)
 
 	mrenclave1 := make([]byte, 32)
@@ -212,6 +245,10 @@ func TestRemoveAllowedMREnclave(t *testing.T) {
 }
 
 func TestExtractMREnclave(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -242,6 +279,10 @@ func TestExtractMREnclave(t *testing.T) {
 }
 
 func TestExtractMRSigner(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
@@ -263,6 +304,10 @@ func TestExtractMRSigner(t *testing.T) {
 }
 
 func TestExtractReportData(t *testing.T) {
+	// Set mock mode for testing
+	os.Setenv("XCHAIN_SGX_MODE", "mock")
+	defer os.Unsetenv("XCHAIN_SGX_MODE")
+
 	attestor, err := NewGramineAttestor()
 	if err != nil {
 		t.Fatalf("Failed to create attestor: %v", err)
