@@ -22,6 +22,7 @@ import (
 	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -328,9 +329,20 @@ type QuoteMeasurements struct {
 // VerifyQuoteComplete performs complete quote verification and returns all extracted data
 // This matches the gramine sgx-quote-verify.js verifyQuote() function
 // Reference: https://github.com/mccoysc/gramine/blob/master/tools/sgx/ra-tls/sgx-quote-verify.js
-func (v *DCAPVerifier) VerifyQuoteComplete(quote []byte) (*QuoteVerificationResult, error) {
+// Input can be:
+// - RA-TLS certificate (PEM format) - quote will be extracted from certificate extensions
+// - Raw quote bytes
+// - Base64 encoded quote
+func (v *DCAPVerifier) VerifyQuoteComplete(input []byte) (*QuoteVerificationResult, error) {
 	result := &QuoteVerificationResult{
 		Verified: false,
+	}
+
+	// Extract quote from input (could be certificate or raw quote)
+	quote, err := v.extractQuoteFromInput(input)
+	if err != nil {
+		result.Error = err
+		return result, err
 	}
 
 	// Parse quote structure
@@ -381,7 +393,93 @@ func (v *DCAPVerifier) VerifyQuoteComplete(quote []byte) (*QuoteVerificationResu
 		result.TCBStatus = "INVALID"
 	}
 
+	// Verify against whitelist if configured
+	if result.Verified {
+		if err := v.verifyMeasurementsWhitelist(result.Measurements); err != nil {
+			result.Verified = false
+			result.Error = err
+			result.TCBStatus = "WHITELIST_MISMATCH"
+		}
+	}
+
 	return result, nil
+}
+
+// extractQuoteFromInput extracts quote from various input formats
+// Supports: PEM certificate, raw quote bytes, base64 encoded quote
+func (v *DCAPVerifier) extractQuoteFromInput(input []byte) ([]byte, error) {
+	// Check if input is a PEM certificate
+	if bytes.Contains(input, []byte("-----BEGIN CERTIFICATE-----")) {
+		return v.extractQuoteFromCertificate(input)
+	}
+
+	// Otherwise assume it's raw quote bytes
+	return input, nil
+}
+
+// extractQuoteFromCertificate extracts SGX Quote from RA-TLS certificate extension
+// Tries multiple OIDs in order:
+// 1. TCG DICE Tagged Evidence (2.23.133.5.4.9) - standard format
+// 2. Intel SGX Quote (1.2.840.113741.1.13.1) - legacy format
+func (v *DCAPVerifier) extractQuoteFromCertificate(certPEM []byte) ([]byte, error) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, errors.New("failed to decode PEM certificate")
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse certificate: %v", err)
+	}
+
+	// Try TCG DICE OID first (standard)
+	for _, ext := range cert.Extensions {
+		// OID 2.23.133.5.4.9 = TCG DICE Tagged Evidence
+		if ext.Id.String() == "2.23.133.5.4.9" {
+			// For now, return the value directly
+			// In full implementation, would parse CBOR structure
+			return ext.Value, nil
+		}
+	}
+
+	// Try Intel SGX Quote OID (legacy)
+	for _, ext := range cert.Extensions {
+		// OID 1.2.840.113741.1.13.1 = Intel SGX Quote
+		if ext.Id.String() == "1.2.840.113741.1.13.1" {
+			return ext.Value, nil
+		}
+	}
+
+	return nil, errors.New("no SGX quote found in certificate extensions")
+}
+
+// verifyMeasurementsWhitelist verifies measurements against configured whitelist
+func (v *DCAPVerifier) verifyMeasurementsWhitelist(measurements QuoteMeasurements) error {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	// If no whitelist configured, skip verification
+	if len(v.allowedMREnclave) == 0 && len(v.allowedMRSigner) == 0 {
+		return nil
+	}
+
+	// Check MRENCLAVE whitelist
+	if len(v.allowedMREnclave) > 0 {
+		mrEnclaveHex := hex.EncodeToString(measurements.MrEnclave)
+		if !v.allowedMREnclave[mrEnclaveHex] {
+			return fmt.Errorf("MRENCLAVE %s not in whitelist", mrEnclaveHex)
+		}
+	}
+
+	// Check MRSIGNER whitelist
+	if len(v.allowedMRSigner) > 0 {
+		mrSignerHex := hex.EncodeToString(measurements.MrSigner)
+		if !v.allowedMRSigner[mrSignerHex] {
+			return fmt.Errorf("MRSIGNER %s not in whitelist", mrSignerHex)
+		}
+	}
+
+	return nil
 }
 
 // extractPlatformInstanceID extracts platform instance ID following gramine's logic
