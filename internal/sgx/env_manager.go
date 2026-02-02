@@ -75,23 +75,33 @@ var dynamicEnvVars = []string{
 }
 
 // NewRATLSEnvManager creates a new RA-TLS environment variable manager.
-// Contract addresses are read from Gramine manifest environment variables.
+// Contract addresses are read from verified Gramine manifest file.
 func NewRATLSEnvManager(client *ethclient.Client) (*RATLSEnvManager, error) {
 	// CRITICAL SECURITY CHECK: Verify manifest signature before reading any parameters
 	if err := ValidateManifestIntegrity(); err != nil {
 		return nil, fmt.Errorf("manifest integrity validation failed: %w", err)
 	}
 
-	// Read contract addresses from manifest environment variables
-	// These are fixed in the manifest and affect MRENCLAVE
-	scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
-	govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
+	// Read contract addresses from manifest file (NOT environment variables)
+	// Security requirement: Contract addresses only from verified manifest
+	manifestPath, err := GetManifestPath()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get manifest path: %w", err)
+	}
+
+	manifestConfig, err := ReadManifestConfig(manifestPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read manifest config: %w", err)
+	}
+
+	scAddr := manifestConfig["XCHAIN_SECURITY_CONFIG_CONTRACT"]
+	govAddr := manifestConfig["XCHAIN_GOVERNANCE_CONTRACT"]
 
 	if scAddr == "" {
-		return nil, fmt.Errorf("XCHAIN_SECURITY_CONFIG_CONTRACT not set in environment")
+		return nil, fmt.Errorf("XCHAIN_SECURITY_CONFIG_CONTRACT not found in manifest")
 	}
 	if govAddr == "" {
-		return nil, fmt.Errorf("XCHAIN_GOVERNANCE_CONTRACT not set in environment")
+		return nil, fmt.Errorf("XCHAIN_GOVERNANCE_CONTRACT not found in manifest")
 	}
 
 	manager := &RATLSEnvManager{

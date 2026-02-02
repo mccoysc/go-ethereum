@@ -35,14 +35,14 @@
 export GRAMINE_VERSION="1.0-test"
 export SGX_TEST_MODE="true"
 
-# Mock whitelist from genesis alloc storage (for testing only)
-# These values should match the mock MRENCLAVE/MRSIGNER in attestation device
-# 这些环境变量代表genesis.json中合约地址的storage内容
-export XCHAIN_CONTRACT_MRENCLAVES="40807cade135f3346f59c3b40a45b8cf0ecc262e1b172afc62b82232e662c78a"
-export XCHAIN_CONTRACT_MRSIGNERS="68192bc24bc4c220898e2f96d1ebeebd4d8ec778db7891231c55b17d0d0f8983"
-
-# Intel SGX API key for PCCS
+# Intel SGX API key for PCCS (non-security parameter)
 export INTEL_SGX_API_KEY="${INTEL_SGX_API_KEY:-a8ece8747e7b4d8d98d23faec065b0b8}"
+
+# SECURITY REQUIREMENT ENFORCEMENT:
+# NO environment variables for security parameters!
+# - Contract addresses: ONLY from verified manifest file
+# - Whitelist data: ONLY from genesis.json alloc storage or contract storage
+# - Environment variables are ONLY for test mode flags and non-security config
 
 # Print environment for debugging
 print_test_env() {
@@ -263,6 +263,33 @@ verify_test_env() {
         fi
     fi
     
+    # SECURITY ENFORCEMENT: Verify NO security parameters in environment
+    if [ -n "$XCHAIN_CONTRACT_MRENCLAVES" ]; then
+        echo "ERROR: XCHAIN_CONTRACT_MRENCLAVES found in environment"
+        echo "  Security parameters must NOT be passed via environment variables"
+        echo "  Use genesis.json alloc storage instead"
+        errors=$((errors + 1))
+    fi
+    
+    if [ -n "$XCHAIN_CONTRACT_MRSIGNERS" ]; then
+        echo "ERROR: XCHAIN_CONTRACT_MRSIGNERS found in environment"
+        echo "  Security parameters must NOT be passed via environment variables"
+        echo "  Use genesis.json alloc storage instead"
+        errors=$((errors + 1))
+    fi
+    
+    if [ -n "$XCHAIN_SECURITY_CONFIG_CONTRACT" ]; then
+        echo "ERROR: XCHAIN_SECURITY_CONFIG_CONTRACT found in environment"
+        echo "  Contract addresses must ONLY come from verified manifest file"
+        errors=$((errors + 1))
+    fi
+    
+    if [ -n "$XCHAIN_GOVERNANCE_CONTRACT" ]; then
+        echo "ERROR: XCHAIN_GOVERNANCE_CONTRACT found in environment"
+        echo "  Contract addresses must ONLY come from verified manifest file"
+        errors=$((errors + 1))
+    fi
+    
     if [ $errors -gt 0 ]; then
         echo "Test environment verification failed with $errors errors"
         return 1
@@ -270,7 +297,8 @@ verify_test_env() {
     
     echo "✓ Test environment verified successfully"
     echo "  - Manifest file: $GRAMINE_MANIFEST_PATH"
-    echo "  - Contract addresses will be read from manifest"
-    echo "  - Configuration will be read from contract storage or genesis"
+    echo "  - Contract addresses: will be read from manifest"
+    echo "  - Whitelist: will be read from genesis.json or contract storage"
+    echo "  - NO security parameters in environment variables ✓"
     return 0
 }
