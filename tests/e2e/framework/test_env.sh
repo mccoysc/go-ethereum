@@ -40,12 +40,18 @@ export XCHAIN_SGX_MODE="mock"
 # Gramine version for testing (required by SGX consensus engine)
 export GRAMINE_VERSION="test"
 
+# Intel SGX API key for PCCS (Platform Certification Caching Service)
+# Required for quote verification with Intel's attestation service
+# Can be obtained from https://api.portal.trustedservices.intel.com/
+export INTEL_SGX_API_KEY="${INTEL_SGX_API_KEY:-a8ece8747e7b4d8d98d23faec065b0b8}"
+
 # Print environment for debugging
 print_test_env() {
     echo "=== Test Environment Configuration ==="
     echo "XCHAIN_GOVERNANCE_CONTRACT=$XCHAIN_GOVERNANCE_CONTRACT"
     echo "XCHAIN_SECURITY_CONFIG_CONTRACT=$XCHAIN_SECURITY_CONFIG_CONTRACT"
     echo "XCHAIN_SGX_MODE=${XCHAIN_SGX_MODE:-not set}"
+    echo "INTEL_SGX_API_KEY=${INTEL_SGX_API_KEY:0:8}... (first 8 chars)"
     echo ""
     echo "注意: XCHAIN_ENCRYPTED_PATH和XCHAIN_SECRET_PATH"
     echo "      从安全配置合约读取，不使用环境变量"
