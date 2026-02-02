@@ -50,10 +50,10 @@ start_test_node() {
     # Setup test environment before starting node
     setup_test_filesystem
     
-    # Set X Chain environment variables
+    # Set X Chain SGX mode for testing
+    # Note: XCHAIN_ENCRYPTED_PATH and XCHAIN_SECRET_PATH are read from
+    # security config contract, NOT from environment variables (to prevent tampering)
     export XCHAIN_SGX_MODE=mock
-    export XCHAIN_ENCRYPTED_PATH="${XCHAIN_ENCRYPTED_PATH:-/tmp/xchain-e2e-encrypted}"
-    export XCHAIN_SECRET_PATH="${XCHAIN_SECRET_PATH:-/tmp/xchain-e2e-secrets}"
     
     # Start geth in background with PoA-SGX consensus and HTTP RPC enabled
     # Note: PoA-SGX handles block production automatically, no --mine flag needed

@@ -11,19 +11,18 @@
 #    - XCHAIN_GOVERNANCE_CONTRACT: 治理合约地址
 #    - XCHAIN_SECURITY_CONFIG_CONTRACT: 安全配置合约地址
 #
-# 2. 数据路径（可选）
-#    - XCHAIN_ENCRYPTED_PATH: 加密数据存储路径
-#    - XCHAIN_SECRET_PATH: 密钥存储路径
+# 2. SGX模式（测试用）
+#    - XCHAIN_SGX_MODE: mock（在非SGX环境测试时使用）
 #
 # 3. Gramine相关（可选，仅在Gramine环境中需要）
 #    - GRAMINE_MANIFEST_PATH: Manifest文件路径
 #    - GRAMINE_SIGSTRUCT_KEY_PATH: 签名密钥路径
 #    - GRAMINE_APP_NAME: 应用名称
 #
-# 注意：代码会自动检测运行环境：
-# - 如果检测到IN_SGX=1或GRAMINE_SGX=1，会启用SGX验证
-# - 如果未检测到SGX环境，会自动允许在非SGX模式运行（开发/测试）
-# - 不需要显式设置SGX_TEST_MODE或IN_SGX环境变量
+# 注意：
+# - 代码会自动检测运行环境（IN_SGX/GRAMINE_SGX）
+# - XCHAIN_ENCRYPTED_PATH和XCHAIN_SECRET_PATH从安全配置合约读取，
+#   不能通过环境变量设置（防止篡改）
 # ==============================================================================
 
 # Contract addresses (pre-deployed in genesis block)
@@ -35,17 +34,15 @@
 export XCHAIN_GOVERNANCE_CONTRACT="0xd9145CCE52D386f254917e481eB44e9943F39138"
 export XCHAIN_SECURITY_CONFIG_CONTRACT="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 
-# 数据路径配置（用于指定加密存储路径）
-export XCHAIN_ENCRYPTED_PATH="${XCHAIN_ENCRYPTED_PATH:-/tmp/xchain-e2e-encrypted}"
-export XCHAIN_SECRET_PATH="${XCHAIN_SECRET_PATH:-/tmp/xchain-e2e-secrets}"
-
 # Print environment for debugging
 print_test_env() {
     echo "=== Test Environment Configuration ==="
     echo "XCHAIN_GOVERNANCE_CONTRACT=$XCHAIN_GOVERNANCE_CONTRACT"
     echo "XCHAIN_SECURITY_CONFIG_CONTRACT=$XCHAIN_SECURITY_CONFIG_CONTRACT"
-    echo "XCHAIN_ENCRYPTED_PATH=$XCHAIN_ENCRYPTED_PATH"
-    echo "XCHAIN_SECRET_PATH=$XCHAIN_SECRET_PATH"
+    echo "XCHAIN_SGX_MODE=${XCHAIN_SGX_MODE:-not set}"
+    echo ""
+    echo "注意: XCHAIN_ENCRYPTED_PATH和XCHAIN_SECRET_PATH"
+    echo "      从安全配置合约读取，不使用环境变量"
     echo "======================================"
 }
 
@@ -58,23 +55,21 @@ setup_test_filesystem() {
     
     # 1. 创建基础目录
     mkdir -p "$test_dir"
-    mkdir -p "$XCHAIN_ENCRYPTED_PATH"
-    mkdir -p "$XCHAIN_SECRET_PATH"
     
     # 2. 设置mock attestation设备（/dev/attestation）
-    # 虽然在SGX_TEST_MODE下不会真正使用，但某些代码路径可能检查文件存在性
+    # 在测试模式下，某些代码路径可能检查文件存在性
     setup_mock_attestation_device
     
     # 3. 设置mock manifest文件
-    # 用于manifest签名验证（在SGX_TEST_MODE下会跳过真实验证）
+    # 用于manifest签名验证
     setup_mock_manifest_files "$test_dir/manifest"
     
     echo "✓ Test filesystem setup complete"
     echo "  - Root: $test_dir"
-    echo "  - Encrypted: $XCHAIN_ENCRYPTED_PATH"
-    echo "  - Secrets: $XCHAIN_SECRET_PATH"
     echo "  - Attestation device: /tmp/xchain-test-dev-attestation"
     echo "  - Manifest files: $test_dir/manifest"
+    echo ""
+    echo "注意: 加密和密钥存储路径从安全配置合约读取"
 }
 
 # Clean up test filesystem
