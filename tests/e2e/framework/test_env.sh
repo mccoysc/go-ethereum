@@ -7,33 +7,37 @@
 # ==============================================================================
 # PoA-SGX共识运行在生产模式，测试通过mock环境文件实现
 #
-# 1. Manifest文件 - 提供安全配置合约地址
-#    - GRAMINE_MANIFEST_PATH: 指向包含合约地址的manifest文件
+# 配置来源严格分离：
 #
-# 2. Mock SGX设备 - 模拟/dev/attestation
+# 1. 合约地址 - 只能来自manifest文件
+#    - GRAMINE_MANIFEST_PATH: 指向包含合约地址的manifest文件
+#    - Manifest包含: XCHAIN_SECURITY_CONFIG_CONTRACT
+#    - Manifest包含: XCHAIN_GOVERNANCE_CONTRACT (可选，可从安全配置合约读取)
+#
+# 2. 配置内容 - 来自合约storage或genesis alloc storage
+#    - 白名单: 从安全配置合约storage读取
+#    - Fallback: 从genesis alloc中同一地址的storage读取
+#    - 环境变量仅用于测试，代表genesis alloc storage内容
+#
+# 3. Mock SGX设备 - 模拟/dev/attestation
 #    - 创建mock MRENCLAVE文件
 #    - 创建可写的user_report_data
 #    - 创建quote输出文件
 #
-# 3. 白名单配置 - 代表genesis alloc storage
-#    - XCHAIN_CONTRACT_MRENCLAVES: 预设的MRENCLAVE白名单（逗号分隔）
-#    - XCHAIN_CONTRACT_MRSIGNERS: 预设的MRSIGNER白名单（逗号分隔）
-#
 # 4. Gramine环境
 #    - GRAMINE_VERSION: 版本标识
 #    - SGX_TEST_MODE: true（跳过某些硬件检查）
+#
+# 注意：合约地址绝不能通过环境变量设置，只能从manifest读取！
 # ==============================================================================
-
-# Contract addresses from genesis.json
-export XCHAIN_GOVERNANCE_CONTRACT="0xd9145CCE52D386f254917e481eB44e9943F39138"
-export XCHAIN_SECURITY_CONFIG_CONTRACT="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 
 # Gramine environment (required)
 export GRAMINE_VERSION="1.0-test"
 export SGX_TEST_MODE="true"
 
-# Mock whitelist from contract storage (represents genesis alloc storage)
+# Mock whitelist from genesis alloc storage (for testing only)
 # These values should match the mock MRENCLAVE/MRSIGNER in attestation device
+# 这些环境变量代表genesis.json中合约地址的storage内容
 export XCHAIN_CONTRACT_MRENCLAVES="40807cade135f3346f59c3b40a45b8cf0ecc262e1b172afc62b82232e662c78a"
 export XCHAIN_CONTRACT_MRSIGNERS="68192bc24bc4c220898e2f96d1ebeebd4d8ec778db7891231c55b17d0d0f8983"
 
@@ -43,13 +47,12 @@ export INTEL_SGX_API_KEY="${INTEL_SGX_API_KEY:-a8ece8747e7b4d8d98d23faec065b0b8}
 # Print environment for debugging
 print_test_env() {
     echo "=== Test Environment Configuration ==="
-    echo "XCHAIN_GOVERNANCE_CONTRACT=$XCHAIN_GOVERNANCE_CONTRACT"
-    echo "XCHAIN_SECURITY_CONFIG_CONTRACT=$XCHAIN_SECURITY_CONFIG_CONTRACT"
-    echo "XCHAIN_SGX_MODE=${XCHAIN_SGX_MODE:-not set}"
-    echo "INTEL_SGX_API_KEY=${INTEL_SGX_API_KEY:0:8}... (first 8 chars)"
+    echo "Gramine Version: $GRAMINE_VERSION"
+    echo "SGX Test Mode: $SGX_TEST_MODE"
+    echo "Intel API Key: ${INTEL_SGX_API_KEY:0:8}... (first 8 chars)"
+    echo "Manifest Path: ${GRAMINE_MANIFEST_PATH:-not set}"
     echo ""
-    echo "注意: XCHAIN_ENCRYPTED_PATH和XCHAIN_SECRET_PATH"
-    echo "      从安全配置合约读取，不使用环境变量"
+    echo "注意: 合约地址从manifest读取，配置内容从合约storage读取"
     echo "======================================"
 }
 
@@ -245,14 +248,19 @@ verify_test_env() {
     
     echo "Verifying test environment..."
     
-    if [ -z "$XCHAIN_GOVERNANCE_CONTRACT" ]; then
-        echo "ERROR: XCHAIN_GOVERNANCE_CONTRACT not set"
+    # 检查manifest文件是否存在
+    if [ -z "$GRAMINE_MANIFEST_PATH" ]; then
+        echo "ERROR: GRAMINE_MANIFEST_PATH not set"
         errors=$((errors + 1))
-    fi
-    
-    if [ -z "$XCHAIN_SECURITY_CONFIG_CONTRACT" ]; then
-        echo "ERROR: XCHAIN_SECURITY_CONFIG_CONTRACT not set"
+    elif [ ! -f "$GRAMINE_MANIFEST_PATH" ]; then
+        echo "ERROR: Manifest file not found: $GRAMINE_MANIFEST_PATH"
         errors=$((errors + 1))
+    else
+        # 验证manifest包含必要的配置
+        if ! grep -q "XCHAIN_SECURITY_CONFIG_CONTRACT" "$GRAMINE_MANIFEST_PATH"; then
+            echo "ERROR: Manifest missing XCHAIN_SECURITY_CONFIG_CONTRACT"
+            errors=$((errors + 1))
+        fi
     fi
     
     if [ $errors -gt 0 ]; then
@@ -261,7 +269,8 @@ verify_test_env() {
     fi
     
     echo "✓ Test environment verified successfully"
-    echo "  - Running in non-SGX mode (development/testing)"
-    echo "  - Code will automatically skip SGX-specific validations"
+    echo "  - Manifest file: $GRAMINE_MANIFEST_PATH"
+    echo "  - Contract addresses will be read from manifest"
+    echo "  - Configuration will be read from contract storage or genesis"
     return 0
 }
