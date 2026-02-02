@@ -67,7 +67,7 @@ import struct
 import hashlib
 import os
 
-output_dir = os.environ.get('MOCK_DEV_DIR', '/tmp/mock-gramine-dev/attestation')
+output_dir = os.environ.get('MOCK_DEV_DIR', '/tmp/mock-gramine-dev')
 quote_path = os.path.join(output_dir, 'attestation/quote')
 
 # 生成模拟的SGX quote
