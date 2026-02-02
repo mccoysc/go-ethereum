@@ -83,7 +83,12 @@ start_test_node() {
     # Unlock the miner account for block signing
     # Use nohup and redirect to ensure proper background execution
     # Disable auth RPC (Engine API) since SGX doesn't need external beacon client
-    nohup $geth --datadir "$datadir" \
+    # Export all environment variables for the subprocess
+    env XCHAIN_GOVERNANCE_CONTRACT="$XCHAIN_GOVERNANCE_CONTRACT" \
+        XCHAIN_SECURITY_CONFIG_CONTRACT="$XCHAIN_SECURITY_CONFIG_CONTRACT" \
+        XCHAIN_SGX_MODE="$XCHAIN_SGX_MODE" \
+        GRAMINE_VERSION="$GRAMINE_VERSION" \
+        nohup $geth --datadir "$datadir" \
         --networkid 762385986 \
         --port "$port" \
         --http \
