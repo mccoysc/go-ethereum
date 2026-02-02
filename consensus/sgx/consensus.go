@@ -233,36 +233,30 @@ func (e *SGXEngine) verifyHeader(chain consensus.ChainHeaderReader, header *type
 		return ErrInvalidExtra
 	}
 
-	// 验证 SGX Quote（硬件级签名验证）
-	// Quote验证包括：
-	// 1. 硬件签名验证（Intel/AMD CPU签名，不可伪造）
-	// 2. MRENCLAVE验证（确保enclave代码未被篡改）
-	// 3. TCB状态检查
-	// Quote的userData包含seal hash，在VerifyUncles中验证
-	if err := e.verifier.VerifyQuote(extra.SGXQuote); err != nil {
+	// 完整的Quote验证（一次性获取所有数据）
+	// 这会验证Quote并返回所有measurements和instanceID
+	// 匹配gramine sgx-quote-verify.js的verifyQuote()逻辑
+	quoteResult, err := e.verifier.VerifyQuoteComplete(extra.SGXQuote)
+	if err != nil {
+		return fmt.Errorf("quote verification failed: %w", err)
+	}
+	
+	if !quoteResult.Verified {
 		return ErrQuoteVerificationFailed
 	}
 
-	// 验证ProducerID：从Quote中提取CPU Instance ID并与声明的ProducerID比较
-	// Instance ID确保一个物理CPU只能作为一个生产者，防止Sybil攻击
-	instanceID, err := e.verifier.ExtractInstanceID(extra.SGXQuote)
-	if err != nil {
-		return fmt.Errorf("failed to extract instance ID from quote: %w", err)
-	}
-	
-	// ProducerID应该是Instance ID的前20字节
-	expectedProducerID := make([]byte, 20)
-	if len(instanceID) >= 20 {
-		copy(expectedProducerID, instanceID[:20])
-	} else {
-		copy(expectedProducerID, instanceID)
-	}
-	
-	if !bytes.Equal(expectedProducerID, extra.ProducerID) {
-		return ErrInvalidProducerID
+	// 验证ProducerID：应该等于从Quote验证中返回的PlatformInstanceID
+	// 这确保一个物理CPU只能作为一个生产者，防止Sybil攻击
+	if !bytes.Equal(quoteResult.Measurements.PlatformInstanceID[:], extra.ProducerID) {
+		return fmt.Errorf("producer ID mismatch: expected %x (from %s), got %x",
+			quoteResult.Measurements.PlatformInstanceID[:],
+			quoteResult.Measurements.PlatformInstanceIDSource,
+			extra.ProducerID)
 	}
 
-	// Quote本身就是签名，不需要额外的ECDSA验证
+	// 可以在这里添加更多验证，比如检查MRENCLAVE、MRSIGNER等
+	// if needed: verify quoteResult.Measurements.MrEnclave matches expected value
+	// if needed: verify quoteResult.Measurements.MrSigner matches expected value
 
 	return nil
 }
@@ -395,11 +389,20 @@ func (e *SGXEngine) Seal(chain consensus.ChainHeaderReader, block *types.Block, 
 		return err
 	}
 
-	// 3. 获取出块者ID（可以从MRENCLAVE派生，或使用固定值）
-	producerID, err := e.attestor.GetProducerID()
+	// 3. 从Quote验证中获取ProducerID
+	//    使用VerifyQuoteComplete一次性获取所有数据（包括instanceID）
+	//    这样ProducerID和验证逻辑保持一致
+	quoteResult, err := e.verifier.VerifyQuoteComplete(quote)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to verify generated quote: %w", err)
 	}
+	
+	if !quoteResult.Verified {
+		return errors.New("generated quote failed verification")
+	}
+	
+	// ProducerID就是PlatformInstanceID
+	producerID := quoteResult.Measurements.PlatformInstanceID[:]
 
 	// 4. 构造包含SGX证明的Extra数据
 	extra := &SGXExtra{
