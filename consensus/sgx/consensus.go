@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"sync"
@@ -232,23 +233,34 @@ func (e *SGXEngine) verifyHeader(chain consensus.ChainHeaderReader, header *type
 		return ErrInvalidExtra
 	}
 
-	// 验证 SGX Quote
+	// 验证 SGX Quote（包含硬件签名验证）
+	// Quote验证包括：
+	// 1. 硬件签名验证（Intel/AMD CPU签名）
+	// 2. MRENCLAVE验证（确保代码未被篡改）
+	// 3. TCB状态检查
 	if err := e.verifier.VerifyQuote(extra.SGXQuote); err != nil {
 		return ErrQuoteVerificationFailed
 	}
 
-	// 验证 ProducerID 匹配
-	producerID, err := e.verifier.ExtractProducerID(extra.SGXQuote)
+	// 从Quote的ReportData中提取签名公钥
+	// ReportData包含64字节的公钥坐标（X + Y）
+	pubKey, err := e.verifier.ExtractPublicKeyFromQuote(extra.SGXQuote)
 	if err != nil {
-		return ErrInvalidProducerID
+		return fmt.Errorf("failed to extract public key from quote: %w", err)
 	}
-	if !bytes.Equal(producerID, extra.ProducerID) {
+
+	// 验证ProducerID与公钥匹配
+	// ProducerID应该是从公钥派生的以太坊地址
+	expectedProducerID := crypto.Keccak256(pubKey[1:])[12:] // Derive address from public key
+	if !bytes.Equal(expectedProducerID, extra.ProducerID) {
 		return ErrInvalidProducerID
 	}
 
-	// 验证签名
+	// 验证ECDSA签名
+	// 用从Quote中提取的公钥验证区块签名
+	// 这证明：1) 公钥来自合法enclave（Quote验证） 2) 区块数据未被篡改（签名验证）
 	sealHash := e.SealHash(header)
-	if err := e.verifier.VerifySignature(sealHash.Bytes(), extra.Signature, extra.ProducerID); err != nil {
+	if err := e.verifier.VerifySignature(sealHash.Bytes(), extra.Signature, pubKey); err != nil {
 		return ErrInvalidSignature
 	}
 
@@ -256,43 +268,16 @@ func (e *SGXEngine) verifyHeader(chain consensus.ChainHeaderReader, header *type
 }
 
 // VerifyUncles 验证叔块（PoA-SGX 不支持叔块）
-// 同时验证SGX Quote中的userData是否匹配完整区块哈希
 func (e *SGXEngine) VerifyUncles(chain consensus.ChainReader, block *types.Block) error {
 	// PoA-SGX不支持叔块
 	if len(block.Uncles()) > 0 {
 		return errors.New("uncles not allowed in PoA-SGX")
 	}
 	
-	// ===== 关键安全验证：Quote userData必须匹配完整区块哈希 =====
-	// 这确保了：
-	// 1. Quote确实是为这个特定区块生成的
-	// 2. 区块中的所有交易数据都被SGX Enclave验证过
-	// 3. 防止恶意节点用其他区块的Quote替换
-	
-	header := block.Header()
-	extra, err := DecodeSGXExtra(header.Extra)
-	if err != nil {
-		return ErrInvalidExtra
-	}
-	
-	// 计算完整区块哈希（包括所有交易）
-	blockHash := block.Hash()
-	
-	// 从Quote中提取userData
-	userData, err := e.verifier.ExtractQuoteUserData(extra.SGXQuote)
-	if err != nil {
-		return errors.New("failed to extract userData from Quote")
-	}
-	
-	// 验证userData必须等于完整区块哈希
-	if !bytes.Equal(userData, blockHash.Bytes()) {
-		log.Error("Quote userData mismatch",
-			"expected", blockHash.Hex(),
-			"got", common.BytesToHash(userData).Hex())
-		return errors.New("Quote userData does not match block hash - possible tampering")
-	}
-	
-	log.Debug("✓ Quote userData verified", "blockHash", blockHash.Hex())
+	// PoA-SGX的安全性由Quote + ECDSA签名双重保证：
+	// 1. Quote证明签名公钥来自合法SGX enclave（VerifyHeader中验证）
+	// 2. ECDSA签名证明区块数据未被篡改（VerifyHeader中验证）
+	// 因此这里不需要额外的userData验证
 	
 	return nil
 }
@@ -350,7 +335,7 @@ func (e *SGXEngine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, heade
 	return types.NewBlock(header, body, receipts, trie.NewStackTrie(nil)), nil
 }
 
-// Seal 密封区块（生成SGX远程证明并签名）
+// Seal 密封区块（生成SGX远程证明和签名）
 // 这是唯一涉及SGX的核心函数，其他所有处理与以太坊一致
 func (e *SGXEngine) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
 	header := block.Header()
@@ -358,43 +343,56 @@ func (e *SGXEngine) Seal(chain consensus.ChainHeaderReader, block *types.Block, 
 	// 标准以太坊处理：计算seal hash（不包含签名的区块哈希）
 	sealHash := e.SealHash(header)
 
-	// ===== SGX核心功能：远程证明 =====
-	// 关键改进：使用完整区块数据（包括所有交易）的哈希作为userData
-	// 这确保Quote不仅证明了区块头，还证明了整个区块的所有交易数据
+	// ===== SGX核心功能：远程证明 + 签名 =====
+	// 设计思路：
+	// 1. Quote证明签名公钥来自合法SGX enclave（公钥写入ReportData）
+	// 2. ECDSA签名证明区块数据未被篡改
+	// 两层验证确保安全性
 	
-	// 1. 计算完整区块数据的哈希（包括区块头+所有交易+叔块等）
-	blockHash := block.Hash()
-	
-	// 2. 使用完整区块哈希作为userData生成SGX Quote
-	//    这证明了：
-	//    - 该区块确实是在SGX Enclave内产生的
-	//    - 所有交易都在Enclave内正确执行（代码不可篡改）
-	//    - 区块数据的完整性得到SGX硬件级保护
-	//    Quote包含：MRENCLAVE、userData(blockHash)、timestamp等
-	quote, err := e.attestor.GenerateQuote(blockHash.Bytes())
-	if err != nil {
-		return err
-	}
-
-	// 3. 获取出块者ID（从SGX证书中提取）
+	// 1. 获取出块者ID和公钥
 	producerID, err := e.attestor.GetProducerID()
 	if err != nil {
 		return err
 	}
+	
+	// 2. 获取签名公钥（secp256k1，65字节未压缩格式）
+	// 公钥将写入Quote的ReportData，证明它来自合法enclave
+	pubKeyBytes := e.attestor.GetSigningPublicKey()
+	
+	// 3. 构造ReportData（64字节）
+	//    公钥是65字节（0x04 + 32字节X + 32字节Y），我们使用后64字节
+	reportData := make([]byte, 64)
+	if len(pubKeyBytes) >= 65 {
+		copy(reportData, pubKeyBytes[1:65]) // Skip 0x04 prefix, take X+Y coordinates (64 bytes)
+	} else {
+		return fmt.Errorf("invalid public key length: %d", len(pubKeyBytes))
+	}
+	
+	// 4. 生成SGX Quote（包含公钥）
+	//    Quote证明：
+	//    - 该公钥确实来自SGX Enclave
+	//    - Enclave代码未被篡改（MRENCLAVE验证）
+	//    - 硬件级保证公钥的可信来源
+	quote, err := e.attestor.GenerateQuote(reportData)
+	if err != nil {
+		return err
+	}
 
-	// 4. 在Enclave内对区块进行签名
-	//    私钥永远不会离开SGX Enclave，保证安全性
+	// 5. 用enclave内的私钥对区块进行ECDSA签名
+	//    签名证明：
+	//    - 区块数据未被篡改
+	//    - 签名者拥有对应的私钥（私钥永不离开enclave）
 	signature, err := e.attestor.SignInEnclave(sealHash.Bytes())
 	if err != nil {
 		return err
 	}
 
-	// 5. 构造包含SGX证明的Extra数据
+	// 6. 构造包含SGX证明和签名的Extra数据
 	extra := &SGXExtra{
-		SGXQuote:      quote,                       // SGX远程证明报告（包含完整区块哈希）
-		ProducerID:    producerID,                  // 出块者身份
+		SGXQuote:      quote,                       // SGX Quote（包含签名公钥）
+		ProducerID:    producerID,                  // 出块者身份（从公钥派生）
 		AttestationTS: uint64(time.Now().Unix()),  // 证明时间戳
-		Signature:     signature,                   // Enclave内的签名
+		Signature:     signature,                   // ECDSA签名（65字节）
 	}
 
 	extraData, err := extra.Encode()

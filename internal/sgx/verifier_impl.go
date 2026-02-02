@@ -195,60 +195,74 @@ func ExtractMRSigner(quote []byte) ([]byte, error) {
 // data: the data that was signed
 // signature: ECDSA signature (65 bytes: r + s + v)
 // producerID: producer ID (Ethereum address, 20 bytes)
-func (v *DCAPVerifier) VerifySignature(data, signature, producerID []byte) error {
+// VerifySignature verifies an ECDSA signature using the provided public key.
+// data: the data that was signed
+// signature: the ECDSA signature (65 bytes)
+// publicKey: the public key in uncompressed format (65 bytes: 0x04 + X + Y)
+func (v *DCAPVerifier) VerifySignature(data, signature, publicKey []byte) error {
 	if len(signature) != 65 {
 		return fmt.Errorf("invalid signature length: expected 65 bytes, got %d", len(signature))
 	}
-	if len(producerID) != 20 {
-		return fmt.Errorf("invalid producer ID length: expected 20 bytes, got %d", len(producerID))
+	if len(publicKey) != 65 || publicKey[0] != 0x04 {
+		return fmt.Errorf("invalid public key format: expected 65 bytes with 0x04 prefix")
 	}
 
 	// Hash the data
 	hash := crypto.Keccak256(data)
 
 	// Recover public key from signature
-	pubKey, err := crypto.SigToPub(hash, signature)
+	recoveredPubKey, err := crypto.SigToPub(hash, signature)
 	if err != nil {
 		return fmt.Errorf("failed to recover public key: %w", err)
 	}
 
-	// Derive address from public key
-	pubKeyBytes := elliptic.Marshal(pubKey.Curve, pubKey.X, pubKey.Y)
-	addressHash := crypto.Keccak256(pubKeyBytes[1:]) // Skip 0x04 prefix
-	recoveredAddress := addressHash[12:]             // Last 20 bytes
+	// Convert recovered public key to bytes
+	recoveredPubKeyBytes := crypto.FromECDSAPub(recoveredPubKey)
 
-	// Compare with expected producer ID
-	if !bytes.Equal(recoveredAddress, producerID) {
-		return fmt.Errorf("signature verification failed: address mismatch")
+	// Compare with expected public key
+	if !bytes.Equal(recoveredPubKeyBytes, publicKey) {
+		return fmt.Errorf("signature verification failed: public key mismatch")
 	}
 
 	return nil
 }
 
-// ExtractProducerID extracts the producer ID (Ethereum address) from an SGX Quote.
-// The producer ID is derived from the public key embedded in the quote's report data.
-func (v *DCAPVerifier) ExtractProducerID(quote []byte) ([]byte, error) {
+// ExtractPublicKeyFromQuote extracts the signing public key from the SGX Quote.
+// The public key is embedded in ReportData as X+Y coordinates (64 bytes).
+// Returns uncompressed format (65 bytes: 0x04 + X + Y).
+func (v *DCAPVerifier) ExtractPublicKeyFromQuote(quote []byte) ([]byte, error) {
 	parsedQuote, err := ParseQuote(quote)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse quote: %w", err)
 	}
 
-	// Extract public key from report data
-	// The first 64 bytes of report data contain the public key (32 bytes X + 32 bytes Y for P-256)
+	// Extract public key coordinates from ReportData
+	// ReportData contains: X coordinate (32 bytes) + Y coordinate (32 bytes)
 	if len(parsedQuote.ReportData) < 64 {
 		return nil, fmt.Errorf("insufficient report data for public key")
 	}
 
-	// Create uncompressed public key
-	pubKeyBytes := make([]byte, 65)
-	pubKeyBytes[0] = 0x04                                   // Uncompressed point marker
-	copy(pubKeyBytes[1:33], parsedQuote.ReportData[:32])   // X coordinate
-	copy(pubKeyBytes[33:65], parsedQuote.ReportData[32:64]) // Y coordinate
+	// Construct uncompressed public key: 0x04 + X + Y
+	pubKey := make([]byte, 65)
+	pubKey[0] = 0x04 // Uncompressed point marker
+	copy(pubKey[1:33], parsedQuote.ReportData[0:32])   // X coordinate
+	copy(pubKey[33:65], parsedQuote.ReportData[32:64]) // Y coordinate
+	
+	return pubKey, nil
+}
 
+// ExtractProducerID extracts the producer ID from the SGX Quote.
+// ProducerID is derived from the public key in ReportData.
+func (v *DCAPVerifier) ExtractProducerID(quote []byte) ([]byte, error) {
+	// Extract public key first
+	pubKey, err := v.ExtractPublicKeyFromQuote(quote)
+	if err != nil {
+		return nil, err
+	}
+	
 	// Derive Ethereum address from public key
-	hash := crypto.Keccak256(pubKeyBytes[1:]) // Skip 0x04 prefix
-	address := hash[12:]                      // Last 20 bytes
-
+	address := crypto.Keccak256(pubKey[1:])[12:] // Skip 0x04 prefix, take last 20 bytes
+	
 	return address, nil
 }
 
