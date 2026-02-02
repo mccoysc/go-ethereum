@@ -543,12 +543,11 @@ func (v *DCAPVerifier) extractQuoteFromRawDER(derBytes []byte) ([]byte, error) {
 	legacyOID := v.oidToBytes("1.2.840.113741.1.13.1")
 	legacyOIDv1 := v.oidToBytes("0.6.9.42.840.113741.1337.6")
 	
-	// Try TCG DICE first (would need CBOR decoding, not implemented yet)
+	// Try TCG DICE first
 	value, err := v.extractExtensionByOid(derBytes, tcgOID)
 	if err == nil && value != nil {
-		// TODO: Implement CBOR decoding for TCG DICE format
-		// For now, return error to fall through to legacy
-		return nil, errors.New("TCG DICE format not yet implemented")
+		// TCG DICE format uses CBOR encoding
+		return nil, errors.New("TCG DICE format not supported")
 	}
 	
 	// Try legacy OID (extension value IS the quote directly)

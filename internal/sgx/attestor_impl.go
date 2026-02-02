@@ -53,11 +53,8 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 	}
 
 	// Generate signing key using secp256k1 for Ethereum compatibility
-	// Derived from SGX sealing key for persistence across restarts
 	var signingKey *ecdsa.PrivateKey
 	
-	// Generate ephemeral key
-	// Production deployment should use SGX sealing API to persist this key
 	signingKey, err = crypto.GenerateKey()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate signing key: %w", err)

@@ -174,7 +174,7 @@ func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
 	defer cancel()
 
 	// Create contract callers
-	securityCaller, err := newSecurityConfigContractCaller(m.client, m.securityConfigContract, testMode)
+	securityCaller, err := newSecurityConfigContractCaller(m.client, m.securityConfigContract)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create security config caller: %w", err)
 	}

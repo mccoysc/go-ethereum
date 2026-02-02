@@ -260,8 +260,6 @@ func (e *SGXEngine) verifyHeader(chain consensus.ChainHeaderReader, header *type
 	}
 
 	// 可以在这里添加更多验证，比如检查MRENCLAVE、MRSIGNER等
-	// if needed: verify quoteResult.Measurements.MrEnclave matches expected value
-	// if needed: verify quoteResult.Measurements.MrSigner matches expected value
 
 	return nil
 }
