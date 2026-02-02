@@ -373,17 +373,39 @@ if len(result.Measurements.ReportData) > 32 {
 t.Logf("Report Data (bytes 32-64): %s", hex.EncodeToString(result.Measurements.ReportData[32:]))
 }
 
-// Verify expected values from the real certificate
-expectedMrEnclave := "636479c486ebe6d3b3ec6e22ec0b4ee4cec428450a055c4ebee36d6e9b8660a8"
+// Verify expected values from the real certificate (provided by user)
+expectedMrEnclave := "6364c9c486ebe6d3b3ec6e22ec0b4ee4cec428450a055c4ebee36d6e9b8660a8"
 actualMrEnclave := hex.EncodeToString(result.Measurements.MrEnclave)
 if actualMrEnclave != expectedMrEnclave {
 t.Errorf("MRENCLAVE mismatch: expected %s, got %s", expectedMrEnclave, actualMrEnclave)
 }
 
-expectedMrSigner := "d50454b3c3717ed87d3982fbb7b17f3b07f12ba66b69f75c02536620f35d0d5b"
+expectedMrSigner := "d504543bc3717ed87d3982fbb7b17f3b07f12ba66b69f75c02536620f35d0d5b"
 actualMrSigner := hex.EncodeToString(result.Measurements.MrSigner)
 if actualMrSigner != expectedMrSigner {
 t.Errorf("MRSIGNER mismatch: expected %s, got %s", expectedMrSigner, actualMrSigner)
+}
+
+// Verify ISV_PROD_ID and ISV_SVN
+if result.Measurements.IsvProdID != 0 {
+t.Errorf("ISV_PROD_ID mismatch: expected 0, got %d", result.Measurements.IsvProdID)
+}
+if result.Measurements.IsvSvn != 0 {
+t.Errorf("ISV_SVN mismatch: expected 0, got %d", result.Measurements.IsvSvn)
+}
+
+// Verify Attributes  
+expectedAttributes := "0700000000000000e700000000000000"
+actualAttributes := hex.EncodeToString(result.Measurements.Attributes)
+if actualAttributes != expectedAttributes {
+t.Errorf("Attributes mismatch: expected %s, got %s", expectedAttributes, actualAttributes)
+}
+
+// Verify Report Data
+expectedReportData := "44f4dcf977f4990e4e94c29e8590727b754a4477f0249d3685887cff7f2ba4840000000000000000000000000000000000000000000000000000000000000000"
+actualReportData := hex.EncodeToString(result.Measurements.ReportData)
+if actualReportData != expectedReportData {
+t.Errorf("Report Data mismatch: expected %s, got %s", expectedReportData, actualReportData)
 }
 
 if result.Measurements.PlatformInstanceID == (common.Address{}) {
