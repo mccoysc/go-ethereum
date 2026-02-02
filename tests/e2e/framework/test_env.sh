@@ -3,46 +3,41 @@
 # Configures environment for PoA-SGX consensus testing
 
 # ==============================================================================
-# 关键环境变量说明
+# 环境配置说明
 # ==============================================================================
-# PoA-SGX共识协议运行所需的环境变量：
+# PoA-SGX共识运行在生产模式，测试通过mock环境文件实现
 #
-# 1. 合约地址（必须） - 从genesis.json预部署合约读取
-#    - XCHAIN_GOVERNANCE_CONTRACT: 治理合约地址
-#    - XCHAIN_SECURITY_CONFIG_CONTRACT: 安全配置合约地址
+# 1. Manifest文件 - 提供安全配置合约地址
+#    - GRAMINE_MANIFEST_PATH: 指向包含合约地址的manifest文件
 #
-# 2. SGX模式（测试用）
-#    - XCHAIN_SGX_MODE: mock（在非SGX环境测试时使用）
+# 2. Mock SGX设备 - 模拟/dev/attestation
+#    - 创建mock MRENCLAVE文件
+#    - 创建可写的user_report_data
+#    - 创建quote输出文件
 #
-# 3. Gramine相关（可选，仅在Gramine环境中需要）
-#    - GRAMINE_MANIFEST_PATH: Manifest文件路径
-#    - GRAMINE_SIGSTRUCT_KEY_PATH: 签名密钥路径
-#    - GRAMINE_APP_NAME: 应用名称
+# 3. 白名单配置 - 代表genesis alloc storage
+#    - XCHAIN_CONTRACT_MRENCLAVES: 预设的MRENCLAVE白名单（逗号分隔）
+#    - XCHAIN_CONTRACT_MRSIGNERS: 预设的MRSIGNER白名单（逗号分隔）
 #
-# 注意：
-# - 代码会自动检测运行环境（IN_SGX/GRAMINE_SGX）
-# - XCHAIN_ENCRYPTED_PATH和XCHAIN_SECRET_PATH从安全配置合约读取，
-#   不能通过环境变量设置（防止篡改）
+# 4. Gramine环境
+#    - GRAMINE_VERSION: 版本标识
+#    - SGX_TEST_MODE: true（跳过某些硬件检查）
 # ==============================================================================
 
-# Contract addresses (pre-deployed in genesis block)
-# 这些地址必须与genesis.json中的预部署合约地址匹配
-# 计算方法: keccak256(rlp([deployer, nonce]))[12:]
-# Deployer: 0x0000000000000000000000000000000000000000 (zero address)
-# GovernanceContract (nonce 0): 0xd9145CCE52D386f254917e481eB44e9943F39138
-# SecurityConfigContract (nonce 1): 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+# Contract addresses from genesis.json
 export XCHAIN_GOVERNANCE_CONTRACT="0xd9145CCE52D386f254917e481eB44e9943F39138"
 export XCHAIN_SECURITY_CONFIG_CONTRACT="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 
-# SGX mode for testing (必需)
-export XCHAIN_SGX_MODE="mock"
+# Gramine environment (required)
+export GRAMINE_VERSION="1.0-test"
+export SGX_TEST_MODE="true"
 
-# Gramine version for testing (required by SGX consensus engine)
-export GRAMINE_VERSION="test"
+# Mock whitelist from contract storage (represents genesis alloc storage)
+# These values should match the mock MRENCLAVE/MRSIGNER in attestation device
+export XCHAIN_CONTRACT_MRENCLAVES="40807cade135f3346f59c3b40a45b8cf0ecc262e1b172afc62b82232e662c78a"
+export XCHAIN_CONTRACT_MRSIGNERS="68192bc24bc4c220898e2f96d1ebeebd4d8ec778db7891231c55b17d0d0f8983"
 
-# Intel SGX API key for PCCS (Platform Certification Caching Service)
-# Required for quote verification with Intel's attestation service
-# Can be obtained from https://api.portal.trustedservices.intel.com/
+# Intel SGX API key for PCCS
 export INTEL_SGX_API_KEY="${INTEL_SGX_API_KEY:-a8ece8747e7b4d8d98d23faec065b0b8}"
 
 # Print environment for debugging
