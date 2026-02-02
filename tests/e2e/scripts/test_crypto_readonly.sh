@@ -11,6 +11,7 @@ DATA_DIR="$SCRIPT_DIR/../data"
 
 # Source framework files
 source "$FRAMEWORK_DIR/assertions.sh"
+source "$FRAMEWORK_DIR/test_env.sh"
 source "$FRAMEWORK_DIR/node.sh"
 source "$FRAMEWORK_DIR/contracts.sh"
 source "$FRAMEWORK_DIR/crypto.sh"

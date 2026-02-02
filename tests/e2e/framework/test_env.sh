@@ -11,6 +11,11 @@
 #    - XCHAIN_GOVERNANCE_CONTRACT: 治理合约地址
 #    - XCHAIN_SECURITY_CONFIG_CONTRACT: 安全配置合约地址
 #
+# 2. Gramine环境判断（用于非Gramine环境测试）
+#    - SGX_TEST_MODE: 设为"true"时跳过SGX验证
+#    - IN_SGX: Gramine运行时设置，"1"表示在SGX中运行
+#    - GRAMINE_SGX: 另一个Gramine环境标识
+#
 # 这些地址在genesis.json中预部署，并且在manifest中固定，
 # 影响MRENCLAVE（SGX度量值）。
 # ==============================================================================
@@ -24,6 +29,10 @@
 export XCHAIN_GOVERNANCE_CONTRACT="0xd9145CCE52D386f254917e481eB44e9943F39138"
 export XCHAIN_SECURITY_CONFIG_CONTRACT="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 
+# SGX测试模式 - 在非SGX环境下运行测试时必须设置
+# 设置为"true"会跳过manifest验证、MRENCLAVE检查等SGX特有的验证
+export SGX_TEST_MODE="true"
+
 # 数据路径配置（可选，用于指定加密存储路径）
 # 在测试环境中，这些路径会被映射到临时目录
 export XCHAIN_ENCRYPTED_PATH="${XCHAIN_ENCRYPTED_PATH:-/tmp/xchain-e2e-encrypted}"
@@ -34,6 +43,7 @@ print_test_env() {
     echo "=== Test Environment Configuration ==="
     echo "XCHAIN_GOVERNANCE_CONTRACT=$XCHAIN_GOVERNANCE_CONTRACT"
     echo "XCHAIN_SECURITY_CONFIG_CONTRACT=$XCHAIN_SECURITY_CONFIG_CONTRACT"
+    echo "SGX_TEST_MODE=$SGX_TEST_MODE"
     echo "XCHAIN_ENCRYPTED_PATH=$XCHAIN_ENCRYPTED_PATH"
     echo "XCHAIN_SECRET_PATH=$XCHAIN_SECRET_PATH"
     echo "======================================"

@@ -11,10 +11,10 @@ DATA_DIR="$SCRIPT_DIR/../data"
 
 # Source framework files
 source "$FRAMEWORK_DIR/assertions.sh"
+source "$FRAMEWORK_DIR/test_env.sh"
 source "$FRAMEWORK_DIR/node.sh"
 source "$FRAMEWORK_DIR/contracts.sh"
 source "$FRAMEWORK_DIR/crypto.sh"
-source "$FRAMEWORK_DIR/test_env.sh"
 
 # Test configuration
 TEST_NAME="crypto_owner"
@@ -47,6 +47,9 @@ main() {
     fi
     
     test_section "Setup Test Environment"
+    
+    # Setup test environment variables
+    print_test_env
     
     # Create test datadir
     DATADIR=$(create_test_datadir "$TEST_NAME")
