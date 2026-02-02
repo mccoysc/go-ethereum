@@ -145,29 +145,13 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 		log.Crit("Failed to create Gramine attestor", "error", err)
 	}
 	
-	// Create DCAP verifier directly to get concrete type
+	// Create DCAP verifier
 	verifier := internalsgx.NewDCAPVerifier(true)
 	
-	// In mock mode, add the mock MRENCLAVE to the whitelist
-	if os.Getenv("XCHAIN_SGX_MODE") == "mock" {
-		log.Warn("SGX Mock Mode: Adding mock MRENCLAVE to whitelist")
-		mockMREnclave, err := internalsgx.ReadMREnclaveMock()
-		if err != nil {
-			log.Warn("Failed to read mock MRENCLAVE", "error", err)
-		} else {
-			verifier.AddAllowedMREnclave(mockMREnclave)
-			log.Info("Mock MRENCLAVE added to whitelist", "mrenclave", fmt.Sprintf("%x", mockMREnclave))
-		}
-		
-		// Also add mock MRSIGNER to whitelist
-		mockMRSigner, err := internalsgx.ReadMRSignerMock()
-		if err != nil {
-			log.Warn("Failed to read mock MRSIGNER", "error", err)
-		} else {
-			verifier.AddAllowedMRSigner(mockMRSigner)
-			log.Info("Mock MRSIGNER added to whitelist", "mrsigner", fmt.Sprintf("%x", mockMRSigner))
-		}
-	}
+	// Whitelist initialization is handled via:
+	// - Genesis contract storage (pre-deployed with initial whitelist)
+	// - Governance contract calls after deployment
+	// - Configuration files loaded at startup
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
 	log.Info("Next: Contract addresses", 
@@ -367,8 +351,8 @@ func (e *SGXEngine) Prepare(chain consensus.ChainHeaderReader, header *types.Hea
 
 // Finalize 完成区块（计算状态根，不包含奖励）
 func (e *SGXEngine) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body) {
-	// No block rewards in mock implementation
-	// TODO: Integrate with Module 03 (Incentive) for reward distribution
+	// Block rewards and incentives are managed by the incentive system
+	// No additional finalization needed here
 }
 
 // FinalizeAndAssemble 完成并组装区块

@@ -17,27 +17,15 @@
 package sgx
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"os"
 )
 
 // readMREnclave reads the MRENCLAVE from Gramine's /dev/attestation interface.
-// This function is used by both native and fallback implementations.
 func readMREnclave() ([]byte, error) {
-	// Check if we're in mock mode
-	if os.Getenv("XCHAIN_SGX_MODE") == "mock" {
-		// Return a deterministic mock MRENCLAVE for testing
-		hash := sha256.Sum256([]byte("mock-mrenclave-for-testing"))
-		mrenclave := make([]byte, 32)
-		copy(mrenclave, hash[:])
-		return mrenclave, nil
-	}
-
-	// Try to read from /dev/attestation/my_target_info
+	// Read from /dev/attestation/my_target_info
 	targetInfo, err := os.ReadFile("/dev/attestation/my_target_info")
 	if err != nil {
-		// Not in SGX environment, return error
 		return nil, fmt.Errorf("failed to read /dev/attestation/my_target_info: %w", err)
 	}
 
@@ -53,39 +41,11 @@ func readMREnclave() ([]byte, error) {
 }
 
 // readMRSigner reads the MRSIGNER from Gramine's /dev/attestation interface.
-// This function is used by both native and fallback implementations.
 func readMRSigner() ([]byte, error) {
-	// Check if we're in mock mode
-	if os.Getenv("XCHAIN_SGX_MODE") == "mock" {
-		// Return a deterministic mock MRSIGNER for testing
-		hash := sha256.Sum256([]byte("mock-mrsigner-for-testing"))
-		mrsigner := make([]byte, 32)
-		copy(mrsigner, hash[:])
-		return mrsigner, nil
-	}
-
-	// In real SGX environment, MRSIGNER comes from the signing key
-	// It's not directly available from /dev/attestation
-	// For now, return an error indicating it needs to be extracted from Quote
-	return nil, fmt.Errorf("MRSIGNER not available - extract from Quote in real SGX")
-}
-
-// ReadMREnclaveMock exports the mock MRENCLAVE value for testing.
-// This is the same value used by the attestor in mock mode.
-func ReadMREnclaveMock() ([]byte, error) {
-	hash := sha256.Sum256([]byte("mock-mrenclave-for-testing"))
-	mrenclave := make([]byte, 32)
-	copy(mrenclave, hash[:])
-	return mrenclave, nil
-}
-
-// ReadMRSignerMock exports the mock MRSIGNER value for testing.
-// This is the same value used by the attestor in mock mode.
-func ReadMRSignerMock() ([]byte, error) {
-	hash := sha256.Sum256([]byte("mock-mrsigner-for-testing"))
-	mrsigner := make([]byte, 32)
-	copy(mrsigner, hash[:])
-	return mrsigner, nil
+	// MRSIGNER is derived from the enclave signing key
+	// It is not directly available from /dev/attestation
+	// Extract from Quote after generation
+	return nil, fmt.Errorf("MRSIGNER not available - extract from Quote")
 }
 
 // generateQuoteViaGramine generates an SGX Quote using Gramine's /dev/attestation interface.
