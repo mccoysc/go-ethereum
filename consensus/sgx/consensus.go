@@ -148,10 +148,34 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Create DCAP verifier
 	verifier := internalsgx.NewDCAPVerifier(true)
 	
-	// Whitelist initialization is handled via:
-	// - Genesis contract storage (pre-deployed with initial whitelist)
-	// - Governance contract calls after deployment
-	// - Configuration files loaded at startup
+	// Initialize whitelist from genesis configuration
+	if len(paramsConfig.AllowedMREnclaves) > 0 {
+		log.Info("Initializing MRENCLAVE whitelist from genesis", "count", len(paramsConfig.AllowedMREnclaves))
+		for _, mrEnclaveHex := range paramsConfig.AllowedMREnclaves {
+			mrEnclave := common.FromHex(mrEnclaveHex)
+			if len(mrEnclave) == 32 {
+				verifier.AddAllowedMREnclave(mrEnclave)
+				log.Info("Added MRENCLAVE to whitelist", "mrenclave", mrEnclaveHex)
+			} else {
+				log.Warn("Invalid MRENCLAVE length, skipping", "mrenclave", mrEnclaveHex, "length", len(mrEnclave))
+			}
+		}
+	} else {
+		log.Warn("No MRENCLAVE whitelist configured - all quotes will be rejected unless added via governance")
+	}
+	
+	if len(paramsConfig.AllowedMRSigners) > 0 {
+		log.Info("Initializing MRSIGNER whitelist from genesis", "count", len(paramsConfig.AllowedMRSigners))
+		for _, mrSignerHex := range paramsConfig.AllowedMRSigners {
+			mrSigner := common.FromHex(mrSignerHex)
+			if len(mrSigner) == 32 {
+				verifier.AddAllowedMRSigner(mrSigner)
+				log.Info("Added MRSIGNER to whitelist", "mrsigner", mrSignerHex)
+			} else {
+				log.Warn("Invalid MRSIGNER length, skipping", "mrsigner", mrSignerHex, "length", len(mrSigner))
+			}
+		}
+	}
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
 	log.Info("Next: Contract addresses", 
