@@ -11,22 +11,16 @@ import (
 )
 
 // Attestor SGX 证明接口
-// 用于生成 SGX Quote 和签名区块
+// 用于生成 SGX Quote
 type Attestor interface {
 	// GenerateQuote 生成 SGX Quote
 	// data: 要包含在 Quote 中的数据（最大 64 字节）
+	// Quote本身就是硬件级签名，userData包含要签名的数据
 	GenerateQuote(data []byte) ([]byte, error)
 
-	// SignInEnclave 在 Enclave 内签名数据
-	// 返回 ECDSA 签名（65 字节）
-	SignInEnclave(data []byte) ([]byte, error)
-
-	// GetProducerID 获取出块者 ID（以太坊地址，20 字节）
+	// GetProducerID 获取出块者 ID
+	// 返回Platform Instance ID（从CPU硬件特征派生）
 	GetProducerID() ([]byte, error)
-	
-	// GetSigningPublicKey 获取签名公钥（用于写入Quote）
-	// 返回未压缩格式的secp256k1公钥（65字节：0x04 + X + Y）
-	GetSigningPublicKey() []byte
 }
 
 // Verifier SGX 验证接口

@@ -27,7 +27,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -52,17 +51,8 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 		return nil, fmt.Errorf("failed to generate TLS key: %w", err)
 	}
 
-	// Generate signing key using secp256k1 for Ethereum compatibility
-	var signingKey *ecdsa.PrivateKey
-	
-	signingKey, err = crypto.GenerateKey()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate signing key: %w", err)
-	}
-
 	attestor := &GramineAttestor{
 		privateKey: privateKey,
-		signingKey: signingKey,
 	}
 
 	// Read MRENCLAVE from attestation device
@@ -191,31 +181,3 @@ func (a *GramineAttestor) GetProducerID() ([]byte, error) {
 	return producerID, nil
 }
 
-// GetSigningKey returns the secp256k1 signing key for external access.
-// This is needed for extracting the public key to embed in Quote.
-func (a *GramineAttestor) GetSigningKey() *ecdsa.PrivateKey {
-	return a.signingKey
-}
-
-// GetSigningPublicKey returns the signing public key in uncompressed format (65 bytes).
-// Format: 0x04 + X coordinate (32 bytes) + Y coordinate (32 bytes)
-func (a *GramineAttestor) GetSigningPublicKey() []byte {
-	return crypto.FromECDSAPub(&a.signingKey.PublicKey)
-}
-
-// SignInEnclave signs data using the enclave's private key.
-// Returns an ECDSA signature (65 bytes: r + s + v).
-// SignInEnclave signs data using the enclave's secp256k1 signing key.
-// This produces an Ethereum-compatible ECDSA signature.
-func (a *GramineAttestor) SignInEnclave(data []byte) ([]byte, error) {
-	// Hash the data
-	hash := crypto.Keccak256(data)
-
-	// Sign using secp256k1 signing key (Ethereum-compatible)
-	signature, err := crypto.Sign(hash, a.signingKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign: %w", err)
-	}
-
-	return signature, nil
-}
