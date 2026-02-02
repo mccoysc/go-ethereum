@@ -490,6 +490,7 @@ type ChainConfig struct {
 	// Various consensus engines
 	Ethash             *EthashConfig       `json:"ethash,omitempty"`
 	Clique             *CliqueConfig       `json:"clique,omitempty"`
+	SGX                *SGXConfig          `json:"sgx,omitempty"`
 	BlobScheduleConfig *BlobScheduleConfig `json:"blobSchedule,omitempty"`
 }
 
@@ -510,6 +511,17 @@ type CliqueConfig struct {
 // String implements the stringer interface, returning the consensus engine details.
 func (c CliqueConfig) String() string {
 	return fmt.Sprintf("clique(period: %d, epoch: %d)", c.Period, c.Epoch)
+}
+
+// SGXConfig is the consensus engine configs for SGX-based PoA sealing.
+type SGXConfig struct {
+	Period uint64 `json:"period"` // Number of seconds between blocks to enforce
+	Epoch  uint64 `json:"epoch"`  // Epoch length to reset votes and checkpoint
+}
+
+// String implements the stringer interface, returning the consensus engine details.
+func (c *SGXConfig) String() string {
+	return fmt.Sprintf("sgx(period: %d, epoch: %d)", c.Period, c.Epoch)
 }
 
 // String implements the fmt.Stringer interface, returning a string representation
@@ -1382,6 +1394,7 @@ type Rules struct {
 	IsBerlin, IsLondon                                      bool
 	IsMerge, IsShanghai, IsCancun, IsPrague, IsOsaka        bool
 	IsAmsterdam, IsVerkle                                   bool
+	IsSGX                                                   bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -1414,5 +1427,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsAmsterdam:      isMerge && c.IsAmsterdam(num, timestamp),
 		IsVerkle:         isVerkle,
 		IsEIP4762:        isVerkle,
+		IsSGX:            c.SGX != nil, // SGX consensus uses remote attestation instead of PoW
 	}
 }

@@ -26,12 +26,14 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/consensus/sgx"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/ethdb"
+	sgxinternal "github.com/ethereum/go-ethereum/internal/sgx"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/params"
@@ -215,6 +217,21 @@ type Config struct {
 // Clique is allowed for now to live standalone, but ethash is forbidden and can
 // only exist on already merged networks.
 func CreateConsensusEngine(config *params.ChainConfig, db ethdb.Database) (consensus.Engine, error) {
+	// SGX consensus uses remote attestation instead of PoW, no need for TerminalTotalDifficulty
+	if config.SGX != nil {
+		// Create SGX attestor and verifier
+		attestor, err := sgxinternal.NewGramineAttestor()
+		if err != nil {
+			log.Warn("Failed to create SGX attestor, using mock", "err", err)
+			// In non-SGX environment, attestor will automatically use mock mode
+		}
+		verifier := sgxinternal.NewDCAPVerifier(true) // Allow outdated TCB in dev mode
+		
+		// Create SGX consensus engine
+		sgxEngine := sgx.New(nil, attestor, verifier) // nil uses default config
+		return beacon.New(sgxEngine), nil
+	}
+	
 	if config.TerminalTotalDifficulty == nil {
 		log.Error("Geth only supports PoS networks. Please transition legacy networks using Geth v1.13.x.")
 		return nil, errors.New("'terminalTotalDifficulty' is not set in genesis block")

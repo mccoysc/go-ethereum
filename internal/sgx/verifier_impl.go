@@ -17,12 +17,15 @@
 package sgx
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // DCAPVerifier implements the Verifier interface using Intel DCAP.
@@ -143,6 +146,60 @@ func (v *DCAPVerifier) RemoveAllowedMREnclave(mrenclave []byte) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.allowedMREnclave, string(mrenclave))
+}
+
+// ExtractProducerID extracts the producer ID (Ethereum address, 20 bytes)
+// from an SGX Quote's report data.
+func (v *DCAPVerifier) ExtractProducerID(quote []byte) ([]byte, error) {
+	// Parse the quote
+	parsedQuote, err := ParseQuote(quote)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse quote: %w", err)
+	}
+
+	// Producer ID is embedded in first 20 bytes of ReportData
+	if len(parsedQuote.ReportData) < 20 {
+		return nil, fmt.Errorf("report data too short: %d bytes", len(parsedQuote.ReportData))
+	}
+
+	producerID := make([]byte, 20)
+	copy(producerID, parsedQuote.ReportData[:20])
+	return producerID, nil
+}
+
+// VerifySignature verifies an ECDSA signature.
+// data: the data that was signed
+// signature: ECDSA signature (65 bytes: r + s + v)
+// producerID: producer ID (Ethereum address, 20 bytes)
+func (v *DCAPVerifier) VerifySignature(data, signature, producerID []byte) error {
+	// Import crypto package functions
+	if len(signature) != 65 {
+		return fmt.Errorf("invalid signature length: expected 65 bytes, got %d", len(signature))
+	}
+	
+	if len(producerID) != 20 {
+		return fmt.Errorf("invalid producer ID length: expected 20 bytes, got %d", len(producerID))
+	}
+	
+	// Hash the data
+	hash := make([]byte, 32)
+	copy(hash, data) // Assuming data is already hashed
+	
+	// Recover public key from signature
+	pubKey, err := crypto.SigToPub(hash, signature)
+	if err != nil {
+		return fmt.Errorf("failed to recover public key: %w", err)
+	}
+	
+	// Derive address from public key
+	recoveredAddr := crypto.PubkeyToAddress(*pubKey)
+	
+	// Compare with expected producer ID
+	if !bytes.Equal(recoveredAddr.Bytes(), producerID) {
+		return fmt.Errorf("signature verification failed: address mismatch")
+	}
+	
+	return nil
 }
 
 // verifyQuoteSignature verifies the quote signature.

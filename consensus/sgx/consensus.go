@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/trie"
@@ -226,7 +227,7 @@ func (e *SGXEngine) Prepare(chain consensus.ChainHeaderReader, header *types.Hea
 }
 
 // Finalize 完成区块（计算状态根，不包含奖励）
-func (e *SGXEngine) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, body *types.Body) {
+func (e *SGXEngine) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state vm.StateDB, body *types.Body) {
 	// 计算并分配区块奖励
 	e.accumulateRewards(chain, state, header, body)
 }
@@ -314,7 +315,7 @@ func (e *SGXEngine) Close() error {
 }
 
 // accumulateRewards 累积奖励
-func (e *SGXEngine) accumulateRewards(chain consensus.ChainHeaderReader, state *state.StateDB, header *types.Header, body *types.Body) {
+func (e *SGXEngine) accumulateRewards(chain consensus.ChainHeaderReader, state vm.StateDB, header *types.Header, body *types.Body) {
 	// 获取区块生产者地址
 	producer, err := e.Author(header)
 	if err != nil {

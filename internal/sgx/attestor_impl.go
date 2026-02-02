@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"math/big"
 	"time"
+
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // GramineAttestor implements the Attestor interface using Gramine's
@@ -325,4 +327,28 @@ func (a *GramineAttestor) GetMRSigner() []byte {
 	result := make([]byte, len(a.mrsigner))
 	copy(result, a.mrsigner)
 	return result
+}
+
+// GetProducerID returns the producer ID (Ethereum address, 20 bytes)
+// derived from the public key used for signing blocks.
+func (a *GramineAttestor) GetProducerID() ([]byte, error) {
+	// Derive Ethereum address from public key
+	pubKeyBytes := elliptic.Marshal(a.privateKey.Curve, a.privateKey.PublicKey.X, a.privateKey.PublicKey.Y)
+	hash := crypto.Keccak256(pubKeyBytes[1:]) // Skip the 0x04 prefix
+	return hash[12:], nil // Take last 20 bytes as Ethereum address
+}
+
+// SignInEnclave signs data using the enclave's private key.
+// Returns an ECDSA signature (65 bytes: r + s + v).
+func (a *GramineAttestor) SignInEnclave(data []byte) ([]byte, error) {
+	// Hash the data
+	hash := crypto.Keccak256(data)
+	
+	// Sign using private key
+	signature, err := crypto.Sign(hash, a.privateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign: %w", err)
+	}
+	
+	return signature, nil
 }
