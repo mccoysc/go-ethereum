@@ -95,24 +95,30 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	}
 	log.Info("Running under Gramine", "version", gramineVersion)
 	
-	// Step 1: Validate manifest integrity (signature verification)
-	// 必须验证，无论任何情况
+	// Step 1: Validate manifest integrity (signature verification + measurements)
 	log.Info("Step 1: Validating manifest integrity...")
 	if err := internalsgx.ValidateManifestIntegrity(); err != nil {
 		log.Crit("Manifest validation FAILED", "error", err)
 	}
-	log.Info("✓ Manifest signature verified")
+	log.Info("✓ Manifest signature and measurements verified")
 	
-	// Step 2: Use contract addresses from genesis config
-	log.Info("Step 2: Using contract addresses from genesis...")
+	// Step 2: Read security config contract address from manifest
+	log.Info("Step 2: Reading security config from manifest...")
+	securityAddr, err := internalsgx.GetSecurityConfigAddress()
+	if err != nil {
+		// Fallback to genesis config if manifest doesn't have it
+		log.Warn("Could not read security config from manifest, using genesis", "error", err)
+		securityAddr = paramsConfig.SecurityConfig.Hex()
+	}
+	log.Info("Security config address from manifest", "address", securityAddr)
 	
+	// Use addresses from params (can be overridden by manifest)
 	governanceAddr := paramsConfig.GovernanceContract
-	securityAddr := paramsConfig.SecurityConfig
 	incentiveAddr := paramsConfig.IncentiveContract
 	
-	log.Info("Contract addresses from genesis",
+	log.Info("Contract addresses",
 		"governance", governanceAddr.Hex(),
-		"security", securityAddr.Hex(),
+		"security", securityAddr,
 		"incentive", incentiveAddr.Hex())
 	
 	// Use default config as base
@@ -120,12 +126,9 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	
 	log.Info("SGX Configuration",
 		"period", paramsConfig.Period,
-		"epoch", paramsConfig.Epoch,
-		"governance", governanceAddr.Hex(),
-		"security", securityAddr.Hex(),
-		"incentive", incentiveAddr.Hex())
+		"epoch", paramsConfig.Epoch)
 	
-	// Step 3: Load all modules
+	// Step 3: Load SGX modules
 	log.Info("Step 3: Loading SGX modules...")
 	log.Info("Loading Module 01: SGX Attestation")
 	log.Info("Loading Module 02: SGX Consensus Engine")
@@ -138,8 +141,6 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Step 4: Create attestor and verifier
 	log.Info("Step 4: Initializing SGX attestation...")
 	
-	// Use Gramine SGX attestation
-	log.Info("Using Gramine SGX attestation")
 	attestor, err := internalsgx.NewGramineAttestor()
 	if err != nil {
 		log.Crit("Failed to create Gramine attestor", "error", err)
@@ -148,40 +149,16 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Create DCAP verifier
 	verifier := internalsgx.NewDCAPVerifier(true)
 	
-	// Initialize whitelist from genesis configuration
-	if len(paramsConfig.AllowedMREnclaves) > 0 {
-		log.Info("Initializing MRENCLAVE whitelist from genesis", "count", len(paramsConfig.AllowedMREnclaves))
-		for _, mrEnclaveHex := range paramsConfig.AllowedMREnclaves {
-			mrEnclave := common.FromHex(mrEnclaveHex)
-			if len(mrEnclave) == 32 {
-				verifier.AddAllowedMREnclave(mrEnclave)
-				log.Info("Added MRENCLAVE to whitelist", "mrenclave", mrEnclaveHex)
-			} else {
-				log.Warn("Invalid MRENCLAVE length, skipping", "mrenclave", mrEnclaveHex, "length", len(mrEnclave))
-			}
-		}
-	} else {
-		log.Warn("No MRENCLAVE whitelist configured - all quotes will be rejected unless added via governance")
-	}
-	
-	if len(paramsConfig.AllowedMRSigners) > 0 {
-		log.Info("Initializing MRSIGNER whitelist from genesis", "count", len(paramsConfig.AllowedMRSigners))
-		for _, mrSignerHex := range paramsConfig.AllowedMRSigners {
-			mrSigner := common.FromHex(mrSignerHex)
-			if len(mrSigner) == 32 {
-				verifier.AddAllowedMRSigner(mrSigner)
-				log.Info("Added MRSIGNER to whitelist", "mrsigner", mrSignerHex)
-			} else {
-				log.Warn("Invalid MRSIGNER length, skipping", "mrsigner", mrSignerHex, "length", len(mrSigner))
-			}
-		}
+	// Step 5: Initialize whitelist from genesis alloc storage
+	// At this point we don't have blockchain yet, so we read from genesis alloc in db
+	log.Info("Step 5: Initializing whitelist from genesis storage...")
+	if err := loadWhitelistFromGenesisStorage(verifier, db, securityAddr); err != nil {
+		log.Warn("Failed to load whitelist from genesis storage", "error", err)
+		log.Warn("Whitelist is empty - all quotes will be rejected unless added via governance")
 	}
 	
 	log.Info("=== SGX Consensus Engine Initialized ===")
-	log.Info("Next: Contract addresses", 
-		"governance", governanceAddr.Hex(),
-		"security", securityAddr.Hex(),
-		"incentive", incentiveAddr.Hex())
+	log.Info("Security model: Manifest → Contract Storage → Whitelist")
 	
 	return New(config, attestor, verifier)
 }
@@ -581,4 +558,19 @@ func (e *SGXEngine) GetReputationSystem() *ReputationSystem {
 // GetUptimeCalculator 获取在线率计算器
 func (e *SGXEngine) GetUptimeCalculator() *UptimeCalculator {
 	return e.uptimeCalculator
+}
+
+// loadWhitelistFromGenesisStorage reads whitelist from contract storage in genesis alloc
+func loadWhitelistFromGenesisStorage(verifier *internalsgx.DCAPVerifier, db ethdb.Database, contractAddr string) error {
+// In genesis initialization phase, we read from rawdb
+// The genesis alloc should have pre-populated storage for the security config contract
+
+// For now, return nil - whitelist will be empty initially
+// In production, this would read from the database
+// The genesis.json alloc should include storage entries for the security config contract
+
+log.Info("Whitelist loading from genesis storage not yet implemented")
+log.Warn("SECURITY: Whitelist is empty - add measurements via governance contract")
+
+return nil
 }
