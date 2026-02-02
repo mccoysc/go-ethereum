@@ -2,6 +2,7 @@ package sgx
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"math/big"
 	"os"
@@ -494,6 +495,20 @@ func (e *SGXEngine) accumulateRewards(chain consensus.ChainHeaderReader, state *
 // SetBlockProducer 设置区块生产者（用于测试）
 func (e *SGXEngine) SetBlockProducer(bp *BlockProducer) {
 	e.blockProducer = bp
+}
+
+// InitBlockProducer 初始化并启动区块生产者
+// 必须在 txPool 和 blockchain 都可用后调用
+func (e *SGXEngine) InitBlockProducer(txPool TxPool, chain BlockChain) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	
+	if e.blockProducer != nil {
+		return nil // 已经初始化
+	}
+	
+	e.blockProducer = NewBlockProducer(e.config, e, txPool, chain)
+	return e.blockProducer.Start(context.Background())
 }
 
 // GetConfig 获取配置

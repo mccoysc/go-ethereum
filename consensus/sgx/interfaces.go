@@ -54,7 +54,7 @@ type TxPool interface {
 	PendingCount() int
 
 	// Add 添加交易
-	Add(txs []*types.Transaction, local bool, sync bool) []error
+	Add(txs []*types.Transaction, sync bool) []error
 
 	// Remove 移除交易
 	Remove(txHash common.Hash)
