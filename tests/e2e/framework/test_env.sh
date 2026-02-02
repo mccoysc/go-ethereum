@@ -37,6 +37,9 @@ export XCHAIN_SECURITY_CONFIG_CONTRACT="0xd8dA6BF26964aF9D7eEd9e03E53415D37aA960
 # Gramine version for testing (required by SGX consensus engine)
 export GRAMINE_VERSION="test"
 
+# SGX test mode - enables mock attestation without real SGX/Gramine
+export SGX_TEST_MODE="true"
+
 # Print environment for debugging
 print_test_env() {
     echo "=== Test Environment Configuration ==="
@@ -59,30 +62,13 @@ setup_test_filesystem() {
     # 1. 创建基础目录
     mkdir -p "$test_dir"
     
-    # 2. 设置mock attestation设备（/dev/attestation）
-    # 在测试模式下，某些代码路径可能检查文件存在性
-    setup_mock_attestation_device
-    
-    # 3. 创建/dev/attestation符号链接（Gramine标准路径）
-    # 由于/dev需要root权限，我们在测试中使用sudo创建符号链接
-    echo "Creating /dev/attestation symlink to /tmp/xchain-test-dev-attestation..."
-    if [ -w /dev ]; then
-        sudo ln -sf /tmp/xchain-test-dev-attestation /dev/attestation 2>/dev/null || {
-            echo "Warning: Cannot create /dev/attestation symlink (need sudo)"
-            echo "Trying alternative: set LD_PRELOAD to intercept file access"
-        }
-    else
-        echo "Warning: /dev not writable, tests may fail"
-    fi
-    
-    # 4. 设置mock manifest文件
-    # 用于manifest签名验证
+    # 2. 设置mock manifest文件（用于manifest签名验证）
     setup_mock_manifest_files "$test_dir/manifest"
     
     echo "✓ Test filesystem setup complete"
     echo "  - Root: $test_dir"
-    echo "  - Attestation device: /tmp/xchain-test-dev-attestation"
     echo "  - Manifest files: $test_dir/manifest"
+    echo "  - SGX_TEST_MODE=true (使用mock attestation)"
     echo ""
     echo "注意: 加密和密钥存储路径从安全配置合约读取"
 }
@@ -90,10 +76,8 @@ setup_test_filesystem() {
 # Clean up test filesystem
 cleanup_test_filesystem() {
     echo "Cleaning up test filesystem..."
-    # Clean up temporary files and mock devices
-    rm -rf /tmp/xchain-test-dev-attestation
-    # Remove symlink if it exists
-    sudo rm -f /dev/attestation 2>/dev/null || true
+    # Clean up temporary files
+    # No need to remove /dev/attestation as we don't modify it anymore
 }
 
 # Calculate contract addresses deterministically
@@ -112,33 +96,6 @@ calculate_contract_addresses() {
     
     echo "GovernanceContract: $governance_addr"
     echo "SecurityConfigContract: $security_addr"
-}
-
-# Setup mock Gramine attestation device
-# 在测试模式下，模拟 /dev/attestation 接口
-setup_mock_attestation_device() {
-    local dev_dir="/tmp/xchain-test-dev-attestation"
-    
-    echo "Setting up mock attestation device at $dev_dir..."
-    mkdir -p "$dev_dir"
-    
-    # Mock MRENCLAVE (32 bytes) - 测试用的假值
-    # 这是my_target_info文件的前32字节
-    printf '\x00\x11\x22\x33\x44\x55\x66\x77\x88\x99\xaa\xbb\xcc\xdd\xee\xff' > "$dev_dir/my_target_info"
-    printf '\x00\x11\x22\x33\x44\x55\x66\x77\x88\x99\xaa\xbb\xcc\xdd\xee\xff' >> "$dev_dir/my_target_info"
-    
-    # user_report_data - 用于写入报告数据（64字节）
-    touch "$dev_dir/user_report_data"
-    chmod 600 "$dev_dir/user_report_data"
-    
-    # Mock SGX Quote (简化的测试quote)
-    # 实际的quote结构很复杂，但在测试模式下只需要一个非空文件
-    echo "MOCK_SGX_QUOTE_FOR_TESTING_ONLY" > "$dev_dir/quote"
-    
-    echo "Mock attestation device created"
-    echo "  - my_target_info: $dev_dir/my_target_info (MRENCLAVE)"
-    echo "  - user_report_data: $dev_dir/user_report_data"
-    echo "  - quote: $dev_dir/quote"
 }
 
 # Setup mock manifest files for signature verification
