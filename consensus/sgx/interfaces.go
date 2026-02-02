@@ -39,6 +39,10 @@ type Verifier interface {
 
 	// ExtractProducerID 从 SGX Quote 中提取出块者 ID
 	ExtractProducerID(quote []byte) ([]byte, error)
+	
+	// ExtractQuoteUserData 从 SGX Quote 中提取 userData 字段
+	// 用于验证Quote中嵌入的数据（如区块哈希）
+	ExtractQuoteUserData(quote []byte) ([]byte, error)
 }
 
 // TxPool 交易池接口

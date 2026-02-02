@@ -71,3 +71,4 @@ gramine/MRSIGNER.txt
 test-data/
 MRENCLAVE.txt
 .dockerfile-build-temp
+/geth

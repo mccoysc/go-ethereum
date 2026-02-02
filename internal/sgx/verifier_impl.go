@@ -252,6 +252,26 @@ func (v *DCAPVerifier) ExtractProducerID(quote []byte) ([]byte, error) {
 	return address, nil
 }
 
+// ExtractQuoteUserData extracts the userData (block hash) from an SGX Quote.
+// The userData is stored in the first 32 bytes of the ReportData field.
+func (v *DCAPVerifier) ExtractQuoteUserData(quote []byte) ([]byte, error) {
+	parsedQuote, err := ParseQuote(quote)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse quote: %w", err)
+	}
+
+	// Extract block hash from the first 32 bytes of report data
+	if len(parsedQuote.ReportData) < 32 {
+		return nil, fmt.Errorf("insufficient report data for block hash")
+	}
+
+	// Return the first 32 bytes (block hash)
+	blockHash := make([]byte, 32)
+	copy(blockHash, parsedQuote.ReportData[:32])
+	
+	return blockHash, nil
+}
+
 // ExtractReportData is a utility function to extract report data from a quote.
 func ExtractReportData(quote []byte) ([]byte, error) {
 	parsedQuote, err := ParseQuote(quote)
