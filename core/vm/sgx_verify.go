@@ -57,6 +57,7 @@ func (c *SGXVerify) Run(input []byte) ([]byte, error) {
 		
 		// Verify we have 64 bytes after processing
 		if len(pubKey) != 64 {
+			// Invalid public key format - expected 64 bytes (X,Y coordinates) or 65 bytes (0x04 + X + Y)
 			return []byte{0x00}, nil
 		}
 		
@@ -97,6 +98,6 @@ func (c *SGXVerify) Run(input []byte) ([]byte, error) {
 		return []byte{0x00}, nil
 		
 	} else {
-		return nil, errors.New("invalid input length: expected 161-162 bytes (ECDSA) or 128 bytes (Ed25519)")
+		return nil, errors.New("invalid input length: expected 161 bytes (hash+sig+64-byte-pubkey) or 162 bytes (hash+sig+65-byte-pubkey with 0x04 prefix) for ECDSA, or 128 bytes (hash+sig+pubkey) for Ed25519")
 	}
 }
