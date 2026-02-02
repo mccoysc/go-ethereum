@@ -52,6 +52,8 @@ func NewDCAPVerifier(allowOutdatedTCB bool) *DCAPVerifier {
 }
 
 // VerifyQuote verifies the validity of an SGX Quote.
+// This method only verifies the Quote's cryptographic signature and TCB status.
+// It does NOT check MRENCLAVE/MRSIGNER against whitelist - that's only for RA-TLS certificate verification.
 func (v *DCAPVerifier) VerifyQuote(quote []byte) error {
 	// Parse the quote
 	parsedQuote, err := ParseQuote(quote)
@@ -69,15 +71,14 @@ func (v *DCAPVerifier) VerifyQuote(quote []byte) error {
 		return fmt.Errorf("TCB status not up to date: %d", parsedQuote.TCBStatus)
 	}
 
-	// Check MRENCLAVE whitelist
-	if !v.IsAllowedMREnclave(parsedQuote.MRENCLAVE[:]) {
-		return fmt.Errorf("MRENCLAVE not in allowed list: %x", parsedQuote.MRENCLAVE)
-	}
+	// NO MRENCLAVE/MRSIGNER whitelist check here!
+	// Whitelist is only checked during RA-TLS certificate verification (VerifyCertificate method)
 
 	return nil
 }
 
 // VerifyCertificate verifies an RA-TLS certificate.
+// This is the ONLY place where MRENCLAVE/MRSIGNER whitelist is checked.
 func (v *DCAPVerifier) VerifyCertificate(cert *x509.Certificate) error {
 	// Extract SGX quote from certificate extensions
 	var quote []byte
@@ -92,17 +93,29 @@ func (v *DCAPVerifier) VerifyCertificate(cert *x509.Certificate) error {
 		return errors.New("no SGX quote found in certificate")
 	}
 
-	// Verify the quote
+	// Verify the quote (cryptographic signature and TCB status)
 	if err := v.VerifyQuote(quote); err != nil {
 		return fmt.Errorf("quote verification failed: %w", err)
 	}
 
-	// Verify that the certificate's public key matches the quote's report data
+	// Parse quote to extract measurements
 	parsedQuote, err := ParseQuote(quote)
 	if err != nil {
 		return fmt.Errorf("failed to parse quote: %w", err)
 	}
 
+	// *** WHITELIST CHECK - ONLY FOR RA-TLS CERTIFICATES ***
+	// Check MRENCLAVE whitelist
+	if !v.IsAllowedMREnclave(parsedQuote.MRENCLAVE[:]) {
+		return fmt.Errorf("MRENCLAVE not in allowed list: %x", parsedQuote.MRENCLAVE)
+	}
+
+	// Check MRSIGNER whitelist  
+	if !v.IsAllowedMRSigner(parsedQuote.MRSIGNER[:]) {
+		return fmt.Errorf("MRSIGNER not in allowed list: %x", parsedQuote.MRSIGNER)
+	}
+
+	// Verify that the certificate's public key matches the quote's report data
 	// Extract public key from certificate
 	pubKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
@@ -138,6 +151,19 @@ func (v *DCAPVerifier) IsAllowedMREnclave(mrenclave []byte) bool {
 	}
 
 	return v.allowedMREnclave[string(mrenclave)]
+}
+
+// IsAllowedMRSigner checks if the MRSIGNER is in the whitelist.
+func (v *DCAPVerifier) IsAllowedMRSigner(mrsigner []byte) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	// If whitelist is empty, allow all (for testing/development)
+	if len(v.allowedMRSigner) == 0 {
+		return true
+	}
+
+	return v.allowedMRSigner[string(mrsigner)]
 }
 
 // AddAllowedMREnclave adds an MRENCLAVE to the whitelist.

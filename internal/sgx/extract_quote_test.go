@@ -12,7 +12,8 @@ import (
 "testing"
 )
 
-// Test function to extract Quote from certificate - run with: go test -tags extract_quote -run TestExtractQuote
+// Test function to extract and verify Quote from certificate
+// Run with: go test -tags extract_quote -run TestExtractQuote
 func TestExtractQuote(t *testing.T) {
 // Download certificate
 fmt.Println("Downloading RA-TLS certificate...")
@@ -40,13 +41,25 @@ t.Fatalf("Failed to extract quote: %v", err)
 fmt.Printf("✓ Quote extracted successfully\n")
 fmt.Printf("  Size: %d bytes\n\n", len(quote))
 
-// Parse Quote to get MRENCLAVE and MRSIGNER
+// Verify the extracted Quote to ensure extraction was correct
+fmt.Println("=== Verifying Extracted Quote ===")
+os.Setenv("INTEL_SGX_API_KEY", "a8ece8747e7b4d8d98d23faec065b0b8")
+
+err = verifier.VerifyQuote(quote)
+if err != nil {
+t.Fatalf("Quote verification failed: %v", err)
+}
+
+fmt.Printf("✓ Quote cryptographic signature verified\n")
+fmt.Printf("✓ TCB status checked\n\n")
+
+// Parse Quote to get measurements
+fmt.Println("=== Quote Measurements ===")
 parsedQuote, err := ParseQuote(quote)
 if err != nil {
 t.Fatalf("Failed to parse quote: %v", err)
 }
 
-fmt.Printf("✓ Quote parsed successfully\n")
 fmt.Printf("  Version: %d\n", parsedQuote.Version)
 fmt.Printf("  MRENCLAVE: %x\n", parsedQuote.MRENCLAVE)
 fmt.Printf("  MRSIGNER: %x\n", parsedQuote.MRSIGNER)
@@ -69,5 +82,6 @@ fmt.Printf("REAL_MRSIGNER=\"%x\"\n", parsedQuote.MRSIGNER)
 fmt.Printf("REAL_QUOTE_HEX=\"%s\"\n", hex.EncodeToString(quote))
 fmt.Println("========================================")
 
-fmt.Println("\n✓ Quote extraction complete!")
+fmt.Println("\n✓ Quote extraction and verification complete!")
+fmt.Println("The Quote has been verified to ensure no extraction errors.")
 }
