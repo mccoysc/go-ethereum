@@ -116,11 +116,15 @@ func (v *ManifestSignatureVerifier) VerifyManifestSignature(manifestPath string,
 	
 	// Auto-detect signature path if not provided
 	// Gramine convention: <app>.manifest.sgx -> <app>.manifest.sgx.sig
+	// or <app>.manifest -> <app>.manifest.sig
 	if signaturePath == "" {
-		if filepath.Ext(manifestPath) == ".sgx" {
+		ext := filepath.Ext(manifestPath)
+		if ext == ".sgx" {
+			signaturePath = manifestPath + ".sig"
+		} else if ext == ".manifest" {
 			signaturePath = manifestPath + ".sig"
 		} else {
-			// If not .sgx extension, assume it needs .manifest.sgx.sig
+			// Assume it's app name, add .manifest.sgx.sig
 			signaturePath = manifestPath + ".manifest.sgx.sig"
 		}
 	}
