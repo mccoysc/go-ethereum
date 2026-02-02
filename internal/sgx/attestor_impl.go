@@ -26,9 +26,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 // GramineAttestor implements the Attestor interface using Gramine's
@@ -53,10 +55,37 @@ func NewGramineAttestor() (*GramineAttestor, error) {
 		return nil, fmt.Errorf("failed to generate TLS key: %w", err)
 	}
 
-	// Generate signing key using secp256k1 for Ethereum compatibility
-	signingKey, err := crypto.GenerateKey()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate signing key: %w", err)
+	// Generate or derive signing key using secp256k1 for Ethereum compatibility
+	var signingKey *ecdsa.PrivateKey
+	
+	// Check if we're in SGX mode or mock mode
+	sgxMode := os.Getenv("XCHAIN_SGX_MODE")
+	
+	if sgxMode == "mock" {
+		// In mock mode, use a deterministic key for testing
+		// This ensures the same ProducerID across restarts
+		// Real SGX would use sealing key to persist this
+		log.Warn("SGX Mock Mode: Using deterministic test key (NOT for production!)")
+		
+		// Use a fixed seed for deterministic key generation in test mode
+		// In production, this should be derived from SGX sealing key
+		deterministicSeed := []byte("xchain-sgx-test-key-do-not-use-in-production")
+		hash := crypto.Keccak256(deterministicSeed)
+		signingKey, err = crypto.ToECDSA(hash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create deterministic signing key: %w", err)
+		}
+	} else {
+		// In real SGX mode, we should derive the key from SGX sealing key
+		// For now, generate randomly (TODO: implement sealing key derivation)
+		signingKey, err = crypto.GenerateKey()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate signing key: %w", err)
+		}
+		
+		// TODO: In production SGX, derive from sealing key:
+		// sealingKey := getSGXSealingKey()
+		// signingKey = deriveFromSealingKey(sealingKey)
 	}
 
 	attestor := &GramineAttestor{
