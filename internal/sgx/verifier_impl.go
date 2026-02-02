@@ -518,24 +518,59 @@ func (v *DCAPVerifier) extractQuoteFromCertificate(certPEM []byte) ([]byte, erro
 }
 
 // extractQuoteFromRawDER extracts quote from raw DER certificate bytes
-// Matches gramine sgx-quote-verify.js extractExtensionByOid function
+// Matches gramine sgx-quote-verify.js extractQuoteFromParsedCertViaAsn1 function
 func (v *DCAPVerifier) extractQuoteFromRawDER(derBytes []byte) ([]byte, error) {
-	// Try multiple OIDs
-	// TCG DICE: 2.23.133.5.4.9
-	tcgOID := v.oidToBytes("2.23.133.5.4.9")
-	// Intel SGX v2: 1.2.840.113741.1.13.2  
-	intelOIDv2 := v.oidToBytes("1.2.840.113741.1.13.2")
-	// Intel SGX v1: 1.2.840.113741.1.13.1
-	intelOIDv1 := v.oidToBytes("1.2.840.113741.1.13.1")
+	// Try OIDs in order matching JS code:
+	// 1. TCG DICE: 2.23.133.5.4.9
+	// 2. LEGACY_QUOTE_OID (NON_STANDARD): 1.2.840.113741.1.13.1  
+	// 3. LEGACY_QUOTE_OID_V1: 0.6.9.42.840.113741.1337.6
 	
-	for _, targetOID := range [][]byte{tcgOID, intelOIDv2, intelOIDv1} {
-		value, err := v.extractExtensionByOid(derBytes, targetOID)
-		if err == nil && value != nil {
-			return value, nil
-		}
+	tcgOID := v.oidToBytes("2.23.133.5.4.9")
+	legacyOID := v.oidToBytes("1.2.840.113741.1.13.1")
+	legacyOIDv1 := v.oidToBytes("0.6.9.42.840.113741.1337.6")
+	
+	// Try TCG DICE first (would need CBOR decoding, not implemented yet)
+	value, err := v.extractExtensionByOid(derBytes, tcgOID)
+	if err == nil && value != nil {
+		// TODO: Implement CBOR decoding for TCG DICE format
+		// For now, return error to fall through to legacy
+		return nil, errors.New("TCG DICE format not yet implemented")
+	}
+	
+	// Try legacy OID (extension value IS the quote directly)
+	value, err = v.extractExtensionByOid(derBytes, legacyOID)
+	if err == nil && value != nil {
+		return v.extractLegacyQuote(value)
+	}
+	
+	// Try legacy OID v1
+	value, err = v.extractExtensionByOid(derBytes, legacyOIDv1)
+	if err == nil && value != nil {
+		return v.extractLegacyQuote(value)
 	}
 	
 	return nil, errors.New("no SGX quote extension found")
+}
+
+// extractLegacyQuote extracts quote from legacy extension value
+// Matches JS extractLegacyQuoteFromExtension function
+func (v *DCAPVerifier) extractLegacyQuote(extValue []byte) ([]byte, error) {
+	if len(extValue) < 436 {
+		return nil, errors.New("extension value too short to contain a valid quote")
+	}
+	
+	// Read signature data length at offset 432 (little-endian uint32)
+	signatureDataLen := binary.LittleEndian.Uint32(extValue[432:436])
+	expectedQuoteSize := 432 + 4 + int(signatureDataLen)
+	
+	var quote []byte
+	if expectedQuoteSize <= len(extValue) {
+		quote = extValue[0:expectedQuoteSize]
+	} else {
+		quote = extValue
+	}
+	
+	return quote, nil
 }
 
 // oidToBytes converts OID string like "1.2.840.113741" to DER-encoded bytes
