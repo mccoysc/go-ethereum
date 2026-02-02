@@ -48,10 +48,8 @@ func (v *GramineRATLSVerifier) VerifyQuote(quote []byte) error {
 		return fmt.Errorf("failed to parse quote: %w", err)
 	}
 
-	// Check MRENCLAVE whitelist
-	if !v.IsAllowedMREnclave(parsedQuote.MRENCLAVE[:]) {
-		return fmt.Errorf("MRENCLAVE not in allowed list: %x", parsedQuote.MRENCLAVE)
-	}
+	// NO MRENCLAVE whitelist check here!
+	// Whitelist is only checked during RA-TLS certificate verification
 
 	// Note: Full verification requires CGO and Gramine libraries
 	return nil
