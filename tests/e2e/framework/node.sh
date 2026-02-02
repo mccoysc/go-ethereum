@@ -50,18 +50,20 @@ start_test_node() {
     # Setup test environment before starting node
     setup_test_filesystem
     
+    # Set X Chain environment variables
+    export XCHAIN_SGX_MODE=mock
+    export XCHAIN_ENCRYPTED_PATH="${XCHAIN_ENCRYPTED_PATH:-/tmp/xchain-e2e-encrypted}"
+    export XCHAIN_SECRET_PATH="${XCHAIN_SECRET_PATH:-/tmp/xchain-e2e-secrets}"
+    
     # Start geth in background with PoA-SGX consensus and HTTP RPC enabled
-    # Key flags for PoA-SGX:
-    # --networkid 762385986 (X Chain network ID)
-    # --nodiscover (disable P2P discovery for testing)
-    # No --mine flag needed for PoA-SGX (consensus handles block production)
+    # Note: PoA-SGX handles block production automatically, no --mine flag needed
     $geth --datadir "$datadir" \
         --networkid 762385986 \
         --port "$port" \
         --http \
         --http.addr "127.0.0.1" \
         --http.port "$rpc_port" \
-        --http.api "eth,net,web3,personal,admin,debug,txpool" \
+        --http.api "eth,net,web3,personal,admin,debug,txpool,sgx" \
         --http.corsdomain "*" \
         --nodiscover \
         --maxpeers 0 \
