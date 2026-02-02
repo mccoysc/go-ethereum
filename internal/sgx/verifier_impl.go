@@ -860,7 +860,7 @@ func (v *DCAPVerifier) extractPlatformInstanceID(quote []byte) (common.Address, 
 // ExtractInstanceID extracts the CPU instance ID from the SGX Quote.
 // This is a convenience method that calls VerifyQuoteComplete and returns just the instance ID.
 func (v *DCAPVerifier) ExtractInstanceID(quote []byte) ([]byte, error) {
-	result, err := v.VerifyQuoteComplete(quote)
+	result, err := v.VerifyQuoteComplete(quote, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to verify quote: %v", err)
 	}

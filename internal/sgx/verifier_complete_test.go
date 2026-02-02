@@ -32,7 +32,7 @@ t.Fatalf("Failed to generate quote: %v", err)
 }
 
 // Verify the quote completely
-result, err := verifier.VerifyQuoteComplete(quote)
+result, err := verifier.VerifyQuoteComplete(quote, nil)
 if err != nil {
 t.Fatalf("VerifyQuoteComplete failed: %v", err)
 }
@@ -101,12 +101,12 @@ t.Fatalf("Failed to generate quote2: %v", err)
 }
 
 // Extract instance IDs
-result1, err := verifier.VerifyQuoteComplete(quote1)
+result1, err := verifier.VerifyQuoteComplete(quote1, nil)
 if err != nil {
 t.Fatalf("Failed to verify quote1: %v", err)
 }
 
-result2, err := verifier.VerifyQuoteComplete(quote2)
+result2, err := verifier.VerifyQuoteComplete(quote2, nil)
 if err != nil {
 t.Fatalf("Failed to verify quote2: %v", err)
 }
@@ -135,7 +135,7 @@ func TestQuoteVerificationInvalidQuote(t *testing.T) {
 verifier := NewDCAPVerifier(true)
 
 // Test with empty quote
-result, err := verifier.VerifyQuoteComplete([]byte{})
+result, err := verifier.VerifyQuoteComplete([]byte{}, nil)
 if err == nil {
 t.Error("Expected error for empty quote")
 }
@@ -145,7 +145,7 @@ t.Error("Empty quote should not verify successfully")
 
 // Test with truncated quote
 shortQuote := make([]byte, 100)
-result, err = verifier.VerifyQuoteComplete(shortQuote)
+result, err = verifier.VerifyQuoteComplete(shortQuote, nil)
 if err == nil {
 t.Error("Expected error for truncated quote")
 }
@@ -176,7 +176,7 @@ if err != nil {
 t.Fatalf("Failed to generate quote: %v", err)
 }
 
-result1, err := verifier.VerifyQuoteComplete(quote)
+result1, err := verifier.VerifyQuoteComplete(quote, nil)
 if err != nil {
 t.Fatalf("Failed to verify raw quote: %v", err)
 }
@@ -199,7 +199,7 @@ AwwGdGVzdGNhMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDGFH8VRWmMhPEq
 -----END CERTIFICATE-----`)
 
 	// This will fail because fake cert doesn't have quote extension, but tests detection
-	_, err = verifier.VerifyQuoteComplete(fakeCert)
+	_, err = verifier.VerifyQuoteComplete(fakeCert, nil)
 	if err == nil {
 		t.Error("Fake certificate should fail (no quote extension)")
 	}
