@@ -337,6 +337,11 @@ func (e *SGXEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*
 
 // verifyHeader 内部验证逻辑
 func (e *SGXEngine) verifyHeader(chain consensus.ChainHeaderReader, header *types.Header, parent *types.Header) error {
+	// Skip verification for genesis block
+	if header.Number.Uint64() == 0 {
+		return nil
+	}
+	
 	// 验证时间戳
 	if header.Time > uint64(time.Now().Add(15*time.Second).Unix()) {
 		return consensus.ErrFutureBlock

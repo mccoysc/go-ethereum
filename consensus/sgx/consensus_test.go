@@ -110,10 +110,12 @@ func (v *testVerifierAdapter) VerifyQuoteComplete(input []byte, options map[stri
 			PlatformInstanceIDSource: "test",
 		},
 	}
-	// Fill with test data
+	// Fill with test data - use empty bytes to match GetProducerID
 	copy(result.Measurements.MrEnclave, "test-mrenclave")
 	copy(result.Measurements.MrSigner, "test-mrsigner")
-	copy(result.Measurements.PlatformInstanceID, "test-instance-id")
+	// Use empty producer ID to match GetProducerID in test mode
+	// This ensures consistency between what's put in extra.ProducerID
+	// and what's extracted from the quote
 	return result, nil
 }
 
