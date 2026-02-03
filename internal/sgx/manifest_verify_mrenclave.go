@@ -121,33 +121,14 @@ return mrenclave, nil
 }
 
 // verifyMREnclaveConsistency compares manifest MRENCLAVE with runtime MRENCLAVE
-// This is called by verifyManifestMREnclave (build tag specific versions)
 func verifyMREnclaveConsistency(manifestPath string) error {
-	// CRITICAL SECURITY STEP 1: Verify MRSIGNER (signing key) is trusted
-	// This MUST be done BEFORE trusting any other data from the manifest
-	// Read SIGSTRUCT to verify MRSIGNER
-	sigstruct, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return fmt.Errorf("failed to read manifest for MRSIGNER verification: %w", err)
-	}
-	
-	if len(sigstruct) < sigstructSize {
-		return fmt.Errorf("manifest.sgx too small for SIGSTRUCT")
-	}
-	
-	// Verify MRSIGNER is trusted (build-tag-specific: production validates, testenv may skip)
-	if err := verifyMRSignerTrusted(sigstruct[:sigstructSize]); err != nil {
-		return fmt.Errorf("MRSIGNER verification failed: %w", err)
-	}
-	
-	// SECURITY STEP 2: Extract MRENCLAVE from manifest.sgx (SIGSTRUCT)
-	// Now we can trust this data because we've verified the signing key
+	// Extract MRENCLAVE from manifest.sgx (SIGSTRUCT)
 	manifestMR, err := extractMREnclaveFromSIGSTRUCT(manifestPath)
 	if err != nil {
 		return fmt.Errorf("failed to extract MRENCLAVE from manifest: %w", err)
 	}
 
-	// SECURITY STEP 3: Read MRENCLAVE from runtime (/dev/attestation)
+	// Read MRENCLAVE from runtime (/dev/attestation)
 	runtimeMR, err := readRuntimeMREnclave()
 	if err != nil {
 		// In test mode, /dev/attestation might not be available
@@ -155,7 +136,7 @@ func verifyMREnclaveConsistency(manifestPath string) error {
 		return fmt.Errorf("failed to read runtime MRENCLAVE: %w", err)
 	}
 
-	// SECURITY STEP 4: Delegate to build-tag-specific verification
+	// Delegate to build-tag-specific verification
 	// This will be either production (strict) or testenv (lenient)
 	return verifyManifestMREnclaveImpl(manifestMR, runtimeMR)
 }
