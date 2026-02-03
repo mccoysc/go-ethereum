@@ -7,26 +7,22 @@ echo "Running in Gramine Docker Environment"
 echo "============================================"
 echo ""
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
 # Build our tool
 echo "Step 1: Building calculate-mrenclave tool..."
 cd "$(dirname "$0")/.."
 go build -o calculate-mrenclave ./cmd/calculate-mrenclave
 if [ ! -f "calculate-mrenclave" ]; then
-    echo -e "${RED}✗ Failed to build calculate-mrenclave${NC}"
+    echo "✗ Failed to build calculate-mrenclave"
     exit 1
 fi
-echo -e "${GREEN}✓ Tool built successfully${NC}"
+echo "✓ Tool built successfully"
 echo ""
 
-# Run all verification steps in a single docker run command  
+# Run verification and save output to file
 echo "Step 2: Running verification in Gramine container..."
-docker run -t --rm \
+OUTPUT_FILE=$(mktemp)
+
+docker run --rm \
   -v "$(pwd)/calculate-mrenclave:/tmp/calculate-mrenclave" \
   gramineproject/gramine:latest \
   bash -c '
@@ -47,12 +43,12 @@ EOF
 
 echo "Generating RSA key..."
 mkdir -p ~/.config/gramine
-gramine-sgx-gen-private-key
+gramine-sgx-gen-private-key > /dev/null 2>&1
 
 echo ""
 echo "Generating manifest.sgx with gramine-sgx-sign..."
 cd /tmp
-gramine-sgx-sign --manifest test.manifest --output test.manifest.sgx
+gramine-sgx-sign --manifest test.manifest --output test.manifest.sgx 2>&1
 
 echo ""
 echo "Extracting Gramine MRENCLAVE..."
@@ -85,7 +81,16 @@ else
     echo "Our implementation needs to be fixed."
     exit 1
 fi
-'
+' 2>&1 | tee "$OUTPUT_FILE"
+
+EXIT_CODE=${PIPESTATUS[0]}
 
 echo ""
-echo -e "${GREEN}Verification complete!${NC}"
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "✓ Verification PASSED!"
+else
+    echo "✗ Verification FAILED!"
+    echo "Full output saved to: $OUTPUT_FILE"
+fi
+
+exit $EXIT_CODE
