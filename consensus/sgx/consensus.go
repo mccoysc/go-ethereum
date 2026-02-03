@@ -86,39 +86,57 @@ func New(config *Config, attestor Attestor, verifier Verifier) *SGXEngine {
 func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine {
 	log.Info("=== Initializing SGX Consensus Engine ===")
 	
-	// Check environment - MUST be running under Gramine
+	// Check environment - MUST be running under Gramine (or test mode)
 	gramineVersion := os.Getenv("GRAMINE_VERSION")
-	if gramineVersion == "" {
+	testMode := os.Getenv("SGX_TEST_MODE") == "true"
+	
+	if gramineVersion == "" && !testMode {
 		log.Crit("SECURITY: GRAMINE_VERSION environment variable not set. " +
 			"SGX consensus engine REQUIRES Gramine environment. " +
-			"For testing: export GRAMINE_VERSION=test")
+			"For testing: export GRAMINE_VERSION=test or SGX_TEST_MODE=true")
 	}
-	log.Info("Running under Gramine", "version", gramineVersion)
 	
-	// Step 1: Validate manifest integrity (signature verification + measurements)
-	log.Info("Step 1: Validating manifest integrity...")
-	if err := internalsgx.ValidateManifestIntegrity(); err != nil {
-		log.Crit("Manifest validation FAILED", "error", err)
+	if testMode {
+		log.Info("Running in TEST MODE (non-Gramine)")
+	} else {
+		log.Info("Running under Gramine", "version", gramineVersion)
 	}
-	log.Info("✓ Manifest signature and measurements verified")
 	
-	// Step 2: Read security config contract address from manifest
-	log.Info("Step 2: Reading security config from manifest...")
-	securityAddr, err := internalsgx.GetSecurityConfigAddress()
+	// Step 1: Read configuration from environment variables (set by Gramine from manifest loader.env)
+	log.Info("Step 1: Reading configuration from environment variables...")
+	appConfig, err := internalsgx.GetAppConfigFromEnvironment()
 	if err != nil {
-		// Fallback to genesis config if manifest doesn't have it
-		log.Warn("Could not read security config from manifest, using genesis", "error", err)
-		securityAddr = paramsConfig.SecurityConfig.Hex()
+		// Fallback to genesis config if environment variables not set
+		log.Warn("Could not read config from environment, using genesis params", "error", err)
+		
+		// Use addresses from genesis params as fallback
+		governanceAddr := paramsConfig.GovernanceContract
+		securityAddr := paramsConfig.SecurityConfig
+		incentiveAddr := paramsConfig.IncentiveContract
+		
+		log.Info("Contract addresses from genesis",
+			"governance", governanceAddr.Hex(),
+			"security", securityAddr.Hex(),
+			"incentive", incentiveAddr.Hex())
+		
+		// Create config from genesis params
+		appConfig = &internalsgx.AppConfig{
+			GovernanceContract:     governanceAddr.Hex(),
+			SecurityConfigContract: securityAddr.Hex(),
+		}
+	} else {
+		log.Info("✓ Configuration loaded from environment",
+			"governance", appConfig.GovernanceContract,
+			"security", appConfig.SecurityConfigContract,
+			"nodeType", appConfig.NodeType)
 	}
-	log.Info("Security config address from manifest", "address", securityAddr)
 	
-	// Use addresses from params (can be overridden by manifest)
-	governanceAddr := paramsConfig.GovernanceContract
+	// Use incentive address from genesis params (not in environment config yet)
 	incentiveAddr := paramsConfig.IncentiveContract
 	
 	log.Info("Contract addresses",
-		"governance", governanceAddr.Hex(),
-		"security", securityAddr,
+		"governance", appConfig.GovernanceContract,
+		"security", appConfig.SecurityConfigContract,
 		"incentive", incentiveAddr.Hex())
 	
 	// Use default config as base

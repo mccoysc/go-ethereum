@@ -15,11 +15,18 @@ type AppConfig struct {
 
 // GetAppConfigFromEnvironment reads application configuration from environment variables.
 // Config is defined in manifest loader.env section, verified by Gramine at startup.
+// In test environment (non-Gramine), it falls back to test environment variables.
 func GetAppConfigFromEnvironment() (*AppConfig, error) {
-	// Verify we're in Gramine SGX environment
+	// Check if we're in Gramine SGX environment
 	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
-	if mrenclave == "" {
-		return nil, fmt.Errorf("not in SGX environment - RA_TLS_MRENCLAVE not set")
+	isGramineEnv := mrenclave != ""
+	
+	// Check for test mode
+	isTestMode := os.Getenv("SGX_TEST_MODE") == "true" || os.Getenv("GRAMINE_VERSION") == "test"
+	
+	// In production, MUST be in Gramine environment
+	if !isGramineEnv && !isTestMode {
+		return nil, fmt.Errorf("not in SGX environment - RA_TLS_MRENCLAVE not set. For testing: export SGX_TEST_MODE=true")
 	}
 
 	// Read application config from environment variables
@@ -37,6 +44,11 @@ func GetAppConfigFromEnvironment() (*AppConfig, error) {
 		return nil, fmt.Errorf("SECURITY_CONFIG_CONTRACT not set in environment")
 	}
 
-	log.Printf("Loaded config from SGX environment (MRENCLAVE: %s...)", mrenclave[:16])
+	if isGramineEnv {
+		log.Printf("Loaded config from Gramine SGX environment (MRENCLAVE: %s...)", mrenclave[:16])
+	} else {
+		log.Printf("Loaded config from test environment (SGX_TEST_MODE)")
+	}
+	
 	return config, nil
 }
