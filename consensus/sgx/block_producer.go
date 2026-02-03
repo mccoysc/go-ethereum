@@ -354,7 +354,8 @@ func (bp *BlockProducer) ProduceBlockNow(
 	// is completed by the caller in the appropriate context.
 	// This function returns the prepared block header.
 	
-	return types.NewBlock(header, &types.Body{Transactions: transactions}, nil, nil), nil
+	// Use empty trie for simple block creation
+	return types.NewBlock(header, &types.Body{Transactions: transactions}, nil, trie.NewStackTrie(nil)), nil
 }
 
 // EstimateNextBlockTime 估算下次出块时间
