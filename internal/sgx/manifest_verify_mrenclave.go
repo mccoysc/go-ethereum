@@ -4,13 +4,12 @@
 package sgx
 
 import (
-"bytes"
-"encoding/binary"
-"encoding/hex"
-"fmt"
-"os"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
 
-"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 // SIGSTRUCT format based on Intel SGX specification
@@ -24,11 +23,12 @@ import (
 // Offset 960-991 (32 bytes): MRSIGNER
 
 const (
-sigstructSize        = 1808
-sigstructMREnclaveOffset = 128
-sigstructMRSignerOffset  = 960
-mrenclaveSize       = 32
-mrsignerSize        = 32
+	sigstructSize            = 1808
+	sigstructMREnclaveOffset = 960 // Correct offset from Gramine sgx_arch.h (enclave_hash field)
+	sigstructModulusOffset   = 128 // For calculating MRSIGNER = SHA256(modulus)
+	mrenclaveSize            = 32
+	mrsignerSize             = 32
+	modulusSize              = 384 // RSA-3072 modulus size
 )
 
 // extractMREnclaveFromSIGSTRUCT extracts MRENCLAVE from a manifest.sgx file
@@ -72,7 +72,8 @@ log.Debug("Extracted MRENCLAVE from manifest.sgx",
 return mrenclave, nil
 }
 
-// extractMRSignerFromSIGSTRUCT extracts MRSIGNER from a manifest.sgx file
+// extractMRSignerFromSIGSTRUCT calculates MRSIGNER from a manifest.sgx file
+// MRSIGNER = SHA256(modulus), as per Intel SGX specification
 func extractMRSignerFromSIGSTRUCT(manifestPath string) ([]byte, error) {
 data, err := os.ReadFile(manifestPath)
 if err != nil {
@@ -83,12 +84,14 @@ if len(data) < sigstructSize {
 return nil, fmt.Errorf("manifest.sgx file too small")
 }
 
-// Extract MRSIGNER from SIGSTRUCT
-// MRSIGNER is at offset 960, size 32 bytes
-mrsigner := make([]byte, mrsignerSize)
-copy(mrsigner, data[sigstructMRSignerOffset:sigstructMRSignerOffset+mrsignerSize])
+// Extract modulus from SIGSTRUCT (offset 128, 384 bytes)
+modulus := data[sigstructModulusOffset : sigstructModulusOffset+modulusSize]
 
-log.Debug("Extracted MRSIGNER from manifest.sgx",
+// Calculate MRSIGNER = SHA256(modulus)
+hash := sha256.Sum256(modulus)
+mrsigner := hash[:]
+
+log.Debug("Calculated MRSIGNER from SIGSTRUCT modulus",
 "mrsigner", hex.EncodeToString(mrsigner))
 
 return mrsigner, nil
@@ -140,17 +143,8 @@ return verifyManifestMREnclaveImpl(manifestMR, runtimeMR)
 }
 
 // verifyManifestMREnclaveImpl is implemented in build-tag-specific files:
-// - manifest_verify_production.go (build tag: !testenv)
-// - manifest_verify_testenv.go (build tag: testenv)
-func verifyManifestMREnclaveImpl(manifestMR, runtimeMR []byte) error {
-// This will be provided by build-tag-specific files
-// Default implementation for compatibility
-if !bytes.Equal(manifestMR, runtimeMR) {
-return fmt.Errorf("MRENCLAVE mismatch: manifest=%x runtime=%x",
-manifestMR, runtimeMR)
-}
-return nil
-}
+// - manifest_verify_production.go (build tag: !testenv) - strict validation
+// - manifest_verify_testenv.go (build tag: testenv) - lenient validation
 
 // ExtractMeasurementsFromManifest extracts both MRENCLAVE and MRSIGNER from manifest
 func ExtractMeasurementsFromManifest(manifestPath string) (mrenclave, mrsigner []byte, err error) {

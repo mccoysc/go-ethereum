@@ -10,9 +10,9 @@ import (
 "github.com/ethereum/go-ethereum/log"
 )
 
-// verifyManifestMREnclave compares manifest MRENCLAVE with runtime MRENCLAVE
+// verifyManifestMREnclaveImpl compares manifest MRENCLAVE with runtime MRENCLAVE
 // Production version: strict validation, mismatch causes failure
-func (v *ManifestSignatureVerifier) verifyManifestMREnclave(manifestMR, runtimeMR []byte) error {
+func verifyManifestMREnclaveImpl(manifestMR, runtimeMR []byte) error {
 if len(manifestMR) != 32 {
 return fmt.Errorf("invalid manifest MRENCLAVE length: %d", len(manifestMR))
 }
@@ -21,9 +21,10 @@ return fmt.Errorf("invalid runtime MRENCLAVE length: %d", len(runtimeMR))
 }
 
 if !bytes.Equal(manifestMR, runtimeMR) {
-log.Error("MRENCLAVE mismatch - security violation",
+log.Error("MRENCLAVE mismatch - SECURITY VIOLATION",
 "manifest", hex.EncodeToString(manifestMR),
 "runtime", hex.EncodeToString(runtimeMR))
+log.Crit("CRITICAL: Manifest MRENCLAVE does not match runtime - possible tampering detected")
 return fmt.Errorf("MRENCLAVE mismatch: manifest=%x runtime=%x",
 manifestMR, runtimeMR)
 }
