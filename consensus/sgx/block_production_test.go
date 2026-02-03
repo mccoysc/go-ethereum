@@ -24,7 +24,12 @@ func TestBlockProductionBasic(t *testing.T) {
 		os.Unsetenv("GRAMINE_VERSION")
 	}()
 
-	// Create test blockchain
+	// Create engine first (need real attestor/verifier)
+	config := DefaultConfig()
+	attestor, verifier := createTestAttestorVerifier(t)
+	engine := New(config, attestor, verifier)
+
+	// Create test blockchain with real engine
 	db := rawdb.NewMemoryDatabase()
 	
 	// Generate key first so we can fund it in genesis
@@ -38,7 +43,7 @@ func TestBlockProductionBasic(t *testing.T) {
 			common.HexToAddress("0x1000"): {Balance: big.NewInt(1000000000000000000)},
 		},
 	}
-	chain, _ := core.NewBlockChain(db, gspec, NewTestEngine(), &core.BlockChainConfig{})
+	chain, _ := core.NewBlockChain(db, gspec, engine, &core.BlockChainConfig{})
 	defer chain.Stop()
 
 	// Create test transaction pool
@@ -55,11 +60,6 @@ func TestBlockProductionBasic(t *testing.T) {
 	
 	txpool.AddTx(signedTx1)
 	txpool.AddTx(signedTx2)
-
-	// Create engine and block producer
-	config := DefaultConfig()
-	attestor, verifier := createTestAttestorVerifier(t)
-	engine := New(config, attestor, verifier)
 	
 	producer := NewBlockProducer(config, engine, txpool, chain)
 
