@@ -506,12 +506,27 @@ func (v *DCAPVerifier) ExtractQuoteFromInput(input []byte) ([]byte, error) {
 // extractQuoteFromInput extracts quote from various input formats
 // Supports: PEM certificate, raw quote bytes, base64 encoded quote
 func (v *DCAPVerifier) extractQuoteFromInput(input []byte) ([]byte, error) {
-	// Check if input is a PEM certificate
-	if bytes.Contains(input, []byte("-----BEGIN CERTIFICATE-----")) {
+	// Check if input starts with valid SGX quote header
+	// SGX Quote v3/v4 header format:
+	// - Version (2 bytes): 0x0003 or 0x0004
+	// - Signature type (2 bytes): EPID(0-1) or DCAP(2-3)
+	if len(input) >= 4 {
+		version := binary.LittleEndian.Uint16(input[0:2])
+		signType := binary.LittleEndian.Uint16(input[2:4])
+		// Valid quote: version 3 or 4, signType 0-3
+		if (version == 3 || version == 4) && signType <= 3 {
+			// This looks like a raw quote
+			return input, nil
+		}
+	}
+	
+	// Check if input is a PEM certificate (starts with PEM header)
+	if bytes.HasPrefix(input, []byte("-----BEGIN CERTIFICATE-----")) {
 		return v.extractQuoteFromCertificate(input)
 	}
 
-	// Otherwise assume it's raw quote bytes
+	// Fallback: if it contains certificate marker but doesn't start with it,
+	// it might be a quote with embedded certificates, so treat as raw quote
 	return input, nil
 }
 
