@@ -38,3 +38,23 @@ func generateQuoteViaGramine(reportData []byte) ([]byte, error) {
 
 	return quote, nil
 }
+
+// readMREnclave reads the MRENCLAVE from Gramine's /dev/attestation interface.
+// Production version: reads from actual device.
+func readMREnclave() ([]byte, error) {
+	// Read from /dev/attestation/my_target_info
+	targetInfo, err := os.ReadFile("/dev/attestation/my_target_info")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read /dev/attestation/my_target_info: %w", err)
+	}
+
+	if len(targetInfo) < 32 {
+		return nil, fmt.Errorf("target_info too short: got %d bytes, need at least 32", len(targetInfo))
+	}
+
+	// MRENCLAVE is the first 32 bytes of target_info
+	mrenclave := make([]byte, 32)
+	copy(mrenclave, targetInfo[:32])
+
+	return mrenclave, nil
+}

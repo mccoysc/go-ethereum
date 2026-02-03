@@ -18,37 +18,7 @@ package sgx
 
 import (
 	"fmt"
-	"os"
 )
-
-// readMREnclave reads the MRENCLAVE from Gramine's /dev/attestation interface.
-func readMREnclave() ([]byte, error) {
-	// Check if in test mode
-	if os.Getenv("SGX_TEST_MODE") == "true" {
-		// Return a deterministic mock MRENCLAVE for testing
-		mrenclave := make([]byte, 32)
-		for i := range mrenclave {
-			mrenclave[i] = byte(i)
-		}
-		return mrenclave, nil
-	}
-	
-	// Read from /dev/attestation/my_target_info
-	targetInfo, err := os.ReadFile("/dev/attestation/my_target_info")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read /dev/attestation/my_target_info: %w", err)
-	}
-
-	if len(targetInfo) < 32 {
-		return nil, fmt.Errorf("target_info too short: got %d bytes, need at least 32", len(targetInfo))
-	}
-
-	// MRENCLAVE is the first 32 bytes of target_info
-	mrenclave := make([]byte, 32)
-	copy(mrenclave, targetInfo[:32])
-
-	return mrenclave, nil
-}
 
 // readMRSigner reads the MRSIGNER from Gramine's /dev/attestation interface.
 func readMRSigner() ([]byte, error) {
@@ -59,5 +29,9 @@ func readMRSigner() ([]byte, error) {
 }
 
 // generateQuoteViaGramine is implemented in:
+// - gramine_helpers_production.go for production builds (default)
+// - gramine_helpers_testenv.go for test builds (-tags testenv)
+
+// readMREnclave is implemented in:
 // - gramine_helpers_production.go for production builds (default)
 // - gramine_helpers_testenv.go for test builds (-tags testenv)

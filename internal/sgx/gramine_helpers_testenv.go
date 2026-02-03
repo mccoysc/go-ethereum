@@ -29,6 +29,17 @@ func generateQuoteViaGramine(reportData []byte) ([]byte, error) {
 	return generateDynamicMockQuote(paddedData)
 }
 
+// readMREnclave reads the MRENCLAVE value.
+// Test version: returns deterministic mock MRENCLAVE.
+func readMREnclave() ([]byte, error) {
+	// Return a deterministic mock MRENCLAVE for testing
+	mrenclave := make([]byte, 32)
+	for i := range mrenclave {
+		mrenclave[i] = byte(i)
+	}
+	return mrenclave, nil
+}
+
 // generateDynamicMockQuote generates a mock Quote with the given reportData
 // This is used in test mode to simulate Gramine's dynamic Quote generation
 func generateDynamicMockQuote(reportData []byte) ([]byte, error) {
