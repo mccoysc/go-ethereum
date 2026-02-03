@@ -173,6 +173,13 @@ func (bp *BlockProducer) produceBlock() error {
 		Coinbase:   common.Address{}, // Will be set by Prepare
 	}
 	
+	// Ensure timestamp is greater than parent (prevent collision)
+	if header.Time <= parent.Time {
+		header.Time = parent.Time + 1
+		log.Warn("BlockProducer: Adjusted timestamp to avoid collision",
+			"parent", parent.Time, "adjusted", header.Time)
+	}
+	
 	// 3. 调用 engine.Prepare() 准备区块头
 	if err := bp.engine.Prepare(bp.chain, header); err != nil {
 		log.Error("BlockProducer: Failed to prepare header", "err", err)
@@ -239,25 +246,17 @@ func (bp *BlockProducer) produceBlock() error {
 	// 8. 创建最终区块
 	finalBlock := types.NewBlock(header, body, result.Receipts, trie.NewStackTrie(nil))
 	
-	// 9. Seal 区块（添加 SGX Quote）- 使用goroutine和channel
-	resultCh := make(chan *types.Block, 1)
-	stopCh := make(chan struct{})
-	defer close(stopCh)
+	// 9. Seal 区块（添加 SGX Quote）- 使用同步调用避免死锁
+	log.Debug("BlockProducer: Sealing block", "number", finalBlock.NumberU64())
 	
-	err = bp.engine.Seal(bp.chain, finalBlock, resultCh, stopCh)
+	// 创建sealBlockSync辅助函数来包装Seal调用
+	sealedBlock, err := bp.sealBlockSync(finalBlock)
 	if err != nil {
 		log.Error("BlockProducer: Failed to seal block", "err", err)
 		return err
 	}
 	
-	// Wait for sealed block with timeout
-	var sealedBlock *types.Block
-	select {
-	case sealedBlock = <-resultCh:
-		// Success
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("timeout waiting for block seal")
-	}
+	log.Info("BlockProducer: Block sealed successfully", "number", sealedBlock.NumberU64())
 	
 	// 10. 插入区块到链中
 	_, err = coreChain.InsertChain(types.Blocks{sealedBlock})
@@ -273,6 +272,29 @@ func (bp *BlockProducer) produceBlock() error {
 		"gasUsed", header.GasUsed)
 	
 	return nil
+}
+
+// sealBlockSync 同步调用Seal方法，避免channel死锁
+func (bp *BlockProducer) sealBlockSync(block *types.Block) (*types.Block, error) {
+	resultCh := make(chan *types.Block, 1)
+	stopCh := make(chan struct{})
+	
+	// 启动Seal
+	err := bp.engine.Seal(bp.chain, block, resultCh, stopCh)
+	if err != nil {
+		close(stopCh)
+		return nil, fmt.Errorf("failed to start sealing: %w", err)
+	}
+	
+	// 等待结果，带超时
+	select {
+	case sealedBlock := <-resultCh:
+		close(stopCh)
+		return sealedBlock, nil
+	case <-time.After(10 * time.Second):
+		close(stopCh)
+		return nil, fmt.Errorf("timeout waiting for block seal (10s)")
+	}
 }
 
 // SetLastBlockTime 设置最后出块时间（用于测试）
