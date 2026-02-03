@@ -1,8 +1,6 @@
 package sgx
 
 import (
-	"bytes"
-	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -81,64 +79,57 @@ func ParseManifestFile(manifestPath string) (*ManifestConfig, []byte, error) {
 	return config, sigstruct, nil
 }
 
-// ReadAndVerifyManifestFromDisk reads manifest from external filesystem and verifies integrity
-// by comparing MRENCLAVE in the file with runtime MRENCLAVE (set by Gramine after verification).
-// 
-// SECURITY: This is critical when reading manifest from disk because:
-// 1. Gramine verified manifest at startup and set RA_TLS_MRENCLAVE
-// 2. But the file on disk could be modified after startup
-// 3. We MUST verify MRENCLAVE matches to ensure integrity
+// AppConfig holds application configuration from manifest environment variables
+type AppConfig struct {
+	GovernanceContract     string
+	SecurityConfigContract string
+	NodeType               string
+	// Add other config fields as needed
+}
+
+// GetAppConfigFromEnvironment reads application configuration from environment variables.
+// This is the CORRECT way to get configuration when running inside Gramine SGX.
 //
-// User requirement: "既然要读manifest内容，如果是从外部不受保护环境读的，就是要被验证才行"
-// Translation: "If reading manifest from external unprotected environment, MUST verify"
-func ReadAndVerifyManifestFromDisk(manifestPath string) (*ManifestConfig, error) {
-	// 1. Read manifest file from disk (potentially untrusted)
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read manifest file: %w", err)
+// HOW IT WORKS:
+// 1. Manifest defines config in loader.env section:
+//    loader.env.GOVERNANCE_CONTRACT = "0x..."
+//    loader.env.SECURITY_CONFIG_CONTRACT = "0x..."
+// 2. Gramine verifies manifest at startup
+// 3. Gramine sets these as environment variables
+// 4. We read from environment variables
+//
+// SECURITY:
+// - Gramine verified manifest (signature + MRENCLAVE)
+// - Environment variables are in SGX-protected memory
+// - No file reading needed
+// - No additional verification needed
+//
+// User's question: "不从外部读取你从哪里取得manifest文件？"
+// Answer: We DON'T get the manifest file. We get config from environment variables
+//         that Gramine set from the verified manifest.
+func GetAppConfigFromEnvironment() (*AppConfig, error) {
+	// Verify we're in Gramine SGX environment
+	mrenclave := os.Getenv("RA_TLS_MRENCLAVE")
+	if mrenclave == "" {
+		return nil, fmt.Errorf("not in SGX environment - RA_TLS_MRENCLAVE not set")
 	}
 
-	if len(data) < 1808 {
-		return nil, fmt.Errorf("manifest file too small: %d bytes", len(data))
+	// Read application config from environment variables
+	// These are set by Gramine from manifest loader.env section
+	config := &AppConfig{
+		GovernanceContract:     os.Getenv("GOVERNANCE_CONTRACT"),
+		SecurityConfigContract: os.Getenv("SECURITY_CONFIG_CONTRACT"),
+		NodeType:               os.Getenv("NODE_TYPE"),
 	}
 
-	// 2. Extract MRENCLAVE from SIGSTRUCT in the file
-	sigstruct := data[0:1808]
-	fileMREnclave := sigstruct[960:992]
-
-	// 3. Get runtime MRENCLAVE (set by Gramine after verifying manifest at startup)
-	runtimeMREnclaveHex := os.Getenv("RA_TLS_MRENCLAVE")
-	if runtimeMREnclaveHex == "" {
-		// Not in SGX mode or Gramine didn't set the variable
-		// In test/development mode, skip verification
-		log.Printf("Warning: RA_TLS_MRENCLAVE not set, skipping manifest MRENCLAVE verification")
-		manifestTOML := data[1808:]
-		return ParseManifestTOML(manifestTOML)
+	// Validate required config
+	if config.GovernanceContract == "" {
+		return nil, fmt.Errorf("GOVERNANCE_CONTRACT not set in environment")
+	}
+	if config.SecurityConfigContract == "" {
+		return nil, fmt.Errorf("SECURITY_CONFIG_CONTRACT not set in environment")
 	}
 
-	// 4. Convert runtime MRENCLAVE from hex string to bytes
-	runtimeMREnclave, err := hex.DecodeString(runtimeMREnclaveHex)
-	if err != nil {
-		return nil, fmt.Errorf("invalid RA_TLS_MRENCLAVE format: %w", err)
-	}
-
-	// 5. CRITICAL SECURITY CHECK: Verify MRENCLAVE matches
-	// This proves the file on disk corresponds to what Gramine verified at startup
-	if !bytes.Equal(fileMREnclave, runtimeMREnclave) {
-		return nil, fmt.Errorf("SECURITY VIOLATION: Manifest file MRENCLAVE mismatch\n"+
-			"File MRENCLAVE:    %x\n"+
-			"Runtime MRENCLAVE: %x\n"+
-			"The manifest file may have been tampered with after Gramine verified it",
-			fileMREnclave, runtimeMREnclave)
-	}
-
-	// 6. MRENCLAVE verified - file is authentic, safe to parse and use
-	manifestTOML := data[1808:]
-	config, err := ParseManifestTOML(manifestTOML)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse manifest TOML: %w", err)
-	}
-
-	log.Printf("Manifest verification successful - MRENCLAVE matches runtime value")
+	log.Printf("Loaded config from SGX environment (MRENCLAVE: %s...)", mrenclave[:16])
 	return config, nil
 }
