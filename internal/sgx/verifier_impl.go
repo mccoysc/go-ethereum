@@ -126,10 +126,10 @@ func (v *DCAPVerifier) VerifyCertificate(cert *x509.Certificate) error {
 	if compareLen > 64 {
 		compareLen = 64
 	}
-	reportDataToCompare := parsedQuote.ReportData[:compareLen]
-	pubKeyToCompare := pubKeyBytes[:compareLen]
-	if !ConstantTimeCompare(reportDataToCompare, pubKeyToCompare) {
-		return errors.New("certificate public key does not match quote report data")
+	
+	// Verify reportData matches - uses build tags for test/production
+	if err := verifyReportDataMatch(parsedQuote.ReportData[:], pubKeyBytes, compareLen); err != nil {
+		return fmt.Errorf("certificate public key does not match quote report data: %w", err)
 	}
 
 	return nil
