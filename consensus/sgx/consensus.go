@@ -510,8 +510,17 @@ func (e *SGXEngine) Seal(chain consensus.ChainHeaderReader, block *types.Block, 
 		return errors.New("generated quote failed verification")
 	}
 	
+	// Debug logging
+	log.Debug("Seal: Quote verification result",
+		"verified", quoteResult.Verified,
+		"platformInstanceID", fmt.Sprintf("%x", quoteResult.Measurements.PlatformInstanceID),
+		"platformInstanceIDSource", quoteResult.Measurements.PlatformInstanceIDSource,
+		"platformInstanceIDLen", len(quoteResult.Measurements.PlatformInstanceID))
+	
 	// ProducerID就是PlatformInstanceID
 	producerID := quoteResult.Measurements.PlatformInstanceID[:]
+	
+	log.Debug("Seal: ProducerID set", "producerID", fmt.Sprintf("%x", producerID), "length", len(producerID))
 
 	// 4. 构造包含SGX证明的Extra数据
 	extra := &SGXExtra{

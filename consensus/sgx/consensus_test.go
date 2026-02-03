@@ -2,6 +2,7 @@ package sgx
 
 import (
 	"crypto/ecdsa"
+	"fmt"
 	"math/big"
 	"os"
 	"testing"
@@ -27,7 +28,7 @@ func createTestAttestorVerifier(t *testing.T) (Attestor, Verifier) {
 		t.Fatalf("Failed to create Module 01 attestor: %v", err)
 	}
 
-	m01Verifier := internalsgx.NewDCAPVerifier(false)
+	m01Verifier := internalsgx.NewDCAPVerifier(true) // Use true for testenv
 
 	// Wrap in adapters that add consensus-specific methods
 	attestor := newTestAttestorAdapter(m01Attestor)
@@ -65,13 +66,65 @@ func (a *testAttestorAdapter) GetProducerID() ([]byte, error) {
 
 // testVerifierAdapter wraps Module 01 Verifier and adds consensus-specific methods
 type testVerifierAdapter struct {
-	internalsgx.Verifier
+	verifier *internalsgx.DCAPVerifier
 }
 
 func newTestVerifierAdapter(m01Verifier internalsgx.Verifier) *testVerifierAdapter {
-	return &testVerifierAdapter{
-		Verifier: m01Verifier,
+	// Type assert to get DCAPVerifier for additional methods
+	dcapVerifier, ok := m01Verifier.(*internalsgx.DCAPVerifier)
+	if !ok {
+		panic("Expected DCAPVerifier")
 	}
+	return &testVerifierAdapter{
+		verifier: dcapVerifier,
+	}
+}
+
+func (v *testVerifierAdapter) VerifyQuote(quote []byte) error {
+	return v.verifier.VerifyQuote(quote)
+}
+
+func (v *testVerifierAdapter) VerifyQuoteComplete(input []byte, options map[string]interface{}) (*internalsgx.QuoteVerificationResult, error) {
+	return v.verifier.VerifyQuoteComplete(input, options)
+}
+
+func (v *testVerifierAdapter) ExtractInstanceID(quote []byte) ([]byte, error) {
+	// Use DCAPVerifier's ExtractInstanceID method
+	id, err := internalsgx.ExtractInstanceID(quote)
+	if err != nil {
+		return nil, err
+	}
+	return id.CPUInstanceID, nil
+}
+
+func (v *testVerifierAdapter) ExtractQuoteUserData(quote []byte) ([]byte, error) {
+	return internalsgx.ExtractReportData(quote)
+}
+
+func (v *testVerifierAdapter) ExtractPublicKeyFromQuote(quote []byte) ([]byte, error) {
+	// Extract report data which should contain public key
+	reportData, err := internalsgx.ExtractReportData(quote)
+	if err != nil {
+		return nil, err
+	}
+	// First 65 bytes should be the public key in uncompressed format
+	if len(reportData) < 65 {
+		return nil, fmt.Errorf("report data too short for public key")
+	}
+	return reportData[:65], nil
+}
+
+func (v *testVerifierAdapter) ExtractProducerID(quote []byte) ([]byte, error) {
+	// Use VerifyQuoteComplete to get instance ID, then derive producer ID
+	result, err := v.verifier.VerifyQuoteComplete(quote, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Producer ID is derived from instance ID (first 20 bytes or hash)
+	if len(result.Measurements.PlatformInstanceID) >= 20 {
+		return result.Measurements.PlatformInstanceID[:20], nil
+	}
+	return result.Measurements.PlatformInstanceID, nil
 }
 
 func (v *testVerifierAdapter) VerifySignature(data, signature, producerID []byte) error {
@@ -97,72 +150,9 @@ func (v *testVerifierAdapter) VerifySignature(data, signature, producerID []byte
 	return nil
 }
 
-func (v *testVerifierAdapter) VerifyQuoteComplete(input []byte, options map[string]interface{}) (*internalsgx.QuoteVerificationResult, error) {
-	// For testing, return a mock verification result
-	result := &internalsgx.QuoteVerificationResult{
-		Verified:  true,
-		TCBStatus: "UpToDate",
-		Measurements: internalsgx.QuoteMeasurements{
-			MrEnclave:                make([]byte, 32),
-			MrSigner:                 make([]byte, 32),
-			ReportData:               make([]byte, 64),
-			PlatformInstanceID:       make([]byte, 32),
-			PlatformInstanceIDSource: "test",
-		},
-	}
-	// Fill with test data - use empty bytes to match GetProducerID
-	copy(result.Measurements.MrEnclave, "test-mrenclave")
-	copy(result.Measurements.MrSigner, "test-mrsigner")
-	// Use empty producer ID to match GetProducerID in test mode
-	// This ensures consistency between what's put in extra.ProducerID
-	// and what's extracted from the quote
-	return result, nil
-}
-
-func (v *testVerifierAdapter) ExtractInstanceID(quote []byte) ([]byte, error) {
-	// For testing, use the wrapped verifier's method if available
-	// Otherwise return a deterministic instance ID
-	instanceID := make([]byte, 32)
-	for i := range instanceID {
-		instanceID[i] = byte(i % 256)
-	}
-	return instanceID, nil
-}
-
-func (v *testVerifierAdapter) ExtractQuoteUserData(quote []byte) ([]byte, error) {
-	// For testing, use deterministic user data
-	userData := make([]byte, 64)
-	copy(userData, "test-user-data")
-	return userData, nil
-}
-
-func (v *testVerifierAdapter) ExtractPublicKeyFromQuote(quote []byte) ([]byte, error) {
-	// For testing, return a deterministic public key
-	pubKey := make([]byte, 65)
-	pubKey[0] = 0x04 // Uncompressed format marker
-	for i := 1; i < len(pubKey); i++ {
-		pubKey[i] = byte(i % 256)
-	}
-	return pubKey, nil
-}
-
-func (v *testVerifierAdapter) ExtractProducerID(quote []byte) ([]byte, error) {
-	// Extract report data from quote (simplified for testing)
-	// In a real implementation, this would parse the SGX quote structure
-	reportData, err := internalsgx.ExtractReportData(quote)
-	if err != nil {
-		// Fall back to a deterministic producer ID for testing
-		producerID := make([]byte, 20)
-		for i := range producerID {
-			producerID[i] = byte(i)
-		}
-		return producerID, nil
-	}
-
-	// Use first 20 bytes of report data hash as producer ID
-	hash := crypto.Keccak256Hash(reportData)
-	return hash[:20], nil
-}
+// Note: VerifyQuoteComplete, ExtractInstanceID, ExtractQuoteUserData, ExtractPublicKeyFromQuote, ExtractProducerID
+// are inherited from the wrapped internal/sgx.Verifier and use real implementations
+// (which will use real quote data in testenv mode with build tags)
 
 // TestNewEngine tests engine creation
 func TestNewEngine(t *testing.T) {

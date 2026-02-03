@@ -99,6 +99,16 @@ func TestBlockProductionBasic(t *testing.T) {
 		sealedBlock := <-sealResultCh
 		close(stopCh)
 		
+		// Debug: check sealed block's Extra
+		t.Logf("Sealed block Extra length: %d bytes", len(sealedBlock.Header().Extra))
+		extra, err := DecodeSGXExtra(sealedBlock.Header().Extra)
+		if err != nil {
+			t.Logf("Failed to decode Extra: %v", err)
+		} else {
+			t.Logf("Sealed block ProducerID: %x (length: %d)", extra.ProducerID, len(extra.ProducerID))
+			t.Logf("Sealed block Quote length: %d", len(extra.SGXQuote))
+		}
+		
 		_, err = chain.InsertChain(types.Blocks{sealedBlock})
 		if err != nil {
 			t.Fatalf("Failed to insert block: %v", err)
