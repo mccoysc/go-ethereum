@@ -41,7 +41,7 @@ func generateQuoteViaGramine(reportData []byte) ([]byte, error) {
 	
 	log.Debug("Test mode: loaded real Gramine quote",
 		"quoteSize", len(quote),
-		"requestedReportData", fmt.Sprintf("%x", reportData[:32]))
+		"requestedReportData", fmt.Sprintf("%x", reportData))
 
 	return quote, nil
 }
