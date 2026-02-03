@@ -62,9 +62,29 @@ echo "Gramine MRENCLAVE: $GRAMINE_MR"
 echo ""
 echo "Running our calculate-mrenclave tool..."
 chmod +x /tmp/calculate-mrenclave
-/tmp/calculate-mrenclave /tmp/test.manifest.sgx
+OUR_OUTPUT=$(/tmp/calculate-mrenclave /tmp/test.manifest.sgx 2>&1)
+echo "$OUR_OUTPUT"
+
+# Extract our MRENCLAVE from output
+OUR_MR=$(echo "$OUR_OUTPUT" | grep "Our calculated MRENCLAVE" | awk "{print \$NF}")
 
 echo ""
+echo "============================================"
+echo "COMPARISON RESULTS:"
+echo "============================================"
+echo "Gramine MRENCLAVE: $GRAMINE_MR"
+echo "Our MRENCLAVE:     $OUR_MR"
+echo ""
+
+if [ "$GRAMINE_MR" == "$OUR_MR" ]; then
+    echo "✓ SUCCESS: MRENCLAVEs MATCH!"
+    echo "Our implementation is CORRECT and matches Gramine exactly."
+    exit 0
+else
+    echo "✗ FAILURE: MRENCLAVEs DO NOT MATCH!"
+    echo "Our implementation needs to be fixed."
+    exit 1
+fi
 '
 
 echo ""
