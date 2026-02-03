@@ -87,7 +87,7 @@ func TestBlockProductionBasic(t *testing.T) {
 			t.Errorf("Transaction count mismatch: got %d, want 2", len(block.Transactions()))
 		}
 		
-		// Seal and insert block into chain for next test
+		// Seal the block
 		sealResultCh := make(chan *types.Block, 1)
 		stopCh := make(chan struct{})
 		err = engine.Seal(chain, block, sealResultCh, stopCh)
@@ -103,18 +103,31 @@ func TestBlockProductionBasic(t *testing.T) {
 		t.Logf("Sealed block Extra length: %d bytes", len(sealedBlock.Header().Extra))
 		extra, err := DecodeSGXExtra(sealedBlock.Header().Extra)
 		if err != nil {
-			t.Logf("Failed to decode Extra: %v", err)
-		} else {
-			t.Logf("Sealed block ProducerID: %x (length: %d)", extra.ProducerID, len(extra.ProducerID))
-			t.Logf("Sealed block Quote length: %d", len(extra.SGXQuote))
+			t.Fatalf("Failed to decode Extra: %v", err)
 		}
 		
-		_, err = chain.InsertChain(types.Blocks{sealedBlock})
+		t.Logf("Sealed block ProducerID: %x (length: %d)", extra.ProducerID, len(extra.ProducerID))
+		t.Logf("Sealed block Quote length: %d", len(extra.SGXQuote))
+		
+		// Verify ProducerID is not all zeros
+		allZeros := true
+		for _, b := range extra.ProducerID {
+			if b != 0 {
+				allZeros = false
+				break
+			}
+		}
+		if allZeros {
+			t.Error("ProducerID is all zeros!")
+		}
+		
+		// Verify block can be verified
+		err = engine.VerifyHeader(chain, sealedBlock.Header())
 		if err != nil {
-			t.Fatalf("Failed to insert block: %v", err)
+			t.Errorf("Block verification failed: %v", err)
 		}
 		
-		t.Logf("Successfully produced and inserted block #%d with %d transactions", block.NumberU64(), len(block.Transactions()))
+		t.Logf("Successfully produced and sealed block #%d with %d transactions", block.NumberU64(), len(block.Transactions()))
 	})
 
 	// Test automatic block production
