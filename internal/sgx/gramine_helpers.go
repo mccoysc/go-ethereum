@@ -23,6 +23,16 @@ import (
 
 // readMREnclave reads the MRENCLAVE from Gramine's /dev/attestation interface.
 func readMREnclave() ([]byte, error) {
+	// Check if in test mode
+	if os.Getenv("SGX_TEST_MODE") == "true" {
+		// Return a deterministic mock MRENCLAVE for testing
+		mrenclave := make([]byte, 32)
+		for i := range mrenclave {
+			mrenclave[i] = byte(i)
+		}
+		return mrenclave, nil
+	}
+	
 	// Read from /dev/attestation/my_target_info
 	targetInfo, err := os.ReadFile("/dev/attestation/my_target_info")
 	if err != nil {

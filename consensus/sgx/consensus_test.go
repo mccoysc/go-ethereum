@@ -3,6 +3,7 @@ package sgx
 import (
 	"crypto/ecdsa"
 	"math/big"
+	"os"
 	"testing"
 	"time"
 
@@ -16,6 +17,9 @@ import (
 // createTestAttestorVerifier creates real Module 01 attestor and verifier for testing
 // These will use mock implementations when not in SGX environment
 func createTestAttestorVerifier(t *testing.T) (Attestor, Verifier) {
+	// Set test mode to avoid SGX requirements
+	os.Setenv("SGX_TEST_MODE", "true")
+	
 	// Use Module 01's real implementations which auto-detect SGX environment
 	// and fall back to mock mode if not available
 	m01Attestor, err := internalsgx.NewGramineAttestor()
@@ -93,6 +97,53 @@ func (v *testVerifierAdapter) VerifySignature(data, signature, producerID []byte
 	return nil
 }
 
+func (v *testVerifierAdapter) VerifyQuoteComplete(input []byte, options map[string]interface{}) (*internalsgx.QuoteVerificationResult, error) {
+	// For testing, return a mock verification result
+	result := &internalsgx.QuoteVerificationResult{
+		Verified:  true,
+		TCBStatus: "UpToDate",
+		Measurements: internalsgx.QuoteMeasurements{
+			MrEnclave:                make([]byte, 32),
+			MrSigner:                 make([]byte, 32),
+			ReportData:               make([]byte, 64),
+			PlatformInstanceID:       make([]byte, 32),
+			PlatformInstanceIDSource: "test",
+		},
+	}
+	// Fill with test data
+	copy(result.Measurements.MrEnclave, "test-mrenclave")
+	copy(result.Measurements.MrSigner, "test-mrsigner")
+	copy(result.Measurements.PlatformInstanceID, "test-instance-id")
+	return result, nil
+}
+
+func (v *testVerifierAdapter) ExtractInstanceID(quote []byte) ([]byte, error) {
+	// For testing, use the wrapped verifier's method if available
+	// Otherwise return a deterministic instance ID
+	instanceID := make([]byte, 32)
+	for i := range instanceID {
+		instanceID[i] = byte(i % 256)
+	}
+	return instanceID, nil
+}
+
+func (v *testVerifierAdapter) ExtractQuoteUserData(quote []byte) ([]byte, error) {
+	// For testing, use deterministic user data
+	userData := make([]byte, 64)
+	copy(userData, "test-user-data")
+	return userData, nil
+}
+
+func (v *testVerifierAdapter) ExtractPublicKeyFromQuote(quote []byte) ([]byte, error) {
+	// For testing, return a deterministic public key
+	pubKey := make([]byte, 65)
+	pubKey[0] = 0x04 // Uncompressed format marker
+	for i := 1; i < len(pubKey); i++ {
+		pubKey[i] = byte(i % 256)
+	}
+	return pubKey, nil
+}
+
 func (v *testVerifierAdapter) ExtractProducerID(quote []byte) ([]byte, error) {
 	// Extract report data from quote (simplified for testing)
 	// In a real implementation, this would parse the SGX quote structure
@@ -113,6 +164,14 @@ func (v *testVerifierAdapter) ExtractProducerID(quote []byte) ([]byte, error) {
 
 // TestNewEngine tests engine creation
 func TestNewEngine(t *testing.T) {
+	// Setup test environment variables
+	os.Setenv("SGX_TEST_MODE", "true")
+	os.Setenv("GRAMINE_VERSION", "test")
+	defer func() {
+		os.Unsetenv("SGX_TEST_MODE")
+		os.Unsetenv("GRAMINE_VERSION")
+	}()
+	
 	config := DefaultConfig()
 	attestor, verifier := createTestAttestorVerifier(t)
 

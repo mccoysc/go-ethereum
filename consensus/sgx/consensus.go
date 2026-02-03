@@ -171,14 +171,14 @@ func NewFromParams(paramsConfig *params.SGXConfig, db ethdb.Database) *SGXEngine
 	// Priority: Contract Storage → Genesis Alloc Storage
 	log.Info("Step 5: Loading whitelist from security config contract...")
 	
-	// The securityAddr comes from manifest (already validated)
+	// The security config contract address comes from appConfig
 	// Now read whitelist from contract storage
 	// In genesis block, the storage is in alloc
 	// After genesis, the storage is in state database
 	
 	// For now, try environment variables as genesis alloc representation
 	// In production, this would read from actual contract storage
-	genesisWhitelist := loadWhitelistFromContractStorage(securityAddr)
+	genesisWhitelist := loadWhitelistFromContractStorage(appConfig.SecurityConfigContract)
 	
 	if len(genesisWhitelist.MREnclaves) > 0 || len(genesisWhitelist.MRSigners) > 0 {
 		log.Info("Loading whitelist from security config contract")
