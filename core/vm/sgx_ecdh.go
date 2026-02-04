@@ -46,7 +46,12 @@ func (c *SGXECDH) Run(input []byte) ([]byte, error) {
 // Input format: keyID (32 bytes) + peerPubKey (64 bytes) + optional kdfParams (variable)
 // Output format: newKeyID (32 bytes)
 func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 1. Parse input
+	// 1. Check if in read-only mode
+	if ctx.IsReadOnly {
+		return nil, errors.New("cannot perform ECDH in read-only mode")
+	}
+	
+	// 2. Parse input
 	if len(input) < 96 {
 		return nil, errors.New("invalid input: expected keyID (32 bytes) + peerPubKey (64 bytes)")
 	}
@@ -59,44 +64,23 @@ func (c *SGXECDH) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) 
 		kdfParams = input[96:]
 	}
 	
-	// 2. Check derivation permission
-	if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionDerive, ctx.Timestamp) {
-		// Check if caller has Admin permission
-		if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionAdmin, ctx.Timestamp) {
-			return nil, errors.New("permission denied: caller does not have Derive or Admin permission")
-		}
-	}
-	
-	// 3. Execute ECDH and get new key ID
-	newKeyID, err := ctx.KeyStore.ECDH(keyID, peerPubKey, kdfParams)
-	if err != nil {
-		return nil, err
-	}
-	
-	// 4. Record permission usage (increment counter)
-	_ = ctx.PermissionManager.UsePermission(keyID, ctx.Caller, PermissionDerive)
-	
-	// 5. Grant caller Admin permission on the new shared secret key
+	// 3. Get key metadata and check ownership
 	metadata, err := ctx.KeyStore.GetMetadata(keyID)
 	if err != nil {
 		return nil, err
 	}
 	
-	// Grant admin permission if caller is not already the owner
+	// SECURITY: Only owner can perform ECDH
 	if metadata.Owner != ctx.Caller {
-		adminPerm := Permission{
-			Grantee:   ctx.Caller,
-			Type:      PermissionAdmin,
-			ExpiresAt: 0,
-			MaxUses:   0,
-			UsedCount: 0,
-		}
-		
-		if err := ctx.PermissionManager.GrantPermission(newKeyID, adminPerm); err != nil {
-			return nil, fmt.Errorf("failed to grant admin permission: %w", err)
-		}
+		return nil, errors.New("permission denied: only key owner can perform ECDH")
 	}
 	
-	// 6. Return new key ID
+	// 4. Execute ECDH and get new key ID
+	newKeyID, err := ctx.KeyStore.ECDH(keyID, peerPubKey, kdfParams)
+	if err != nil {
+		return nil, err
+	}
+	
+	// 5. Return new key ID (caller is automatically the owner of derived key)
 	return newKeyID.Bytes(), nil
 }
