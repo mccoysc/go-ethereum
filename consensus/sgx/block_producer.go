@@ -47,13 +47,19 @@ func (bp *BlockProducer) Start(ctx context.Context) error {
 	bp.mu.Lock()
 	if bp.producing {
 		bp.mu.Unlock()
+		log.Info("BlockProducer: Already producing, skipping start")
 		return nil
 	}
 	bp.producing = true
 	bp.mu.Unlock()
 
-	log.Info("BlockProducer: Starting produceLoop goroutine")
-	go bp.produceLoop(ctx)
+	log.Info("BlockProducer: Starting produceLoop goroutine NOW")
+	go func() {
+		log.Info("BlockProducer: Goroutine started, calling produceLoop")
+		bp.produceLoop(ctx)
+		log.Info("BlockProducer: Goroutine ended, produceLoop returned")
+	}()
+	log.Info("BlockProducer: Start() returning, goroutine launched")
 	return nil
 }
 
