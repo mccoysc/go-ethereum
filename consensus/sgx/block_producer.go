@@ -96,9 +96,10 @@ func (bp *BlockProducer) tryProduceBlock() {
 	defer bp.mu.Unlock()
 
 	// Debug: log every 10 seconds to show loop is running
-	if time.Since(bp.lastBlockTime) > 10*time.Second && time.Since(bp.lastBlockTime).Milliseconds()%10000 < 200 {
-		log.Debug("BlockProducer: Loop running", 
-			"elapsed", time.Since(bp.lastBlockTime),
+	elapsed := time.Since(bp.lastBlockTime)
+	if int(elapsed.Seconds())%10 == 0 && elapsed.Milliseconds()%10000 < 200 {
+		log.Info("BlockProducer: tryProduceBlock heartbeat", 
+			"elapsed", elapsed,
 			"pendingTxs", bp.txPool.PendingCount())
 	}
 
