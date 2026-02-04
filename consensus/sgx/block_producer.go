@@ -52,6 +52,7 @@ func (bp *BlockProducer) Start(ctx context.Context) error {
 	bp.producing = true
 	bp.mu.Unlock()
 
+	log.Info("BlockProducer: Starting produceLoop goroutine")
 	go bp.produceLoop(ctx)
 	return nil
 }
@@ -71,14 +72,17 @@ func (bp *BlockProducer) Stop() {
 
 // produceLoop 区块生产循环
 func (bp *BlockProducer) produceLoop(ctx context.Context) {
+	log.Info("BlockProducer: produceLoop started")
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			log.Info("BlockProducer: produceLoop stopped (context done)")
 			return
 		case <-bp.stopCh:
+			log.Info("BlockProducer: produceLoop stopped (stopCh)")
 			return
 		case <-ticker.C:
 			bp.tryProduceBlock()
@@ -90,6 +94,13 @@ func (bp *BlockProducer) produceLoop(ctx context.Context) {
 func (bp *BlockProducer) tryProduceBlock() {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
+
+	// Debug: log every 10 seconds to show loop is running
+	if time.Since(bp.lastBlockTime) > 10*time.Second && time.Since(bp.lastBlockTime).Milliseconds()%10000 < 200 {
+		log.Debug("BlockProducer: Loop running", 
+			"elapsed", time.Since(bp.lastBlockTime),
+			"pendingTxs", bp.txPool.PendingCount())
+	}
 
 	// 从交易池获取待处理交易统计
 	pendingTxCount := 0
