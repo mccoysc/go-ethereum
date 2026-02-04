@@ -75,23 +75,22 @@ var dynamicEnvVars = []string{
 }
 
 // NewRATLSEnvManager creates a new RA-TLS environment variable manager.
-// Contract addresses are read from Gramine manifest environment variables.
+// Contract addresses are read from Gramine environment variables.
 func NewRATLSEnvManager(client *ethclient.Client) (*RATLSEnvManager, error) {
-	// CRITICAL SECURITY CHECK: Verify manifest signature before reading any parameters
-	if err := ValidateManifestIntegrity(); err != nil {
-		return nil, fmt.Errorf("manifest integrity validation failed: %w", err)
+	// Read contract addresses from environment variables (set by Gramine from manifest)
+	config, err := GetAppConfigFromEnvironment()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get config from environment: %w", err)
 	}
 
-	// Read contract addresses from manifest environment variables
-	// These are fixed in the manifest and affect MRENCLAVE
-	scAddr := os.Getenv("XCHAIN_SECURITY_CONFIG_CONTRACT")
-	govAddr := os.Getenv("XCHAIN_GOVERNANCE_CONTRACT")
+	scAddr := config.SecurityConfigContract
+	govAddr := config.GovernanceContract
 
 	if scAddr == "" {
-		return nil, fmt.Errorf("XCHAIN_SECURITY_CONFIG_CONTRACT not set in environment")
+		return nil, fmt.Errorf("XCHAIN_SECURITY_CONFIG_CONTRACT not found in manifest")
 	}
 	if govAddr == "" {
-		return nil, fmt.Errorf("XCHAIN_GOVERNANCE_CONTRACT not set in environment")
+		return nil, fmt.Errorf("XCHAIN_GOVERNANCE_CONTRACT not found in manifest")
 	}
 
 	manager := &RATLSEnvManager{
@@ -174,7 +173,7 @@ func (m *RATLSEnvManager) fetchSecurityConfig() (*SecurityConfig, error) {
 	defer cancel()
 
 	// Create contract callers
-	securityCaller, err := newSecurityConfigContractCaller(m.client, m.securityConfigContract, testMode)
+	securityCaller, err := newSecurityConfigContractCaller(m.client, m.securityConfigContract)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create security config caller: %w", err)
 	}

@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -89,34 +88,27 @@ const governanceContractABI = `[
 
 // securityConfigContractCaller handles calls to the SecurityConfigContract
 type securityConfigContractCaller struct {
-	client   *ethclient.Client
-	address  common.Address
-	abi      abi.ABI
-	testMode bool // If true, use mock data instead of actual calls
+	client  *ethclient.Client
+	address common.Address
+	abi     abi.ABI
 }
 
 // newSecurityConfigContractCaller creates a new contract caller
-func newSecurityConfigContractCaller(client *ethclient.Client, address common.Address, testMode bool) (*securityConfigContractCaller, error) {
+func newSecurityConfigContractCaller(client *ethclient.Client, address common.Address) (*securityConfigContractCaller, error) {
 	parsedABI, err := abi.JSON(strings.NewReader(securityConfigABI))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse contract ABI: %w", err)
 	}
 
 	return &securityConfigContractCaller{
-		client:   client,
-		address:  address,
-		abi:      parsedABI,
-		testMode: testMode,
+		client:  client,
+		address: address,
+		abi:     parsedABI,
 	}, nil
 }
 
 // getAllowedMREnclaves fetches the MRENCLAVE whitelist from the contract
 func (c *securityConfigContractCaller) getAllowedMREnclaves(ctx context.Context) ([]string, error) {
-	if c.testMode {
-		// Return mock data for testing
-		return []string{}, nil
-	}
-
 	// Pack the function call
 	data, err := c.abi.Pack("getAllowedMREnclaves")
 	if err != nil {
@@ -131,10 +123,6 @@ func (c *securityConfigContractCaller) getAllowedMREnclaves(ctx context.Context)
 
 	result, err := c.client.CallContract(ctx, msg, nil)
 	if err != nil {
-		if c.testMode {
-			// In test mode, ignore errors and return empty list
-			return []string{}, nil
-		}
 		return nil, fmt.Errorf("contract call failed: %w", err)
 	}
 
@@ -156,10 +144,6 @@ func (c *securityConfigContractCaller) getAllowedMREnclaves(ctx context.Context)
 
 // getAllowedMRSigners fetches the MRSIGNER whitelist from the contract
 func (c *securityConfigContractCaller) getAllowedMRSigners(ctx context.Context) ([]string, error) {
-	if c.testMode {
-		// Return mock data for testing
-		return []string{}, nil
-	}
 
 	data, err := c.abi.Pack("getAllowedMRSigners")
 	if err != nil {
@@ -173,9 +157,6 @@ func (c *securityConfigContractCaller) getAllowedMRSigners(ctx context.Context) 
 
 	result, err := c.client.CallContract(ctx, msg, nil)
 	if err != nil {
-		if c.testMode {
-			return []string{}, nil
-		}
 		return nil, fmt.Errorf("contract call failed: %w", err)
 	}
 
@@ -195,9 +176,6 @@ func (c *securityConfigContractCaller) getAllowedMRSigners(ctx context.Context) 
 
 // getISVProdID fetches the ISV Product ID from the contract
 func (c *securityConfigContractCaller) getISVProdID(ctx context.Context) (uint16, error) {
-	if c.testMode {
-		return 0, nil
-	}
 
 	data, err := c.abi.Pack("getISVProdID")
 	if err != nil {
@@ -211,9 +189,6 @@ func (c *securityConfigContractCaller) getISVProdID(ctx context.Context) (uint16
 
 	result, err := c.client.CallContract(ctx, msg, nil)
 	if err != nil {
-		if c.testMode {
-			return 0, nil
-		}
 		return 0, fmt.Errorf("contract call failed: %w", err)
 	}
 
@@ -228,9 +203,6 @@ func (c *securityConfigContractCaller) getISVProdID(ctx context.Context) (uint16
 
 // getISVSVN fetches the ISV Security Version Number from the contract
 func (c *securityConfigContractCaller) getISVSVN(ctx context.Context) (uint16, error) {
-	if c.testMode {
-		return 1, nil
-	}
 
 	data, err := c.abi.Pack("getISVSVN")
 	if err != nil {
@@ -244,9 +216,6 @@ func (c *securityConfigContractCaller) getISVSVN(ctx context.Context) (uint16, e
 
 	result, err := c.client.CallContract(ctx, msg, nil)
 	if err != nil {
-		if c.testMode {
-			return 1, nil
-		}
 		return 0, fmt.Errorf("contract call failed: %w", err)
 	}
 
@@ -261,9 +230,6 @@ func (c *securityConfigContractCaller) getISVSVN(ctx context.Context) (uint16, e
 
 // getCertValidityPeriod fetches the certificate validity period from the contract
 func (c *securityConfigContractCaller) getCertValidityPeriod(ctx context.Context) (string, string, error) {
-	if c.testMode {
-		return "0", fmt.Sprintf("%d", time.Now().Add(365*24*time.Hour).Unix()), nil
-	}
 
 	data, err := c.abi.Pack("getCertValidityPeriod")
 	if err != nil {
@@ -277,9 +243,6 @@ func (c *securityConfigContractCaller) getCertValidityPeriod(ctx context.Context
 
 	result, err := c.client.CallContract(ctx, msg, nil)
 	if err != nil {
-		if c.testMode {
-			return "0", fmt.Sprintf("%d", time.Now().Add(365*24*time.Hour).Unix()), nil
-		}
 		return "", "", fmt.Errorf("contract call failed: %w", err)
 	}
 
@@ -294,9 +257,6 @@ func (c *securityConfigContractCaller) getCertValidityPeriod(ctx context.Context
 
 // getAdmissionPolicy fetches the admission policy from the contract
 func (c *securityConfigContractCaller) getAdmissionPolicy(ctx context.Context) (bool, error) {
-	if c.testMode {
-		return false, nil
-	}
 
 	data, err := c.abi.Pack("getAdmissionPolicy")
 	if err != nil {
@@ -310,9 +270,6 @@ func (c *securityConfigContractCaller) getAdmissionPolicy(ctx context.Context) (
 
 	result, err := c.client.CallContract(ctx, msg, nil)
 	if err != nil {
-		if c.testMode {
-			return false, nil
-		}
 		return false, fmt.Errorf("contract call failed: %w", err)
 	}
 
@@ -350,9 +307,6 @@ func newGovernanceContractCaller(client *ethclient.Client, address common.Addres
 
 // getKeyMigrationThreshold fetches the key migration threshold from the contract
 func (c *governanceContractCaller) getKeyMigrationThreshold(ctx context.Context) (uint64, error) {
-	if c.testMode {
-		return 3, nil
-	}
 
 	data, err := c.abi.Pack("getKeyMigrationThreshold")
 	if err != nil {
@@ -366,9 +320,6 @@ func (c *governanceContractCaller) getKeyMigrationThreshold(ctx context.Context)
 
 	result, err := c.client.CallContract(ctx, msg, nil)
 	if err != nil {
-		if c.testMode {
-			return 3, nil
-		}
 		return 0, fmt.Errorf("contract call failed: %w", err)
 	}
 

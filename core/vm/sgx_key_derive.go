@@ -45,42 +45,35 @@ func (c *SGXKeyDerive) Run(input []byte) ([]byte, error) {
 // Input format: parentKeyID (32 bytes) + derivationPath (variable)
 // Output format: childKeyID (32 bytes)
 func (c *SGXKeyDerive) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 1. Parse input
+	// 1. Check if in read-only mode
+	if ctx.IsReadOnly {
+		return nil, errors.New("cannot derive key in read-only mode")
+	}
+	
+	// 2. Parse input
 	if len(input) < 32 {
 		return nil, errors.New("invalid input: missing parent key ID")
 	}
 	parentKeyID := common.BytesToHash(input[:32])
 	derivationPath := input[32:]
 	
-	// 2. Check derivation permission
-	if !ctx.PermissionManager.CheckPermission(parentKeyID, ctx.Caller, PermissionDerive, ctx.Timestamp) {
-		// Check if caller has Admin permission
-		if !ctx.PermissionManager.CheckPermission(parentKeyID, ctx.Caller, PermissionAdmin, ctx.Timestamp) {
-			return nil, errors.New("permission denied: caller does not have Derive or Admin permission")
-		}
+	// 3. Get key metadata and check ownership
+	metadata, err := ctx.KeyStore.GetMetadata(parentKeyID)
+	if err != nil {
+		return nil, err
 	}
 	
-	// 3. Derive child key
+	// SECURITY: Only owner can derive keys
+	if metadata.Owner != ctx.Caller {
+		return nil, errors.New("permission denied: only key owner can derive child keys")
+	}
+	
+	// 4. Derive child key
 	childKeyID, err := ctx.KeyStore.DeriveKey(parentKeyID, derivationPath)
 	if err != nil {
 		return nil, err
 	}
 	
-	// 4. Record permission usage (increment counter)
-	_ = ctx.PermissionManager.UsePermission(parentKeyID, ctx.Caller, PermissionDerive)
-	
-	// 5. Automatically grant Admin permission to the caller for the child key
-	err = ctx.PermissionManager.GrantPermission(childKeyID, Permission{
-		Grantee:   ctx.Caller,
-		Type:      PermissionAdmin,
-		ExpiresAt: 0,
-		MaxUses:   0,
-		UsedCount: 0,
-	})
-	if err != nil {
-		return nil, err
-	}
-	
-	// 6. Return child key ID
+	// 5. Return child key ID (caller is automatically the owner of derived key)
 	return childKeyID.Bytes(), nil
 }

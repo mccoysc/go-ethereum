@@ -47,42 +47,105 @@ func (c *SGXDecrypt) Run(input []byte) ([]byte, error) {
 }
 
 // RunWithContext executes the contract with SGX context
-// Input format: keyID (32 bytes) + ciphertext (variable: nonce + encrypted + tag)
-// Output format: plaintext (variable)
+// Input format: keyID (32 bytes) + ciphertext (variable: nonce + encrypted + tag) + recipientPubKey (optional 65 bytes for re-encryption)
+// Output format: if recipientPubKey provided, returns re-encrypted data; otherwise returns plaintext (only in non-readonly mode)
 func (c *SGXDecrypt) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 1. Parse input
+	// 1. Check if in read-only mode
+	if ctx.IsReadOnly {
+		return nil, errors.New("cannot decrypt in read-only mode: decryption requires state modification and re-encryption")
+	}
+	
+	// 2. Parse input
 	if len(input) < 32 {
 		return nil, errors.New("invalid input: missing key ID")
 	}
 	keyID := common.BytesToHash(input[:32])
-	ciphertext := input[32:]
+	remaining := input[32:]
 	
-	// 2. Check decryption permission
-	if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionDecrypt, ctx.Timestamp) {
-		// Check if caller has Admin permission
-		if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionAdmin, ctx.Timestamp) {
-			return nil, errors.New("permission denied: caller does not have Decrypt or Admin permission")
+	// Check if re-encryption public key is provided
+	var ciphertext []byte
+	var recipientPubKey []byte
+	var reencrypt bool
+	
+	// If input has extra 65 bytes at the end, it's the recipient's public key for re-encryption
+	if len(remaining) >= 65 {
+		// Try to extract recipient public key from the end
+		potentialPubKey := remaining[len(remaining)-65:]
+		// Simple check: uncompressed public key should start with 0x04
+		if potentialPubKey[0] == 0x04 {
+			recipientPubKey = potentialPubKey
+			ciphertext = remaining[:len(remaining)-65]
+			reencrypt = true
+		} else {
+			ciphertext = remaining
+			reencrypt = false
 		}
+	} else {
+		ciphertext = remaining
+		reencrypt = false
 	}
 	
-	// 3. Check key metadata (ensure it's an AES key)
+	// 3. Get key metadata and check ownership
 	metadata, err := ctx.KeyStore.GetMetadata(keyID)
 	if err != nil {
 		return nil, err
 	}
+	
+	// SECURITY: Only owner can decrypt
+	if metadata.Owner != ctx.Caller {
+		return nil, errors.New("permission denied: only key owner can decrypt")
+	}
+	
+	// 4. Check key metadata (ensure it's an AES key)
 	if metadata.KeyType != KeyTypeAES256 {
 		return nil, errors.New("key type must be AES256 for decryption")
 	}
 	
-	// 4. Execute decryption
+	// 5. Execute decryption
 	plaintext, err := ctx.KeyStore.Decrypt(keyID, ciphertext)
 	if err != nil {
 		return nil, err
 	}
 	
-	// 5. Record permission usage (increment counter)
-	_ = ctx.PermissionManager.UsePermission(keyID, ctx.Caller, PermissionDecrypt)
+	// 6. Re-encrypt for recipient if public key provided
+	if reencrypt {
+		// Create ephemeral ECDH key for re-encryption
+		ephemeralKeyID, err := ctx.KeyStore.CreateKey(ctx.Caller, KeyTypeECDSA)
+		if err != nil {
+			return nil, errors.New("failed to create ephemeral key for re-encryption")
+		}
+		
+		// Perform ECDH to derive shared secret
+		sharedKeyID, err := ctx.KeyStore.ECDH(ephemeralKeyID, recipientPubKey, nil)
+		if err != nil {
+			return nil, errors.New("failed to perform ECDH for re-encryption")
+		}
+		
+		// Re-encrypt plaintext with shared secret
+		reencrypted, err := ctx.KeyStore.Encrypt(sharedKeyID, plaintext)
+		if err != nil {
+			return nil, errors.New("failed to re-encrypt data")
+		}
+		
+		// Get ephemeral public key to return with encrypted data
+		ephemeralPubKey, err := ctx.KeyStore.GetPublicKey(ephemeralKeyID)
+		if err != nil {
+			return nil, errors.New("failed to get ephemeral public key")
+		}
+		
+		// Clean up ephemeral keys
+		_ = ctx.KeyStore.DeleteKey(ephemeralKeyID, ctx.Caller)
+		_ = ctx.KeyStore.DeleteKey(sharedKeyID, ctx.Caller)
+		
+		// Return: ephemeralPubKey + reencrypted data
+		result := make([]byte, len(ephemeralPubKey)+len(reencrypted))
+		copy(result, ephemeralPubKey)
+		copy(result[len(ephemeralPubKey):], reencrypted)
+		
+		return result, nil
+	}
 	
-	// 6. Return plaintext
+	// 7. If no re-encryption, return plaintext directly
+	// Note: This should only be used in trusted environments or with additional protection
 	return plaintext, nil
 }

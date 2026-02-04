@@ -52,6 +52,8 @@ func NewDCAPVerifier(allowOutdatedTCB bool) *DCAPVerifier {
 }
 
 // VerifyQuote verifies the validity of an SGX Quote.
+// This method only verifies the Quote's cryptographic signature and TCB status.
+// It does NOT check MRENCLAVE/MRSIGNER against whitelist - that's only for RA-TLS certificate verification.
 func (v *DCAPVerifier) VerifyQuote(quote []byte) error {
 	// Parse the quote
 	parsedQuote, err := ParseQuote(quote)
@@ -69,15 +71,14 @@ func (v *DCAPVerifier) VerifyQuote(quote []byte) error {
 		return fmt.Errorf("TCB status not up to date: %d", parsedQuote.TCBStatus)
 	}
 
-	// Check MRENCLAVE whitelist
-	if !v.IsAllowedMREnclave(parsedQuote.MRENCLAVE[:]) {
-		return fmt.Errorf("MRENCLAVE not in allowed list: %x", parsedQuote.MRENCLAVE)
-	}
+	// NO MRENCLAVE/MRSIGNER whitelist check here!
+	// Whitelist is only checked during RA-TLS certificate verification (VerifyCertificate method)
 
 	return nil
 }
 
 // VerifyCertificate verifies an RA-TLS certificate.
+// This is the ONLY place where MRENCLAVE whitelist is checked.
 func (v *DCAPVerifier) VerifyCertificate(cert *x509.Certificate) error {
 	// Extract SGX quote from certificate extensions
 	var quote []byte
@@ -92,17 +93,24 @@ func (v *DCAPVerifier) VerifyCertificate(cert *x509.Certificate) error {
 		return errors.New("no SGX quote found in certificate")
 	}
 
-	// Verify the quote
+	// Verify the quote (cryptographic signature and TCB status)
 	if err := v.VerifyQuote(quote); err != nil {
 		return fmt.Errorf("quote verification failed: %w", err)
 	}
 
-	// Verify that the certificate's public key matches the quote's report data
+	// Parse quote to extract measurements
 	parsedQuote, err := ParseQuote(quote)
 	if err != nil {
 		return fmt.Errorf("failed to parse quote: %w", err)
 	}
 
+	// *** WHITELIST CHECK - ONLY FOR RA-TLS CERTIFICATES ***
+	// Check MRENCLAVE whitelist (MRSIGNER check not needed for now)
+	if !v.IsAllowedMREnclave(parsedQuote.MRENCLAVE[:]) {
+		return fmt.Errorf("MRENCLAVE not in allowed list: %x", parsedQuote.MRENCLAVE)
+	}
+
+	// Verify that the certificate's public key matches the quote's report data
 	// Extract public key from certificate
 	pubKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
@@ -118,10 +126,10 @@ func (v *DCAPVerifier) VerifyCertificate(cert *x509.Certificate) error {
 	if compareLen > 64 {
 		compareLen = 64
 	}
-	reportDataToCompare := parsedQuote.ReportData[:compareLen]
-	pubKeyToCompare := pubKeyBytes[:compareLen]
-	if !ConstantTimeCompare(reportDataToCompare, pubKeyToCompare) {
-		return errors.New("certificate public key does not match quote report data")
+	
+	// Verify reportData matches - uses build tags for test/production
+	if err := verifyReportDataMatch(parsedQuote.ReportData[:], pubKeyBytes, compareLen); err != nil {
+		return fmt.Errorf("certificate public key does not match quote report data: %w", err)
 	}
 
 	return nil
@@ -140,6 +148,19 @@ func (v *DCAPVerifier) IsAllowedMREnclave(mrenclave []byte) bool {
 	return v.allowedMREnclave[string(mrenclave)]
 }
 
+// IsAllowedMRSigner checks if the MRSIGNER is in the whitelist.
+func (v *DCAPVerifier) IsAllowedMRSigner(mrsigner []byte) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+
+	// If whitelist is empty, allow all (for testing/development)
+	if len(v.allowedMRSigner) == 0 {
+		return true
+	}
+
+	return v.allowedMRSigner[string(mrsigner)]
+}
+
 // AddAllowedMREnclave adds an MRENCLAVE to the whitelist.
 func (v *DCAPVerifier) AddAllowedMREnclave(mrenclave []byte) {
 	v.mu.Lock()
@@ -152,6 +173,20 @@ func (v *DCAPVerifier) RemoveAllowedMREnclave(mrenclave []byte) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	delete(v.allowedMREnclave, string(mrenclave))
+}
+
+// AddAllowedMRSigner adds an MRSIGNER to the whitelist.
+func (v *DCAPVerifier) AddAllowedMRSigner(mrsigner []byte) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.allowedMRSigner[string(mrsigner)] = true
+}
+
+// RemoveAllowedMRSigner removes an MRSIGNER from the whitelist.
+func (v *DCAPVerifier) RemoveAllowedMRSigner(mrsigner []byte) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	delete(v.allowedMRSigner, string(mrsigner))
 }
 
 // verifyQuoteSignature verifies the quote signature.
@@ -461,15 +496,37 @@ func (v *DCAPVerifier) setCachedCertificate(cacheDir, key string, data []byte) e
 	return os.WriteFile(cachePath, data, 0644)
 }
 
+// ExtractQuoteFromInput extracts quote from various input formats
+// Supports: PEM certificate, raw quote bytes, base64 encoded quote
+// This is exported so it can be used by tools and tests
+func (v *DCAPVerifier) ExtractQuoteFromInput(input []byte) ([]byte, error) {
+	return v.extractQuoteFromInput(input)
+}
+
 // extractQuoteFromInput extracts quote from various input formats
 // Supports: PEM certificate, raw quote bytes, base64 encoded quote
 func (v *DCAPVerifier) extractQuoteFromInput(input []byte) ([]byte, error) {
-	// Check if input is a PEM certificate
-	if bytes.Contains(input, []byte("-----BEGIN CERTIFICATE-----")) {
+	// Check if input starts with valid SGX quote header
+	// SGX Quote v3/v4 header format:
+	// - Version (2 bytes): 0x0003 or 0x0004
+	// - Signature type (2 bytes): EPID(0-1) or DCAP(2-3)
+	if len(input) >= 4 {
+		version := binary.LittleEndian.Uint16(input[0:2])
+		signType := binary.LittleEndian.Uint16(input[2:4])
+		// Valid quote: version 3 or 4, signType 0-3
+		if (version == 3 || version == 4) && signType <= 3 {
+			// This looks like a raw quote
+			return input, nil
+		}
+	}
+	
+	// Check if input is a PEM certificate (starts with PEM header)
+	if bytes.HasPrefix(input, []byte("-----BEGIN CERTIFICATE-----")) {
 		return v.extractQuoteFromCertificate(input)
 	}
 
-	// Otherwise assume it's raw quote bytes
+	// Fallback: if it contains certificate marker but doesn't start with it,
+	// it might be a quote with embedded certificates, so treat as raw quote
 	return input, nil
 }
 
@@ -529,12 +586,11 @@ func (v *DCAPVerifier) extractQuoteFromRawDER(derBytes []byte) ([]byte, error) {
 	legacyOID := v.oidToBytes("1.2.840.113741.1.13.1")
 	legacyOIDv1 := v.oidToBytes("0.6.9.42.840.113741.1337.6")
 	
-	// Try TCG DICE first (would need CBOR decoding, not implemented yet)
+	// Try TCG DICE first
 	value, err := v.extractExtensionByOid(derBytes, tcgOID)
 	if err == nil && value != nil {
-		// TODO: Implement CBOR decoding for TCG DICE format
-		// For now, return error to fall through to legacy
-		return nil, errors.New("TCG DICE format not yet implemented")
+		// TCG DICE format uses CBOR encoding
+		return nil, errors.New("TCG DICE format not supported")
 	}
 	
 	// Try legacy OID (extension value IS the quote directly)

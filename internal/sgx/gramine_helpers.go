@@ -17,81 +17,21 @@
 package sgx
 
 import (
-	"crypto/sha256"
 	"fmt"
-	"os"
 )
 
-// readMREnclave reads the MRENCLAVE from Gramine's /dev/attestation interface.
-// This function is used by both native and fallback implementations.
-func readMREnclave() ([]byte, error) {
-	// Check if we're in mock mode
-	if os.Getenv("XCHAIN_SGX_MODE") == "mock" {
-		// Return a deterministic mock MRENCLAVE for testing
-		hash := sha256.Sum256([]byte("mock-mrenclave-for-testing"))
-		mrenclave := make([]byte, 32)
-		copy(mrenclave, hash[:])
-		return mrenclave, nil
-	}
-
-	// Try to read from /dev/attestation/my_target_info
-	targetInfo, err := os.ReadFile("/dev/attestation/my_target_info")
-	if err != nil {
-		// Not in SGX environment, return error
-		return nil, fmt.Errorf("failed to read /dev/attestation/my_target_info: %w", err)
-	}
-
-	if len(targetInfo) < 32 {
-		return nil, fmt.Errorf("target_info too short: got %d bytes, need at least 32", len(targetInfo))
-	}
-
-	// MRENCLAVE is the first 32 bytes of target_info
-	mrenclave := make([]byte, 32)
-	copy(mrenclave, targetInfo[:32])
-
-	return mrenclave, nil
-}
-
 // readMRSigner reads the MRSIGNER from Gramine's /dev/attestation interface.
-// This function is used by both native and fallback implementations.
 func readMRSigner() ([]byte, error) {
-	// Check if we're in mock mode
-	if os.Getenv("XCHAIN_SGX_MODE") == "mock" {
-		// Return a deterministic mock MRSIGNER for testing
-		hash := sha256.Sum256([]byte("mock-mrsigner-for-testing"))
-		mrsigner := make([]byte, 32)
-		copy(mrsigner, hash[:])
-		return mrsigner, nil
-	}
-
-	// In real SGX environment, MRSIGNER comes from the signing key
-	// It's not directly available from /dev/attestation
-	// For now, return an error indicating it needs to be extracted from Quote
-	return nil, fmt.Errorf("MRSIGNER not available - extract from Quote in real SGX")
+	// MRSIGNER is derived from the enclave signing key
+	// It is not directly available from /dev/attestation
+	// Extract from Quote after generation
+	return nil, fmt.Errorf("MRSIGNER not available - extract from Quote")
 }
 
-// generateQuoteViaGramine generates an SGX Quote using Gramine's /dev/attestation interface.
-// This function is used by both native and fallback implementations for Quote-only operations.
-func generateQuoteViaGramine(reportData []byte) ([]byte, error) {
-	if len(reportData) > 64 {
-		return nil, fmt.Errorf("reportData too long: max 64 bytes, got %d", len(reportData))
-	}
+// generateQuoteViaGramine is implemented in:
+// - gramine_helpers_production.go for production builds (default)
+// - gramine_helpers_testenv.go for test builds (-tags testenv)
 
-	// Pad report data to 64 bytes
-	paddedData := make([]byte, 64)
-	copy(paddedData, reportData)
-
-	// Write report data to /dev/attestation/user_report_data
-	err := os.WriteFile("/dev/attestation/user_report_data", paddedData, 0600)
-	if err != nil {
-		return nil, fmt.Errorf("failed to write user_report_data: %w", err)
-	}
-
-	// Read the generated quote from /dev/attestation/quote
-	quote, err := os.ReadFile("/dev/attestation/quote")
-	if err != nil {
-		return nil, fmt.Errorf("failed to read quote: %w", err)
-	}
-
-	return quote, nil
-}
+// readMREnclave is implemented in:
+// - gramine_helpers_production.go for production builds (default)
+// - gramine_helpers_testenv.go for test builds (-tags testenv)

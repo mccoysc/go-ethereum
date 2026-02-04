@@ -1,0 +1,34 @@
+# Gramine manifest for X Chain geth
+
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint = "/app/geth"
+loader.log_level = "{{ log_level }}"
+
+loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr{{ arch_libdir }}"
+loader.env.HOME = "/app"
+
+# X Chain configuration - embedded in MRENCLAVE
+loader.env.XCHAIN_GOVERNANCE_CONTRACT = "{{ governance_contract }}"
+loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "{{ security_config_contract }}"
+
+sgx.debug = {{ debug }}
+sgx.enclave_size = "2G"
+sgx.max_threads = 32
+sgx.remote_attestation = "{{ attestation_type }}"
+
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:/app/geth",
+  "file:{{ gramine.runtimedir() }}/",
+]
+
+sgx.allowed_files = [
+  "file:/tmp/",
+]
+
+fs.mounts = [
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  { path = "/app", uri = "file:/app" },
+  { path = "/tmp", uri = "file:/tmp" },
+  { type = "encrypted", path = "/data/encrypted", uri = "file:/data/encrypted", key_name = "{{ seal_key }}" },
+]

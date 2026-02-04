@@ -45,30 +45,40 @@ func (c *SGXSign) Run(input []byte) ([]byte, error) {
 // Input format: keyID (32 bytes) + hash (32 bytes)
 // Output format: signature (65 bytes for ECDSA, 64 bytes for Ed25519)
 func (c *SGXSign) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) {
-	// 1. Parse input
+	// 1. Check if in read-only mode
+	if ctx.IsReadOnly {
+		return nil, errors.New("cannot sign in read-only mode")
+	}
+	
+	// 2. Parse input
 	if len(input) < 64 {
 		return nil, errors.New("invalid input: expected keyID (32 bytes) + hash (32 bytes)")
 	}
 	keyID := common.BytesToHash(input[:32])
 	hash := input[32:64]
 	
-	// 2. Check signing permission
-	if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionSign, ctx.Timestamp) {
-		// Check if caller has Admin permission
-		if !ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionAdmin, ctx.Timestamp) {
-			return nil, errors.New("permission denied: caller does not have Sign or Admin permission")
-		}
+	// 3. Get key metadata and check ownership
+	metadata, err := ctx.KeyStore.GetMetadata(keyID)
+	if err != nil {
+		return nil, err
 	}
 	
-	// 3. Execute signing
+	// SECURITY: Only owner can sign
+	if metadata.Owner != ctx.Caller {
+		return nil, errors.New("permission denied: only key owner can sign")
+	}
+	
+	// 4. Check key type
+	if metadata.KeyType != KeyTypeECDSA && metadata.KeyType != KeyTypeEd25519 {
+		return nil, errors.New("key type must be ECDSA or Ed25519 for signing")
+	}
+	
+	// 5. Execute signing
 	signature, err := ctx.KeyStore.Sign(keyID, hash)
 	if err != nil {
 		return nil, err
 	}
 	
-	// 4. Record permission usage (increment counter)
-	_ = ctx.PermissionManager.UsePermission(keyID, ctx.Caller, PermissionSign)
-	
-	// 5. Return signature
+	// 6. Return signature
 	return signature, nil
 }

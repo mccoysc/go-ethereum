@@ -1,0 +1,61 @@
+# X Chain geth node Gramine manifest template
+# Compatible with Gramine v1.x
+
+# Loader configuration
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint = "/app/geth"
+
+loader.log_level = "{{ log_level }}"
+
+# Environment variables  
+loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr/lib:/usr/{{ arch_libdir }}"
+loader.env.HOME = "/app"
+loader.env.PATH = "/bin:/usr/bin"
+
+# X Chain configuration embedded in MRENCLAVE
+loader.env.XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
+loader.env.XCHAIN_SECRET_PATH = "/data/secrets"
+loader.env.XCHAIN_GOVERNANCE_CONTRACT = "{{ governance_contract }}"
+loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "{{ security_config_contract }}"
+
+# SGX configuration
+sgx.debug = {{ debug }}
+sgx.enclave_size = "2G"
+sgx.max_threads = 32
+sgx.isvprodid = 1
+sgx.isvsvn = 1
+sgx.remote_attestation = "{{ attestation_type }}"
+
+# Trusted files (any change triggers MRENCLAVE change)
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:/app/geth",
+  "file:{{ gramine.runtimedir() }}/",
+  "file:{{ arch_libdir }}/",
+  "file:/usr/{{ arch_libdir }}/",
+]
+
+# Allowed files (can be modified without MRENCLAVE change)
+sgx.allowed_files = [
+  "file:/tmp/",
+  "file:/app/logs/",
+  "file:/dev/attestation/",
+]
+
+# File system mounts
+fs.mounts = [
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
+  { path = "/usr/{{ arch_libdir }}", uri = "file:/usr/{{ arch_libdir }}" },
+  { path = "/app", uri = "file:/app" },
+  { path = "/tmp", uri = "file:/tmp" },
+  { path = "/dev", uri = "file:/dev" },
+  
+  # Encrypted storage using SGX sealing
+  { type = "encrypted", path = "/data/encrypted", uri = "file:/data/encrypted", key_name = "{{ seal_key }}" },
+  { type = "encrypted", path = "/data/secrets", uri = "file:/data/secrets", key_name = "{{ seal_key }}" },
+  { type = "encrypted", path = "/data/wallet", uri = "file:/data/wallet", key_name = "{{ seal_key }}" },
+  
+  # Logs directory
+  { path = "/app/logs", uri = "file:/app/logs" },
+]

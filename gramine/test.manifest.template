@@ -1,0 +1,24 @@
+# Gramine manifest for X Chain geth node
+
+libos.entrypoint = "/bin/sh"
+
+loader.log_level = "{{ log_level }}"
+
+loader.env.LD_LIBRARY_PATH = "/lib:/usr/lib"
+
+# X Chain configuration
+loader.env.XCHAIN_GOVERNANCE_CONTRACT = "{{ governance_contract }}"
+loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "{{ security_config_contract }}"
+
+sgx.debug = {{ debug }}
+sgx.enclave_size = "2G"
+sgx.max_threads = 32
+
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:{{ gramine.runtimedir() }}/",
+]
+
+fs.mounts = [
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+]

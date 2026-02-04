@@ -117,8 +117,14 @@ sgx_verify() {
     local from_address="$4"
     local rpc_port="${5:-8545}"
     
-    # Encode input: publicKey + messageHash + signature
-    local input_data="${public_key}${message_hash#0x}${signature#0x}"
+    # Remove 0x prefix from inputs
+    public_key="${public_key#0x}"
+    message_hash="${message_hash#0x}"
+    signature="${signature#0x}"
+    
+    # Encode input: messageHash (32 bytes) + signature (65 bytes) + publicKey (64 or 65 bytes)
+    # The contract will handle both 64-byte and 65-byte (with 0x04 prefix) public keys
+    local input_data="0x${message_hash}${signature}${public_key}"
     
     echo "Verifying signature..." >&2
     

@@ -25,16 +25,6 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-// InstanceID represents a unique hardware identifier for an SGX CPU.
-// This is extracted from the SGX Quote and is unique per physical SGX CPU.
-type InstanceID struct {
-	// CPUInstanceID is the unique identifier for the SGX CPU
-	CPUInstanceID []byte
-
-	// QuoteType indicates whether this is EPID or DCAP quote
-	QuoteType uint16
-}
-
 // ExtractInstanceID extracts the Instance ID (hardware unique identifier) from an SGX Quote.
 // The Instance ID is used to:
 // - Ensure each physical CPU can only register one validator node
