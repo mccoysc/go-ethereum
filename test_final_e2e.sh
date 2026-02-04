@@ -88,7 +88,8 @@ echo "Task 2: Crypto Precompiles"
 echo "========================================="
 
 # Test SGXRandom (0x8005)
-RANDOM_RESULT=$(test_rpc '{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x0000000000000000000000000000000000008005","data":"0x"},"latest"],"id":1}')
+# Input: 32 (length) encoded as uint256 = 0x0000000000000000000000000000000000000000000000000000000000000020
+RANDOM_RESULT=$(test_rpc '{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0x0000000000000000000000000000000000008005","data":"0x0000000000000000000000000000000000000000000000000000000000000020"},"latest"],"id":1}')
 if echo "$RANDOM_RESULT" | grep -q '"result":"0x'; then
   RANDOM_DATA=$(echo "$RANDOM_RESULT" | grep -o '"result":"[^"]*"' | cut -d'"' -f4)
   RANDOM_LEN=$((${#RANDOM_DATA} - 2))
