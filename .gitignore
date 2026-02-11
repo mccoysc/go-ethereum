@@ -72,3 +72,11 @@ test-data/
 MRENCLAVE.txt
 .dockerfile-build-temp
 /geth
+/geth-verify
+/geth-testenv
+*.test
+*.log
+/incentive.test
+/calculate-mrenclave
+coverage_*.out
+nohup.out
