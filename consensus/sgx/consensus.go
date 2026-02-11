@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -432,6 +433,11 @@ func (e *SGXEngine) Prepare(chain consensus.ChainHeaderReader, header *types.Hea
 	header.Time = uint64(time.Now().Unix())
 	if header.Time <= parent.Time {
 		header.Time = parent.Time + 1
+	}
+
+	// EIP-1559: Calculate base fee for the new block
+	if chain.Config().IsLondon(header.Number) {
+		header.BaseFee = eip1559.CalcBaseFee(chain.Config(), parent)
 	}
 
 	// SGX特有：预留Extra空间用于后续在Seal阶段填充

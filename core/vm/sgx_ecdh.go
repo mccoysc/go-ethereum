@@ -18,7 +18,6 @@ package vm
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/ethereum/go-ethereum/common"
 )
