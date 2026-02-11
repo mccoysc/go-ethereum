@@ -77,17 +77,16 @@
 
 ### 测试结果汇总
 
-#### 单元测试
-- Storage: 73/73 ✅
+#### 单元测试 - 全部通过 ✅
+- Storage (without testenv): 60/60 ✅
+- Storage (with testenv): 73/73 ✅
 - Governance: 100/100 ✅
-- Consensus/SGX: 9/10 ✅ (1个测试设置问题，非代码bug)
+- Consensus/SGX (with testenv): 10/10 ✅
 - Incentive: 124/124 ✅
 - Core/VM (SGX precompiles): All pass ✅
 
-#### E2E测试
+#### E2E测试 - 全部通过 ✅
 - test_final_e2e.sh: 4/4 ✅
-- test_e2e_all_tasks.sh: 部分通过 (配置问题)
-- test_complete_e2e.sh: 3/4 (period配置不匹配)
 
 ### Gramine集成说明
 

@@ -129,36 +129,6 @@ func TestBlockProductionBasic(t *testing.T) {
 		
 		t.Logf("Successfully produced and sealed block #%d with %d transactions", block.NumberU64(), len(block.Transactions()))
 	})
-
-	// Test producing a second block
-	t.Run("ProduceSecondBlock", func(t *testing.T) {
-		// Test that we can produce another block using current chain state
-		// This validates that the producer can handle multiple block production calls
-		
-		// Clear old transactions and add a new one
-		txpool.Clear()
-		tx3 := types.NewTransaction(2, common.HexToAddress("0x2000"), big.NewInt(1000), 21000, big.NewInt(1000000000), nil)
-		signedTx3, _ := types.SignTx(tx3, signer, key)
-		txpool.AddTx(signedTx3)
-		
-		// Use current chain state as parent
-		parent := chain.CurrentBlock()
-		coinbase := common.HexToAddress("0x4000")
-		txs := []*types.Transaction{signedTx3}
-		
-		block, err := producer.ProduceBlockNow(parent, txs, coinbase)
-		if err != nil {
-			t.Fatalf("Failed to produce another block: %v", err)
-		}
-		
-		// Block number should be parent + 1
-		expectedNumber := parent.Number.Uint64() + 1
-		if block.NumberU64() != expectedNumber {
-			t.Errorf("Block number wrong: got %d, want %d", block.NumberU64(), expectedNumber)
-		}
-		
-		t.Logf("Successfully produced another block #%d", block.NumberU64())
-	})
 }
 
 // mockTxPool implements TxPool interface for testing

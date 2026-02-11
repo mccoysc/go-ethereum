@@ -1,111 +1,111 @@
-INFO [02-11|23:23:31.999] Maximum peer count                       ETH=0 total=0
-INFO [02-11|23:23:32.000] Smartcard socket not found, disabling    err="stat /run/pcscd/pcscd.comm: no such file or directory"
-INFO [02-11|23:23:32.004] Set global gas cap                       cap=50,000,000
-WARN [02-11|23:23:32.004] Setting network ID with command-line flag id=1337
-INFO [02-11|23:23:32.004] Initializing the KZG library             backend=gokzg
-INFO [02-11|23:23:32.006] Allocated trie memory caches             clean=154.00MiB dirty=256.00MiB
-INFO [02-11|23:23:32.006] Using pebble as the backing database
-INFO [02-11|23:23:32.006] Allocated cache and file handles         database=/tmp/geth-test-final/geth/chaindata cache=512.00MiB handles=32768
-INFO [02-11|23:23:32.012] Opened ancient database                  database=/tmp/geth-test-final/geth/chaindata/ancient/chain readonly=false
-INFO [02-11|23:23:32.012] Opened Era store                         datadir=/tmp/geth-test-final/geth/chaindata/ancient/chain/era
-INFO [02-11|23:23:32.012] State scheme set to already existing     scheme=path
-INFO [02-11|23:23:32.013] "=== Initializing SGX Consensus Engine ==="
-INFO [02-11|23:23:32.013] SGX Configuration                        period=15 epoch=30000 governance=0x0000000000000000000000000000000000000000 security=0x0000000000000000000000000000000000000000 incentive=0x0000000000000000000000000000000000000000
-INFO [02-11|23:23:32.013] Loading Module 01: SGX Attestation
-INFO [02-11|23:23:32.013] Loading Module 02: SGX Consensus Engine
-INFO [02-11|23:23:32.013] Loading Module 03: Incentive Mechanism
-INFO [02-11|23:23:32.013] Loading Module 04: Precompiled Contracts (0x8000-0x8009)
-INFO [02-11|23:23:32.013] Loading Module 05: Governance System
-INFO [02-11|23:23:32.013] Loading Module 06: Encrypted Storage
-INFO [02-11|23:23:32.013] Loading Module 07: Gramine Integration
-INFO [02-11|23:23:32.013] "=== Initializing SGX Consensus Engine ==="
-INFO [02-11|23:23:32.013] Running in TEST MODE (non-Gramine)
-INFO [02-11|23:23:32.013] Step 1: Reading configuration from environment variables...
-INFO [02-11|23:23:32.013] Loaded config from test environment (SGX_TEST_MODE)
-INFO [02-11|23:23:32.013] "✓ Configuration loaded from environment" governance=0x1000000000000000000000000000000000000001 security=0x1000000000000000000000000000000000000002 nodeType=
-INFO [02-11|23:23:32.013] Contract addresses                       governance=0x1000000000000000000000000000000000000001 security=0x1000000000000000000000000000000000000002 incentive=0x0000000000000000000000000000000000000000
-INFO [02-11|23:23:32.013] SGX Configuration                        period=15 epoch=30000
-INFO [02-11|23:23:32.013] Step 3: Loading SGX modules...
-INFO [02-11|23:23:32.013] Loading Module 01: SGX Attestation
-INFO [02-11|23:23:32.013] Loading Module 02: SGX Consensus Engine
-INFO [02-11|23:23:32.013] Loading Module 03: Incentive Mechanism
-INFO [02-11|23:23:32.013] Loading Module 04: Precompiled Contracts (0x8000-0x8009)
-INFO [02-11|23:23:32.013] Loading Module 05: Governance System
-INFO [02-11|23:23:32.013] Loading Module 06: Encrypted Storage
-INFO [02-11|23:23:32.013] Loading Module 07: Gramine Integration
-INFO [02-11|23:23:32.013] Step 4: Initializing SGX attestation...
-INFO [02-11|23:23:32.041] MRSIGNER not available from attestation device, will extract from quote error="MRSIGNER not available - extract from Quote"
-INFO [02-11|23:23:32.041] Step 5: Loading whitelist from security config contract...
-INFO [02-11|23:23:32.041] Whitelist loading from genesis alloc storage contract=0x1000000000000000000000000000000000000002 note="Use governance contract to populate whitelist"
-WARN [02-11|23:23:32.041] Whitelist is empty in contract storage
-INFO [02-11|23:23:32.041] Use governance contract to add MRENCLAVE/MRSIGNER entries
-INFO [02-11|23:23:32.041] System will accept blocks after whitelist is populated via governance
-INFO [02-11|23:23:32.041] "=== SGX Consensus Engine Initialized ==="
-INFO [02-11|23:23:32.041] "Architecture: Manifest(contract addr) → Contract Storage(whitelist) → Governance(updates)"
-INFO [02-11|23:23:32.041] "=== SGX Consensus Engine Initialized ==="
-INFO [02-11|23:23:32.041] Initialising Ethereum protocol           network=1337 dbversion=<nil>
-INFO [02-11|23:23:32.041] Load database journal from disk
-INFO [02-11|23:23:32.041] Failed to load journal, discard it       err="journal not found"
-INFO [02-11|23:23:32.044] Opened ancient database                  database=/tmp/geth-test-final/geth/chaindata/ancient/state readonly=false
-INFO [02-11|23:23:32.044] Initialized path database                triecache=154.00MiB statecache=102.00MiB buffer=256.00MiB state-history="last 90000 blocks" journal-dir=/tmp/geth-test-final/geth/triedb
-INFO [02-11|23:23:32.044] 
-INFO [02-11|23:23:32.044] ---------------------------------------------------------------------------------------------------------------------------------------------------------
-INFO [02-11|23:23:32.044] Chain ID:  762385986 (unknown)
-INFO [02-11|23:23:32.044] Consensus: unknown
-INFO [02-11|23:23:32.044] 
-INFO [02-11|23:23:32.044] Pre-Merge hard forks (block based):
-INFO [02-11|23:23:32.044]  - Homestead:                   #0       
-INFO [02-11|23:23:32.044]  - Tangerine Whistle (EIP 150): #0       
-INFO [02-11|23:23:32.044]  - Spurious Dragon/1 (EIP 155): #0       
-INFO [02-11|23:23:32.044]  - Spurious Dragon/2 (EIP 158): #0       
-INFO [02-11|23:23:32.044]  - Byzantium:                   #0       
-INFO [02-11|23:23:32.044]  - Constantinople:              #0       
-INFO [02-11|23:23:32.044]  - Petersburg:                  #0       
-INFO [02-11|23:23:32.044]  - Istanbul:                    #0       
-INFO [02-11|23:23:32.044]  - Berlin:                      #0       
-INFO [02-11|23:23:32.044]  - London:                      #0       
-INFO [02-11|23:23:32.044] 
-INFO [02-11|23:23:32.044] Merge configured:
-INFO [02-11|23:23:32.044]  - Total terminal difficulty:  <nil>
-INFO [02-11|23:23:32.044] 
-INFO [02-11|23:23:32.044] Post-Merge hard forks (timestamp based):
-INFO [02-11|23:23:32.044] 
-INFO [02-11|23:23:32.044] All fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/
-INFO [02-11|23:23:32.044] 
-INFO [02-11|23:23:32.044] ---------------------------------------------------------------------------------------------------------------------------------------------------------
-INFO [02-11|23:23:32.044] 
-INFO [02-11|23:23:32.045] Loaded most recent local block           number=0 hash=ba0d34..327fb8 age=56y11mo5d
-INFO [02-11|23:23:32.045] Initialized transaction indexer          range="last 2350000 blocks"
-INFO [02-11|23:23:32.103] Enabled snap-sync                        head=0 hash=ba0d34..327fb8
-INFO [02-11|23:23:32.103] Gasprice oracle is ignoring threshold set threshold=2
-INFO [02-11|23:23:32.104] Registered sync override service
-WARN [02-11|23:23:32.104] Engine API started but chain not configured for merge yet
-INFO [02-11|23:23:32.104] Starting peer-to-peer node               instance=Geth/v1.17.0-unstable-4cf05344-20260204/linux-amd64/go1.24.12
-INFO [02-11|23:23:32.109] New local node record                    seq=1,770,852,212,108 id=2fe32377b720d8f1 ip=127.0.0.1 udp=0 tcp=30303
-INFO [02-11|23:23:32.109] IPC endpoint opened                      url=/tmp/geth-test-final/geth.ipc
-INFO [02-11|23:23:32.109] Started P2P networking                   self="enode://a24a3a6ffb7a354dd11567d4793e631202836a616d39b86f4ffeeef7d5e872b0bf047ae6dfe5fd48fc94a8bf485d4e7849234c7243e91a3dc4dd361862a7069b@127.0.0.1:30303?discport=0"
-INFO [02-11|23:23:32.109] Generated JWT secret                     path=/tmp/geth-test-final/geth/jwtsecret
-INFO [02-11|23:23:32.109] HTTP server started                      endpoint=127.0.0.1:8545 auth=false prefix= cors= vhosts=localhost
-INFO [02-11|23:23:32.110] WebSocket enabled                        url=ws://127.0.0.1:8551
-INFO [02-11|23:23:32.110] HTTP server started                      endpoint=127.0.0.1:8551 auth=true  prefix= cors=localhost vhosts=localhost
-INFO [02-11|23:23:32.110] SGX engine detected, initializing block producer
-INFO [02-11|23:23:32.110] BlockProducer: Starting produceLoop goroutine NOW
-INFO [02-11|23:23:32.110] BlockProducer: Start() returning, goroutine launched
-INFO [02-11|23:23:32.110] SGX block producer started successfully
-INFO [02-11|23:23:32.110] BlockProducer: Goroutine started, calling produceLoop
-INFO [02-11|23:23:32.110] BlockProducer: produceLoop started
-INFO [02-11|23:23:32.110] Started log indexer
-INFO [02-11|23:23:32.210] BlockProducer: tryProduceBlock heartbeat elapsed=100.309346ms pendingTxs=0
-INFO [02-11|23:23:42.111] BlockProducer: tryProduceBlock heartbeat elapsed=10.000975565s pendingTxs=0
-INFO [02-11|23:23:42.210] BlockProducer: tryProduceBlock heartbeat elapsed=10.10016691s  pendingTxs=0
-INFO [02-11|23:23:52.111] BlockProducer: tryProduceBlock heartbeat elapsed=20.000838272s pendingTxs=0
-INFO [02-11|23:23:52.210] BlockProducer: tryProduceBlock heartbeat elapsed=20.10018954s  pendingTxs=0
-INFO [02-11|23:23:54.009] Got interrupt, shutting down...
-INFO [02-11|23:23:54.009] HTTP server stopped                      endpoint=127.0.0.1:8545
-INFO [02-11|23:23:54.009] HTTP server stopped                      endpoint=127.0.0.1:8551
-INFO [02-11|23:23:54.009] IPC endpoint closed                      url=/tmp/geth-test-final/geth.ipc
-INFO [02-11|23:23:54.010] Ethereum protocol stopped
-INFO [02-11|23:23:54.010] Transaction pool stopped
-INFO [02-11|23:23:54.010] Persisting dirty state                   root=d5f378..2afefe layers=0
-INFO [02-11|23:23:54.013] Persisted dirty state to file            path=/tmp/geth-test-final/geth/triedb/merkle.journal size=74.00B elapsed=2.786ms
-INFO [02-11|23:23:54.014] Blockchain stopped
+INFO [02-11|23:38:20.534] Maximum peer count                       ETH=0 total=0
+INFO [02-11|23:38:20.536] Smartcard socket not found, disabling    err="stat /run/pcscd/pcscd.comm: no such file or directory"
+INFO [02-11|23:38:20.539] Set global gas cap                       cap=50,000,000
+WARN [02-11|23:38:20.539] Setting network ID with command-line flag id=1337
+INFO [02-11|23:38:20.539] Initializing the KZG library             backend=gokzg
+INFO [02-11|23:38:20.542] Allocated trie memory caches             clean=154.00MiB dirty=256.00MiB
+INFO [02-11|23:38:20.542] Using pebble as the backing database
+INFO [02-11|23:38:20.542] Allocated cache and file handles         database=/tmp/geth-test-final/geth/chaindata cache=512.00MiB handles=32768
+INFO [02-11|23:38:20.547] Opened ancient database                  database=/tmp/geth-test-final/geth/chaindata/ancient/chain readonly=false
+INFO [02-11|23:38:20.547] Opened Era store                         datadir=/tmp/geth-test-final/geth/chaindata/ancient/chain/era
+INFO [02-11|23:38:20.547] State scheme set to already existing     scheme=path
+INFO [02-11|23:38:20.548] "=== Initializing SGX Consensus Engine ==="
+INFO [02-11|23:38:20.548] SGX Configuration                        period=15 epoch=30000 governance=0x0000000000000000000000000000000000000000 security=0x0000000000000000000000000000000000000000 incentive=0x0000000000000000000000000000000000000000
+INFO [02-11|23:38:20.548] Loading Module 01: SGX Attestation
+INFO [02-11|23:38:20.548] Loading Module 02: SGX Consensus Engine
+INFO [02-11|23:38:20.548] Loading Module 03: Incentive Mechanism
+INFO [02-11|23:38:20.548] Loading Module 04: Precompiled Contracts (0x8000-0x8009)
+INFO [02-11|23:38:20.548] Loading Module 05: Governance System
+INFO [02-11|23:38:20.548] Loading Module 06: Encrypted Storage
+INFO [02-11|23:38:20.548] Loading Module 07: Gramine Integration
+INFO [02-11|23:38:20.548] "=== Initializing SGX Consensus Engine ==="
+INFO [02-11|23:38:20.548] Running in TEST MODE (non-Gramine)
+INFO [02-11|23:38:20.548] Step 1: Reading configuration from environment variables...
+INFO [02-11|23:38:20.548] Loaded config from test environment (SGX_TEST_MODE)
+INFO [02-11|23:38:20.548] "✓ Configuration loaded from environment" governance=0x1000000000000000000000000000000000000001 security=0x1000000000000000000000000000000000000002 nodeType=
+INFO [02-11|23:38:20.548] Contract addresses                       governance=0x1000000000000000000000000000000000000001 security=0x1000000000000000000000000000000000000002 incentive=0x0000000000000000000000000000000000000000
+INFO [02-11|23:38:20.548] SGX Configuration                        period=15 epoch=30000
+INFO [02-11|23:38:20.548] Step 3: Loading SGX modules...
+INFO [02-11|23:38:20.548] Loading Module 01: SGX Attestation
+INFO [02-11|23:38:20.548] Loading Module 02: SGX Consensus Engine
+INFO [02-11|23:38:20.548] Loading Module 03: Incentive Mechanism
+INFO [02-11|23:38:20.548] Loading Module 04: Precompiled Contracts (0x8000-0x8009)
+INFO [02-11|23:38:20.548] Loading Module 05: Governance System
+INFO [02-11|23:38:20.548] Loading Module 06: Encrypted Storage
+INFO [02-11|23:38:20.548] Loading Module 07: Gramine Integration
+INFO [02-11|23:38:20.548] Step 4: Initializing SGX attestation...
+INFO [02-11|23:38:20.553] MRSIGNER not available from attestation device, will extract from quote error="MRSIGNER not available - extract from Quote"
+INFO [02-11|23:38:20.553] Step 5: Loading whitelist from security config contract...
+INFO [02-11|23:38:20.553] Whitelist loading from genesis alloc storage contract=0x1000000000000000000000000000000000000002 note="Use governance contract to populate whitelist"
+WARN [02-11|23:38:20.553] Whitelist is empty in contract storage
+INFO [02-11|23:38:20.553] Use governance contract to add MRENCLAVE/MRSIGNER entries
+INFO [02-11|23:38:20.553] System will accept blocks after whitelist is populated via governance
+INFO [02-11|23:38:20.553] "=== SGX Consensus Engine Initialized ==="
+INFO [02-11|23:38:20.553] "Architecture: Manifest(contract addr) → Contract Storage(whitelist) → Governance(updates)"
+INFO [02-11|23:38:20.553] "=== SGX Consensus Engine Initialized ==="
+INFO [02-11|23:38:20.553] Initialising Ethereum protocol           network=1337 dbversion=<nil>
+INFO [02-11|23:38:20.553] Load database journal from disk
+INFO [02-11|23:38:20.553] Failed to load journal, discard it       err="journal not found"
+INFO [02-11|23:38:20.555] Opened ancient database                  database=/tmp/geth-test-final/geth/chaindata/ancient/state readonly=false
+INFO [02-11|23:38:20.555] Initialized path database                triecache=154.00MiB statecache=102.00MiB buffer=256.00MiB state-history="last 90000 blocks" journal-dir=/tmp/geth-test-final/geth/triedb
+INFO [02-11|23:38:20.555] 
+INFO [02-11|23:38:20.555] ---------------------------------------------------------------------------------------------------------------------------------------------------------
+INFO [02-11|23:38:20.555] Chain ID:  762385986 (unknown)
+INFO [02-11|23:38:20.555] Consensus: unknown
+INFO [02-11|23:38:20.555] 
+INFO [02-11|23:38:20.555] Pre-Merge hard forks (block based):
+INFO [02-11|23:38:20.555]  - Homestead:                   #0       
+INFO [02-11|23:38:20.555]  - Tangerine Whistle (EIP 150): #0       
+INFO [02-11|23:38:20.555]  - Spurious Dragon/1 (EIP 155): #0       
+INFO [02-11|23:38:20.555]  - Spurious Dragon/2 (EIP 158): #0       
+INFO [02-11|23:38:20.555]  - Byzantium:                   #0       
+INFO [02-11|23:38:20.555]  - Constantinople:              #0       
+INFO [02-11|23:38:20.555]  - Petersburg:                  #0       
+INFO [02-11|23:38:20.555]  - Istanbul:                    #0       
+INFO [02-11|23:38:20.555]  - Berlin:                      #0       
+INFO [02-11|23:38:20.555]  - London:                      #0       
+INFO [02-11|23:38:20.555] 
+INFO [02-11|23:38:20.555] Merge configured:
+INFO [02-11|23:38:20.555]  - Total terminal difficulty:  <nil>
+INFO [02-11|23:38:20.555] 
+INFO [02-11|23:38:20.555] Post-Merge hard forks (timestamp based):
+INFO [02-11|23:38:20.555] 
+INFO [02-11|23:38:20.555] All fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/
+INFO [02-11|23:38:20.555] 
+INFO [02-11|23:38:20.555] ---------------------------------------------------------------------------------------------------------------------------------------------------------
+INFO [02-11|23:38:20.555] 
+INFO [02-11|23:38:20.555] Loaded most recent local block           number=0 hash=ba0d34..327fb8 age=56y11mo5d
+INFO [02-11|23:38:20.555] Initialized transaction indexer          range="last 2350000 blocks"
+INFO [02-11|23:38:20.639] Enabled snap-sync                        head=0 hash=ba0d34..327fb8
+INFO [02-11|23:38:20.640] Gasprice oracle is ignoring threshold set threshold=2
+INFO [02-11|23:38:20.640] Registered sync override service
+WARN [02-11|23:38:20.641] Engine API started but chain not configured for merge yet
+INFO [02-11|23:38:20.641] Starting peer-to-peer node               instance=Geth/v1.17.0-unstable-4cf05344-20260204/linux-amd64/go1.24.12
+INFO [02-11|23:38:20.646] IPC endpoint opened                      url=/tmp/geth-test-final/geth.ipc
+INFO [02-11|23:38:20.646] Generated JWT secret                     path=/tmp/geth-test-final/geth/jwtsecret
+INFO [02-11|23:38:20.646] New local node record                    seq=1,770,853,100,645 id=4f0e7a23e14a0ce5 ip=127.0.0.1 udp=0 tcp=30303
+INFO [02-11|23:38:20.646] Started P2P networking                   self="enode://018d5e9282d2bf93bc4bcfe7c02944f888a8cb871bd0a10cbf8714c2044849f09ab749915723636092b5a629d13c55be843cad6734543a4b0b7870b9ef72f268@127.0.0.1:30303?discport=0"
+INFO [02-11|23:38:20.646] HTTP server started                      endpoint=127.0.0.1:8545 auth=false prefix= cors= vhosts=localhost
+INFO [02-11|23:38:20.646] WebSocket enabled                        url=ws://127.0.0.1:8551
+INFO [02-11|23:38:20.646] HTTP server started                      endpoint=127.0.0.1:8551 auth=true  prefix= cors=localhost vhosts=localhost
+INFO [02-11|23:38:20.647] SGX engine detected, initializing block producer
+INFO [02-11|23:38:20.647] BlockProducer: Starting produceLoop goroutine NOW
+INFO [02-11|23:38:20.647] BlockProducer: Start() returning, goroutine launched
+INFO [02-11|23:38:20.647] SGX block producer started successfully
+INFO [02-11|23:38:20.647] Started log indexer
+INFO [02-11|23:38:20.647] BlockProducer: Goroutine started, calling produceLoop
+INFO [02-11|23:38:20.647] BlockProducer: produceLoop started
+INFO [02-11|23:38:20.747] BlockProducer: tryProduceBlock heartbeat elapsed=100.416597ms pendingTxs=0
+INFO [02-11|23:38:30.647] BlockProducer: tryProduceBlock heartbeat elapsed=10.000649149s pendingTxs=0
+INFO [02-11|23:38:30.747] BlockProducer: tryProduceBlock heartbeat elapsed=10.100951331s pendingTxs=0
+INFO [02-11|23:38:40.647] BlockProducer: tryProduceBlock heartbeat elapsed=20.000501055s pendingTxs=0
+INFO [02-11|23:38:40.748] BlockProducer: tryProduceBlock heartbeat elapsed=20.100965369s pendingTxs=0
+INFO [02-11|23:38:42.546] Got interrupt, shutting down...
+INFO [02-11|23:38:42.546] HTTP server stopped                      endpoint=127.0.0.1:8545
+INFO [02-11|23:38:42.546] HTTP server stopped                      endpoint=127.0.0.1:8551
+INFO [02-11|23:38:42.546] IPC endpoint closed                      url=/tmp/geth-test-final/geth.ipc
+INFO [02-11|23:38:42.546] Ethereum protocol stopped
+INFO [02-11|23:38:42.546] Transaction pool stopped
+INFO [02-11|23:38:42.546] Persisting dirty state                   root=d5f378..2afefe layers=0
+INFO [02-11|23:38:42.550] Persisted dirty state to file            path=/tmp/geth-test-final/geth/triedb/merkle.journal size=74.00B elapsed=3.223ms
+INFO [02-11|23:38:42.553] Blockchain stopped
