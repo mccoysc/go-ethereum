@@ -496,6 +496,25 @@ func (ks *EncryptedKeyStore) DeleteKey(keyID common.Hash, caller common.Address)
 	return nil
 }
 
+// TransferOwnership transfers ownership of a key to a new owner
+func (ks *EncryptedKeyStore) TransferOwnership(keyID common.Hash, newOwner common.Address) error {
+	// Load current metadata
+	metadata, err := ks.GetMetadata(keyID)
+	if err != nil {
+		return fmt.Errorf("failed to load metadata: %w", err)
+	}
+	
+	// Update owner
+	metadata.Owner = newOwner
+	
+	// Save updated metadata
+	if err := ks.saveMetadata(metadata); err != nil {
+		return fmt.Errorf("failed to save updated metadata: %w", err)
+	}
+	
+	return nil
+}
+
 // savePrivateKey 保存私钥到加密分区
 func (ks *EncryptedKeyStore) savePrivateKey(keyID common.Hash, privKey interface{}) error {
 	var data []byte

@@ -57,15 +57,19 @@ func (c *SGXSign) RunWithContext(ctx *SGXContext, input []byte) ([]byte, error) 
 	keyID := common.BytesToHash(input[:32])
 	hash := input[32:64]
 	
-	// 3. Get key metadata and check ownership
+	// 3. Get key metadata and check ownership/permission
 	metadata, err := ctx.KeyStore.GetMetadata(keyID)
 	if err != nil {
 		return nil, err
 	}
 	
-	// SECURITY: Only owner can sign
+	// SECURITY: Check if caller is owner or has sign permission
 	if metadata.Owner != ctx.Caller {
-		return nil, errors.New("permission denied: only key owner can sign")
+		// Check if caller has sign permission
+		hasPermission := ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionSign, ctx.Timestamp)
+		if !hasPermission {
+			return nil, errors.New("permission denied: only key owner can sign")
+		}
 	}
 	
 	// 4. Check key type

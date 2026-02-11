@@ -57,15 +57,19 @@ func (c *SGXKeyDerive) RunWithContext(ctx *SGXContext, input []byte) ([]byte, er
 	parentKeyID := common.BytesToHash(input[:32])
 	derivationPath := input[32:]
 	
-	// 3. Get key metadata and check ownership
+	// 3. Get key metadata and check ownership/permission
 	metadata, err := ctx.KeyStore.GetMetadata(parentKeyID)
 	if err != nil {
 		return nil, err
 	}
 	
-	// SECURITY: Only owner can derive keys
+	// SECURITY: Check if caller is owner or has derive permission
 	if metadata.Owner != ctx.Caller {
-		return nil, errors.New("permission denied: only key owner can derive child keys")
+		// Check if caller has derive permission
+		hasPermission := ctx.PermissionManager.CheckPermission(parentKeyID, ctx.Caller, PermissionDerive, ctx.Timestamp)
+		if !hasPermission {
+			return nil, errors.New("permission denied: only key owner can derive child keys")
+		}
 	}
 	
 	// 4. Derive child key
