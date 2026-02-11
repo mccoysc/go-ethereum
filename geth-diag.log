@@ -1,0 +1,145 @@
+INFO [02-04|08:11:40.664] Starting Geth on Ethereum mainnet...
+INFO [02-04|08:11:40.665] Bumping default cache on mainnet         provided=1024 updated=4096
+INFO [02-04|08:11:40.666] Maximum peer count                       ETH=0 total=0
+INFO [02-04|08:11:40.668] Smartcard socket not found, disabling    err="stat /run/pcscd/pcscd.comm: no such file or directory"
+DEBUG[02-04|08:11:40.669] FS scan times                            list="29.596µs" set=591ns diff=761ns
+TRACE[02-04|08:11:40.669] Started watching keystore folder         path=/tmp/sgx-diag-test/keystore folder=/tmp/sgx-diag-test/keystore
+DEBUG[02-04|08:11:40.670] Sanitizing Go's GC trigger               percent=25
+INFO [02-04|08:11:40.672] Set global gas cap                       cap=50,000,000
+INFO [02-04|08:11:40.672] Initializing the KZG library             backend=gokzg
+INFO [02-04|08:11:40.674] Allocated trie memory caches             clean=614.00MiB dirty=1.00GiB
+INFO [02-04|08:11:40.674] Using pebble as the backing database
+INFO [02-04|08:11:40.674] Allocated cache and file handles         database=/tmp/sgx-diag-test/geth/chaindata cache=2.00GiB handles=32768
+DEBUG[02-04|08:11:40.679] Verified index file                      items=1 elapsed="5.72µs"
+DEBUG[02-04|08:11:40.679] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/chain table=headers items=0 size=0.00B
+DEBUG[02-04|08:11:40.679] Verified index file                      items=1 elapsed="3.496µs"
+DEBUG[02-04|08:11:40.686] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/chain table=hashes items=0 size=0.00B
+DEBUG[02-04|08:11:40.686] Verified index file                      items=1 elapsed="4.658µs"
+DEBUG[02-04|08:11:40.687] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/chain table=bodies items=0 size=0.00B
+DEBUG[02-04|08:11:40.687] Verified index file                      items=1 elapsed="4.929µs"
+DEBUG[02-04|08:11:40.687] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/chain table=receipts items=0 size=0.00B
+INFO [02-04|08:11:40.687] Opened ancient database                  database=/tmp/sgx-diag-test/geth/chaindata/ancient/chain readonly=false
+INFO [02-04|08:11:40.687] Opened Era store                         datadir=/tmp/sgx-diag-test/geth/chaindata/ancient/chain/era
+INFO [02-04|08:11:40.706] State schema set to default              scheme=path
+INFO [02-04|08:11:40.707] "=== Initializing SGX Consensus Engine ==="
+INFO [02-04|08:11:40.707] SGX Configuration                        period=1 epoch=30000 governance=0x1234567890123456789012345678901234567890 security=0x2345678901234567890123456789012345678901 incentive=0x0000000000000000000000000000000000000000
+INFO [02-04|08:11:40.707] Loading Module 01: SGX Attestation
+INFO [02-04|08:11:40.707] Loading Module 02: SGX Consensus Engine
+INFO [02-04|08:11:40.707] Loading Module 03: Incentive Mechanism
+INFO [02-04|08:11:40.707] Loading Module 04: Precompiled Contracts (0x8000-0x8009)
+INFO [02-04|08:11:40.707] Loading Module 05: Governance System
+INFO [02-04|08:11:40.707] Loading Module 06: Encrypted Storage
+INFO [02-04|08:11:40.707] Loading Module 07: Gramine Integration
+INFO [02-04|08:11:40.707] "=== Initializing SGX Consensus Engine ==="
+INFO [02-04|08:11:40.707] Running in TEST MODE (non-Gramine)
+INFO [02-04|08:11:40.707] Step 1: Reading configuration from environment variables...
+INFO [02-04|08:11:40.707] Loaded config from test environment (SGX_TEST_MODE)
+INFO [02-04|08:11:40.707] "✓ Configuration loaded from environment" governance=0x1234567890123456789012345678901234567890 security=0x2345678901234567890123456789012345678901 nodeType=
+INFO [02-04|08:11:40.707] Contract addresses                       governance=0x1234567890123456789012345678901234567890 security=0x2345678901234567890123456789012345678901 incentive=0x0000000000000000000000000000000000000000
+INFO [02-04|08:11:40.707] SGX Configuration                        period=1 epoch=30000
+INFO [02-04|08:11:40.707] Step 3: Loading SGX modules...
+INFO [02-04|08:11:40.707] Loading Module 01: SGX Attestation
+INFO [02-04|08:11:40.707] Loading Module 02: SGX Consensus Engine
+INFO [02-04|08:11:40.707] Loading Module 03: Incentive Mechanism
+INFO [02-04|08:11:40.707] Loading Module 04: Precompiled Contracts (0x8000-0x8009)
+INFO [02-04|08:11:40.707] Loading Module 05: Governance System
+INFO [02-04|08:11:40.707] Loading Module 06: Encrypted Storage
+INFO [02-04|08:11:40.707] Loading Module 07: Gramine Integration
+INFO [02-04|08:11:40.707] Step 4: Initializing SGX attestation...
+INFO [02-04|08:11:40.711] MRSIGNER not available from attestation device, will extract from quote error="MRSIGNER not available - extract from Quote"
+INFO [02-04|08:11:40.711] Step 5: Loading whitelist from security config contract...
+INFO [02-04|08:11:40.711] Whitelist loading from genesis alloc storage contract=0x2345678901234567890123456789012345678901 note="Use governance contract to populate whitelist"
+WARN [02-04|08:11:40.711] Whitelist is empty in contract storage
+INFO [02-04|08:11:40.711] Use governance contract to add MRENCLAVE/MRSIGNER entries
+INFO [02-04|08:11:40.711] System will accept blocks after whitelist is populated via governance
+INFO [02-04|08:11:40.711] "=== SGX Consensus Engine Initialized ==="
+INFO [02-04|08:11:40.711] "Architecture: Manifest(contract addr) → Contract Storage(whitelist) → Governance(updates)"
+INFO [02-04|08:11:40.711] "=== SGX Consensus Engine Initialized ==="
+INFO [02-04|08:11:40.711] Initialising Ethereum protocol           network=1337 dbversion=<nil>
+WARN [02-04|08:11:40.711] Sanitizing invalid node buffer size      provided=1.00GiB updated=256.00MiB
+INFO [02-04|08:11:40.711] Load database journal from disk
+DEBUG[02-04|08:11:40.718] Current full block not old enough to freeze err="freezing threshold is not available"
+DEBUG[02-04|08:11:40.724] Verified index file                      items=1 elapsed="5.1µs"
+DEBUG[02-04|08:11:40.724] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/state table=storage.index items=0 size=0.00B
+DEBUG[02-04|08:11:40.725] Verified index file                      items=1 elapsed="130.845µs"
+DEBUG[02-04|08:11:40.725] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/state table=account.data items=0 size=0.00B
+DEBUG[02-04|08:11:40.725] Verified index file                      items=1 elapsed="2.856µs"
+DEBUG[02-04|08:11:40.725] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/state table=storage.data items=0 size=0.00B
+DEBUG[02-04|08:11:40.726] Verified index file                      items=1 elapsed="4.498µs"
+DEBUG[02-04|08:11:40.726] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/state table=history.meta items=0 size=0.00B
+DEBUG[02-04|08:11:40.726] Verified index file                      items=1 elapsed="2.705µs"
+DEBUG[02-04|08:11:40.726] Chain freezer table opened               database=/tmp/sgx-diag-test/geth/chaindata/ancient/state table=account.index items=0 size=0.00B
+INFO [02-04|08:11:40.726] Opened ancient database                  database=/tmp/sgx-diag-test/geth/chaindata/ancient/state readonly=false
+INFO [02-04|08:11:40.727] Initialized path database                triecache=614.00MiB statecache=409.00MiB buffer=256.00MiB state-history="last 90000 blocks" journal-dir=/tmp/sgx-diag-test/geth/triedb
+INFO [02-04|08:11:40.727] 
+INFO [02-04|08:11:40.727] ---------------------------------------------------------------------------------------------------------------------------------------------------------
+INFO [02-04|08:11:40.727] Chain ID:  1337 (unknown)
+INFO [02-04|08:11:40.727] Consensus: unknown
+INFO [02-04|08:11:40.727] 
+INFO [02-04|08:11:40.727] Pre-Merge hard forks (block based):
+INFO [02-04|08:11:40.727]  - Homestead:                   #0       
+INFO [02-04|08:11:40.727]  - Tangerine Whistle (EIP 150): #<nil>
+INFO [02-04|08:11:40.727]  - Spurious Dragon/1 (EIP 155): #<nil>
+INFO [02-04|08:11:40.727]  - Spurious Dragon/2 (EIP 158): #<nil>
+INFO [02-04|08:11:40.727]  - Byzantium:                   #<nil>
+INFO [02-04|08:11:40.727]  - Constantinople:              #<nil>
+INFO [02-04|08:11:40.727]  - Petersburg:                  #<nil>
+INFO [02-04|08:11:40.727]  - Istanbul:                    #<nil>
+INFO [02-04|08:11:40.727]  - Berlin:                      #<nil>
+INFO [02-04|08:11:40.727]  - London:                      #<nil>
+INFO [02-04|08:11:40.727] 
+INFO [02-04|08:11:40.727] Merge configured:
+INFO [02-04|08:11:40.727]  - Total terminal difficulty:  <nil>
+INFO [02-04|08:11:40.727] 
+INFO [02-04|08:11:40.727] Post-Merge hard forks (timestamp based):
+INFO [02-04|08:11:40.727] 
+INFO [02-04|08:11:40.727] All fork specifications can be found at https://ethereum.github.io/execution-specs/src/ethereum/forks/
+INFO [02-04|08:11:40.727] 
+INFO [02-04|08:11:40.727] ---------------------------------------------------------------------------------------------------------------------------------------------------------
+INFO [02-04|08:11:40.727] 
+INFO [02-04|08:11:40.727] Loaded most recent local block           number=0 hash=567e85..683dd4 age=56y10mo4w
+INFO [02-04|08:11:40.728] Initialized transaction indexer          range="last 2350000 blocks"
+DEBUG[02-04|08:11:40.802] Blobpool tip threshold updated           tip=1
+INFO [02-04|08:11:40.802] Enabled snap-sync                        head=0 hash=567e85..683dd4
+INFO [02-04|08:11:40.802] Gasprice oracle is ignoring threshold set threshold=2
+INFO [02-04|08:11:40.803] Registered sync override service
+WARN [02-04|08:11:40.803] Engine API started but chain not configured for merge yet
+INFO [02-04|08:11:40.803] Starting peer-to-peer node               instance=Geth/v1.17.0-unstable-4cf05344-20260204/linux-amd64/go1.24.12
+DEBUG[02-04|08:11:40.810] TCP listener up                          addr=[::]:30303
+DEBUG[02-04|08:11:40.810] Couldn't get external IP                 err="no any router discovered"            interface=any
+TRACE[02-04|08:11:40.810] Attempting port mapping                  proto=TCP extport=0 intport=30303 interface=any
+DEBUG[02-04|08:11:40.810] Couldn't add port mapping                proto=TCP extport=0 intport=30303 interface=any err="no any router discovered"
+DEBUG[02-04|08:11:40.811] IPCs registered                          namespaces=admin,debug,web3,eth,txpool,miner,net,engine
+INFO [02-04|08:11:40.811] IPC endpoint opened                      url=/tmp/sgx-diag-test/geth.ipc
+INFO [02-04|08:11:40.811] Generated JWT secret                     path=/tmp/sgx-diag-test/geth/jwtsecret
+DEBUG[02-04|08:11:40.811] Allowed origin(s) for WS RPC interface [localhost]
+INFO [02-04|08:11:40.811] HTTP server started                      endpoint=127.0.0.1:8545 auth=false prefix= cors= vhosts=localhost
+INFO [02-04|08:11:40.811] New local node record                    seq=1,770,192,700,810 id=95b935df5479a95a ip=127.0.0.1 udp=0 tcp=30303
+INFO [02-04|08:11:40.811] Started P2P networking                   self="enode://9b863d32f51175f52d63516ec334a83c32342bd7acec27924a4a74c4a8aa0ad6cc237d24ce222926975bae105ada15ecca6705ae2ff47b7988d4e3f225818105@127.0.0.1:30303?discport=0"
+INFO [02-04|08:11:40.812] WebSocket enabled                        url=ws://127.0.0.1:8551
+INFO [02-04|08:11:40.812] HTTP server started                      endpoint=127.0.0.1:8551 auth=true  prefix= cors=localhost vhosts=localhost
+INFO [02-04|08:11:40.812] SGX engine detected, initializing block producer
+INFO [02-04|08:11:40.812] BlockProducer: Starting produceLoop goroutine NOW
+INFO [02-04|08:11:40.812] BlockProducer: Start() returning, goroutine launched
+INFO [02-04|08:11:40.812] SGX block producer started successfully
+INFO [02-04|08:11:40.812] BlockProducer: Goroutine started, calling produceLoop
+INFO [02-04|08:11:40.812] BlockProducer: produceLoop started
+INFO [02-04|08:11:40.812] Started log indexer
+INFO [02-04|08:11:40.912] BlockProducer: tryProduceBlock heartbeat elapsed=100.360166ms pendingTxs=0
+INFO [02-04|08:11:45.647] Got interrupt, shutting down...
+DEBUG[02-04|08:11:45.647] RPC server shutting down
+INFO [02-04|08:11:45.647] HTTP server stopped                      endpoint=127.0.0.1:8545
+DEBUG[02-04|08:11:45.647] RPC server shutting down
+DEBUG[02-04|08:11:45.647] RPC server shutting down
+INFO [02-04|08:11:45.647] HTTP server stopped                      endpoint=127.0.0.1:8551
+DEBUG[02-04|08:11:45.647] RPC server shutting down
+INFO [02-04|08:11:45.647] IPC endpoint closed                      url=/tmp/sgx-diag-test/geth.ipc
+DEBUG[02-04|08:11:45.647] RPC server shutting down
+DEBUG[02-04|08:11:45.647] RPC connection read error                err=EOF
+INFO [02-04|08:11:45.647] Ethereum protocol stopped
+INFO [02-04|08:11:45.647] Transaction pool stopped
+INFO [02-04|08:11:45.648] Persisting dirty state                   root=56e81f..63b421 layers=0
+DEBUG[02-04|08:11:45.651] Journaled pathdb disk layer              root=56e81f..63b421 id=0
+INFO [02-04|08:11:45.652] Persisted dirty state to file            path=/tmp/sgx-diag-test/geth/triedb/merkle.journal size=74.00B elapsed=4.412ms
+INFO [02-04|08:11:45.655] Blockchain stopped
+TRACE[02-04|08:11:45.659] P2P networking is spinning down

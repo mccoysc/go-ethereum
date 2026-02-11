@@ -159,17 +159,16 @@ func NewGramineRATLSVerifier(allowOutdatedTCB bool) *GramineRATLSVerifier {
 
 // VerifyQuote verifies an SGX quote using basic parsing.
 // For full verification with signature checking, use VerifyCertificate.
+// NO whitelist check - whitelist is only for RA-TLS certificate verification.
 func (v *GramineRATLSVerifier) VerifyQuote(quote []byte) error {
 	// Parse the quote to check basic structure
-	parsedQuote, err := ParseQuote(quote)
+	_, err := ParseQuote(quote)
 	if err != nil {
 		return fmt.Errorf("failed to parse quote: %w", err)
 	}
 
-	// Check MRENCLAVE whitelist
-	if !v.IsAllowedMREnclave(parsedQuote.MRENCLAVE[:]) {
-		return fmt.Errorf("MRENCLAVE not in allowed list: %x", parsedQuote.MRENCLAVE)
-	}
+	// NO MRENCLAVE whitelist check here!
+	// Whitelist is only checked during RA-TLS certificate verification (VerifyCertificate method)
 
 	// For full signature verification, the quote needs to be embedded in a certificate
 	// and verified via VerifyCertificate

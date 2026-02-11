@@ -1,0 +1,71 @@
+# Gramine manifest for X Chain geth node
+# Based on Gramine official examples
+
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint = "{{ entrypoint }}"
+
+loader.log_level = "{{ log_level }}"
+
+# Read application arguments directly from the command line:
+loader.insecure__use_cmdline_argv = true
+
+# Environment variables
+loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}:/usr/lib:/usr/{{ arch_libdir }}"
+loader.env.HOME = "{{ env.HOME }}"
+loader.env.PATH = "/bin:/usr/bin"
+
+# X Chain security configuration from manifest (not environment)
+# These addresses are embedded in MRENCLAVE and cannot be modified
+loader.env.XCHAIN_GOVERNANCE_CONTRACT = "{{ governance_contract }}"
+loader.env.XCHAIN_SECURITY_CONFIG_CONTRACT = "{{ security_config_contract }}"
+
+# Local paths for encrypted storage
+loader.env.XCHAIN_ENCRYPTED_PATH = "/data/encrypted"
+loader.env.XCHAIN_SECRET_PATH = "/data/secrets"
+
+# SGX configuration
+sgx.debug = {{ debug }}
+sgx.edmm_enable = {{ 'true' if env.get('EDMM', '0') == '1' else 'false' }}
+sgx.enclave_size = "2G"
+sgx.max_threads = 32
+sgx.isvprodid = 1
+sgx.isvsvn = 1
+
+# Remote attestation
+sgx.remote_attestation = "{{ attestation_type }}"
+
+# Trusted files (any modification triggers MRENCLAVE change)
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:{{ entrypoint }}",
+  "file:{{ gramine.runtimedir() }}/",
+  "file:{{ arch_libdir }}/",
+  "file:/usr/{{ arch_libdir }}/",
+]
+
+# Allowed files (can be modified without MRENCLAVE change)
+sgx.allowed_files = [
+  "file:/tmp/",
+  "file:/data/logs/",
+  "file:/dev/attestation/",
+]
+
+# File system mounts
+fs.mounts = [
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}" },
+  { path = "/usr/{{ arch_libdir }}", uri = "file:/usr/{{ arch_libdir }}" },
+  { path = "/etc", uri = "file:/etc" },
+  
+  # Application directory
+  { path = "/app", uri = "file:/app" },
+  { path = "/tmp", uri = "file:/tmp" },
+  
+  # Encrypted storage using SGX sealing
+  { type = "encrypted", path = "/data/encrypted", uri = "file:/data/encrypted", key_name = "{{ seal_key }}" },
+  { type = "encrypted", path = "/data/secrets", uri = "file:/data/secrets", key_name = "{{ seal_key }}" },
+  { type = "encrypted", path = "/data/wallet", uri = "file:/data/wallet", key_name = "{{ seal_key }}" },
+  
+  # Logs directory (allowed files)
+  { path = "/data/logs", uri = "file:/data/logs" },
+]

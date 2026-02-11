@@ -47,6 +47,9 @@ type SGXContext struct {
 	
 	// Permission manager
 	PermissionManager PermissionManager
+	
+	// Read-only mode flag (true for STATICCALL)
+	IsReadOnly bool
 }
 
 // Name returns the name of the contract

@@ -67,4 +67,7 @@ type KeyStore interface {
 	
 	// DeleteKey deletes a key from the keystore
 	DeleteKey(keyID common.Hash, caller common.Address) error
+	
+	// TransferOwnership transfers ownership of a key to a new owner
+	TransferOwnership(keyID common.Hash, newOwner common.Address) error
 }
