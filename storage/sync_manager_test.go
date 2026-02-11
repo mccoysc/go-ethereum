@@ -1,3 +1,6 @@
+//go:build testenv
+// +build testenv
+
 // Copyright 2024 The go-ethereum Authors
 // This file is part of the go-ethereum library.
 //
@@ -26,27 +29,6 @@ import (
 "github.com/ethereum/go-ethereum/common"
 "github.com/ethereum/go-ethereum/internal/sgx"
 )
-
-// setupTestEnvironment sets up a test environment with real SGX interfaces
-// but in test mode to avoid requiring actual SGX hardware
-func setupTestEnvironment(t *testing.T) {
-t.Helper()
-
-// Enable test mode for SGX
-os.Setenv("SGX_TEST_MODE", "true")
-
-// Set up mock MRENCLAVE/MRSIGNER for testing
-os.Setenv("RA_TLS_MRENCLAVE", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
-os.Setenv("RA_TLS_MRSIGNER", "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210")
-}
-
-func cleanupTestEnvironment(t *testing.T) {
-t.Helper()
-
-os.Unsetenv("SGX_TEST_MODE")
-os.Unsetenv("RA_TLS_MRENCLAVE")
-os.Unsetenv("RA_TLS_MRSIGNER")
-}
 
 // generateValidMockQuote generates a properly formatted mock SGX quote
 func generateValidMockQuote(t *testing.T, reportData []byte) []byte {
