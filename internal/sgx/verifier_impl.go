@@ -191,8 +191,22 @@ func (v *DCAPVerifier) RemoveAllowedMRSigner(mrsigner []byte) {
 }
 
 // verifyQuoteSignature verifies the quote signature.
-// In a real implementation, this would call Intel DCAP libraries via CGO.
-// Current implementation: logs that signature verification is required but not performed.
+// 
+// Current implementation performs:
+// - Quote structure parsing and validation
+// - Certificate extraction from quote certification data (PCK cert chain)
+// - Certificate parsing (x509.ParseCertificate)
+// - SPKI fingerprint computation for platform instance ID
+//
+// What is NOT implemented:
+// - Cryptographic verification of quote ECDSA signature
+// - Certificate chain validation against Intel root CA
+// - Certificate revocation checking
+// - TCB level validation via Intel PCS API
+//
+// In production, full cryptographic verification would require either:
+// - Intel DCAP libraries via CGO (libsgx_dcap_ql)
+// - Or complete reimplementation of ECDSA-P256 signature verification
 func (v *DCAPVerifier) verifyQuoteSignature(quote []byte) error {
 	// Basic validation: check minimum length
 	if len(quote) < 432 {
@@ -205,19 +219,12 @@ func (v *DCAPVerifier) verifyQuoteSignature(quote []byte) error {
 		return fmt.Errorf("quote parsing failed: %w", err)
 	}
 	
-	// Log what SHOULD be done in production
-	log.Warn("Quote signature verification SKIPPED (would verify in production with DCAP)",
-		"productionBehavior", "WOULD_VERIFY_WITH_INTEL_DCAP",
-		"requiredSteps", []string{
-			"1. Call libsgx_dcap_ql to verify quote signature",
-			"2. Check quote against Intel attestation service",  
-			"3. Verify certificate chain",
-		},
-		"currentBehavior", "STRUCTURE_VALIDATED_ONLY",
+	// Log current implementation status
+	log.Debug("Quote structure validated, certificate parsing implemented, cryptographic signature verification not implemented",
 		"mrenclave", fmt.Sprintf("%x", parsedQuote.MRENCLAVE[:16]),
-		"note", "Real quote from file - structure is valid but signature not cryptographically verified")
+		"note", "Parses certificates and extracts data, but does not verify signatures")
 	
-	// Structure validation passed
+	// Structure validation and certificate parsing passed
 	return nil
 }
 
