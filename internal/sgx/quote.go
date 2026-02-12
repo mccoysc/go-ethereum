@@ -24,15 +24,16 @@ import (
 
 // SGXQuote represents the SGX Quote data structure.
 type SGXQuote struct {
-	Version    uint16   // Quote version
-	SignType   uint16   // Signature type (EPID/DCAP)
-	MRENCLAVE  [32]byte // Enclave code measurement
-	MRSIGNER   [32]byte // Signer measurement
-	ISVProdID  uint16   // Product ID
-	ISVSVN     uint16   // Security version number
-	ReportData [64]byte // User-defined data
-	TCBStatus  uint8    // TCB status
-	Signature  []byte   // Quote signature
+	Version            uint16   // Quote version
+	AttestationKeyType uint16   // Attestation key type (2=ECDSA-P256, 3=ECDSA-P384)
+	SignType           uint16   // Signature type (EPID/DCAP)
+	MRENCLAVE          [32]byte // Enclave code measurement
+	MRSIGNER           [32]byte // Signer measurement
+	ISVProdID          uint16   // Product ID
+	ISVSVN             uint16   // Security version number
+	ReportData         [64]byte // User-defined data
+	TCBStatus          uint8    // TCB status
+	Signature          []byte   // Quote signature
 }
 
 // TCB status constants
@@ -55,7 +56,8 @@ func ParseQuote(quote []byte) (*SGXQuote, error) {
 
 	q := &SGXQuote{}
 	q.Version = binary.LittleEndian.Uint16(quote[0:2])
-	q.SignType = binary.LittleEndian.Uint16(quote[2:4])
+	q.AttestationKeyType = binary.LittleEndian.Uint16(quote[2:4])
+	q.SignType = binary.LittleEndian.Uint16(quote[2:4]) // Same as AttestationKeyType for DCAP
 	copy(q.MRENCLAVE[:], quote[112:144])
 	copy(q.MRSIGNER[:], quote[176:208])
 	q.ISVProdID = binary.LittleEndian.Uint16(quote[304:306])
