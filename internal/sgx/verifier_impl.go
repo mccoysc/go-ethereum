@@ -212,39 +212,54 @@ func (v *DCAPVerifier) RemoveAllowedMRSigner(mrsigner []byte) {
 // verifyQuoteSignature verifies the quote signature.
 // 
 // This implementation performs COMPLETE cryptographic verification matching sgx-quote-verify.js:
-// 1. Fetches collateral from Intel PCCS API (TCB Info, QE Identity, certificates)
+// 1. Extracts PCK cert chain from quote itself (certDataType 5)
 // 2. Verifies quote ECDSA-P256/P384 signature
 // 3. Verifies QE Report signature and binding
 // 4. Verifies certificate chain to Intel Root CA
-// 5. Verifies TCB level
-// 6. Verifies QE Identity
-// 7. Caches downloaded certificates for performance
+// 5. Optionally fetches TCB Info from Intel API for TCB level verification
+// 6. Caches downloaded certificates for performance
 //
 // Reference: https://github.com/mccoysc/gramine/blob/master/tools/sgx/ra-tls/sgx-quote-verify.js
 func (v *DCAPVerifier) verifyQuoteSignature(quote []byte) error {
-	// Parse quote to get information needed for collateral fetching
+	// Parse quote to get information needed for verification
 	parsedQuote, err := ParseQuote(quote)
 	if err != nil {
 		return fmt.Errorf("quote parsing failed: %w", err)
 	}
 	
-	// Fetch collateral from Intel API (with caching)
-	// This downloads TCB Info, QE Identity, and certificates as needed
-	collateral, err := v.collateralFetcher.FetchCollateral(parsedQuote)
+	// Extract PCK certificate chain from quote (type 5 cert data)
+	pckCertChain, err := v.extractPCKCertChainFromQuote(quote)
 	if err != nil {
-		// Log warning but continue with basic verification in testenv mode
-		log.Warn("Failed to fetch collateral from Intel API", "error", err)
-		log.Debug("Proceeding with structure validation only (testenv mode)")
-		return nil
+		return fmt.Errorf("failed to extract PCK cert chain from quote: %w", err)
+	}
+	log.Debug("Extracted PCK certificate chain from quote", "numCerts", len(pckCertChain))
+	
+	// Create collateral with extracted cert chain
+	collateral := &Collateral{
+		PCKCertChain: pckCertChain,
+	}
+	
+	// Try to fetch additional collateral from Intel API (TCB Info, QE Identity)
+	// This is optional - signature verification can work without it
+	apiCollateral, err := v.collateralFetcher.FetchCollateral(parsedQuote)
+	if err != nil {
+		log.Warn("Failed to fetch collateral from Intel API (will verify without TCB info)", "error", err)
+	} else {
+		// Use TCB Info and QE Identity from API if available
+		collateral.TCBInfo = apiCollateral.TCBInfo
+		collateral.QEIdentity = apiCollateral.QEIdentity
+		log.Debug("Successfully fetched additional collateral from Intel API")
 	}
 	
 	// 1. Perform complete cryptographic signature verification
+	// This MUST succeed for real quote
 	if err := VerifyQuoteSignatureComplete(quote, collateral); err != nil {
 		return fmt.Errorf("quote ECDSA signature verification failed: %w", err)
 	}
 	log.Info("Quote ECDSA signature verified successfully")
 	
 	// 2. Verify certificate chain to Intel Root CA
+	// This MUST succeed for real quote
 	if len(collateral.PCKCertChain) > 0 {
 		if err := VerifyCertChain(collateral.PCKCertChain, nil); err != nil {
 			return fmt.Errorf("certificate chain verification failed: %w", err)
@@ -252,7 +267,7 @@ func (v *DCAPVerifier) verifyQuoteSignature(quote []byte) error {
 		log.Info("Certificate chain verified successfully")
 	}
 	
-	// 3. Verify TCB level
+	// 3. Verify TCB level (optional if API not available)
 	if collateral.TCBInfo != "" {
 		tcbStatus, err := VerifyTCB(parsedQuote, collateral.TCBInfo)
 		if err != nil {
@@ -263,12 +278,11 @@ func (v *DCAPVerifier) verifyQuoteSignature(quote []byte) error {
 				return fmt.Errorf("TCB status not up to date: %s", tcbStatus)
 			}
 		}
+	} else {
+		log.Warn("TCB verification skipped (no TCB info available from Intel API)")
 	}
 	
-	// 4. Verify QE Identity (simplified for now)
-	// Full implementation would extract QE measurements from quote
-	
-	log.Info("Quote verification complete - all checks passed")
+	log.Info("Quote verification complete - all cryptographic checks passed")
 	return nil
 }
 
@@ -1027,6 +1041,73 @@ func (v *DCAPVerifier) ExtractInstanceID(quote []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to verify quote: %v", err)
 	}
 	return result.Measurements.PlatformInstanceID, nil
+}
+
+// extractPCKCertChainFromQuote extracts and parses PCK certificate chain from quote
+// This allows verification without calling Intel API
+// Returns parsed X.509 certificates ready for verification
+func (v *DCAPVerifier) extractPCKCertChainFromQuote(quote []byte) ([]*x509.Certificate, error) {
+	if len(quote) < 436 {
+		return nil, errors.New("quote too short for signature data")
+	}
+
+	signatureDataLen := binary.LittleEndian.Uint32(quote[432:436])
+	if len(quote) < 436+int(signatureDataLen) {
+		return nil, errors.New("quote signature data truncated")
+	}
+
+	// Skip ECDSA signature (64 bytes), attestation pubkey (64 bytes), QE report (384 bytes), QE signature (64 bytes)
+	offset := 436 + 64 + 64 + 384 + 64
+
+	if offset+2 > len(quote) {
+		return nil, errors.New("no auth data size field")
+	}
+
+	// Skip auth data
+	authDataSize := binary.LittleEndian.Uint16(quote[offset : offset+2])
+	offset += 2 + int(authDataSize)
+
+	if offset+6 > len(quote) {
+		return nil, errors.New("no certification data")
+	}
+
+	// Read certification data
+	certDataType := binary.LittleEndian.Uint16(quote[offset : offset+2])
+	certDataSize := binary.LittleEndian.Uint32(quote[offset+2 : offset+6])
+	offset += 6
+
+	if offset+int(certDataSize) > len(quote) {
+		return nil, errors.New("certification data truncated")
+	}
+
+	certData := quote[offset : offset+int(certDataSize)]
+
+	// certDataType 5 = PCK cert chain (PEM format)
+	if certDataType != 5 {
+		return nil, fmt.Errorf("unsupported cert data type: %d (expected 5 for PCK cert chain)", certDataType)
+	}
+
+	// Parse PEM cert chain and convert to x509.Certificate objects
+	pemCerts := v.parsePEMCertChain(certData)
+	if len(pemCerts) == 0 {
+		return nil, errors.New("no certificates in chain")
+	}
+
+	// Parse each PEM certificate into x509.Certificate
+	var certs []*x509.Certificate
+	for i, pemCert := range pemCerts {
+		block, _ := pem.Decode(pemCert)
+		if block == nil {
+			return nil, fmt.Errorf("failed to decode PEM certificate %d", i)
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse certificate %d: %w", i, err)
+		}
+		certs = append(certs, cert)
+	}
+
+	return certs, nil
 }
 
 // extractPPID extracts PPID from quote certification data
