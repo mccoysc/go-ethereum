@@ -34,6 +34,7 @@ type SGXQuote struct {
 	ReportData         [64]byte // User-defined data
 	TCBStatus          uint8    // TCB status
 	Signature          []byte   // Quote signature
+	CertChain          []string // PCK certificate chain (PEM format) extracted from quote
 }
 
 // TCB status constants
@@ -49,6 +50,8 @@ const (
 var SGXQuoteOID = asn1.ObjectIdentifier{1, 2, 840, 113741, 1, 13, 1}
 
 // ParseQuote parses an SGX Quote from raw bytes.
+// Matches the structure returned by gramine sgx-quote-verify.js parseQuoteStructure function.
+// Reference: https://github.com/mccoysc/gramine/blob/master/tools/sgx/ra-tls/sgx-quote-verify.js
 func ParseQuote(quote []byte) (*SGXQuote, error) {
 	if len(quote) < 432 {
 		return nil, errors.New("quote too short: minimum 432 bytes required")
@@ -72,7 +75,105 @@ func ParseQuote(quote []byte) (*SGXQuote, error) {
 	if len(quote) > 432 {
 		q.Signature = make([]byte, len(quote)-432)
 		copy(q.Signature, quote[432:])
+		
+		// Try to extract embedded certificate chain from signature data
+		// Matches JS logic: check if quote has certChain embedded
+		q.CertChain = extractCertChainFromSignatureData(q.Signature)
 	}
 
 	return q, nil
+}
+
+// extractCertChainFromSignatureData tries to extract PCK certificate chain from quote signature data.
+// SGX DCAP Quote v3/v4 may embed the PCK cert chain in certification data (type 5).
+// Returns nil if no cert chain found.
+func extractCertChainFromSignatureData(sigData []byte) []string {
+	if len(sigData) < 436 {
+		return nil
+	}
+
+	// Skip: signature (64/96 bytes) + attestation key (64/96 bytes) + QE report (384 bytes) + QE sig (64/96 bytes)
+	// Certification data starts after these
+	// For simplicity, look for certification data type field at various offsets
+	
+	// Try to find certification data (type 5 = PCK cert chain)
+	// Format: [cert_type: 2 bytes] [cert_data_size: 4 bytes] [cert_data: variable]
+	
+	// Common offset for P256: 64 + 64 + 384 + 64 = 576
+	offset := 576
+	if offset+6 > len(sigData) {
+		return nil
+	}
+	
+	certType := binary.LittleEndian.Uint16(sigData[offset : offset+2])
+	certDataSize := binary.LittleEndian.Uint32(sigData[offset+2 : offset+6])
+	
+	if certType == 5 && certDataSize > 0 && int(certDataSize) < len(sigData)-offset-6 {
+		certData := sigData[offset+6 : offset+6+int(certDataSize)]
+		// Parse PEM certificates from cert data
+		return parsePEMCertChain(certData)
+	}
+	
+	return nil
+}
+
+// parsePEMCertChain parses multiple PEM certificates from byte data.
+// Returns array of PEM strings (matching JS parsePemCertChain function).
+func parsePEMCertChain(data []byte) []string {
+	var certs []string
+	rest := data
+	
+	for len(rest) > 0 {
+		// Look for -----BEGIN CERTIFICATE-----
+		beginMarker := []byte("-----BEGIN CERTIFICATE-----")
+		endMarker := []byte("-----END CERTIFICATE-----")
+		
+		beginIdx := bytesIndex(rest, beginMarker)
+		if beginIdx == -1 {
+			break
+		}
+		
+		endIdx := bytesIndex(rest[beginIdx:], endMarker)
+		if endIdx == -1 {
+			break
+		}
+		
+		// Extract one certificate (including markers)
+		certEnd := beginIdx + endIdx + len(endMarker)
+		certPEM := string(rest[beginIdx:certEnd])
+		certs = append(certs, certPEM)
+		
+		// Move to next potential certificate
+		rest = rest[certEnd:]
+	}
+	
+	return certs
+}
+
+// bytesIndex returns the index of the first instance of sep in s, or -1 if sep is not present in s.
+func bytesIndex(s, sep []byte) int {
+	for i := 0; i <= len(s)-len(sep); i++ {
+		if bytesHasPrefix(s[i:], sep) {
+			return i
+		}
+	}
+	return -1
+}
+
+// bytesHasPrefix tests whether the byte slice s begins with prefix.
+func bytesHasPrefix(s, prefix []byte) bool {
+	return len(s) >= len(prefix) && bytesEqual(s[0:len(prefix)], prefix)
+}
+
+// bytesEqual reports whether a and b are the same length and contain the same bytes.
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
