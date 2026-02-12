@@ -111,15 +111,15 @@ func extractCertChainFromSignatureData(sigData []byte) []string {
 	if certType == 5 && certDataSize > 0 && int(certDataSize) < len(sigData)-offset-6 {
 		certData := sigData[offset+6 : offset+6+int(certDataSize)]
 		// Parse PEM certificates from cert data
-		return parsePEMCertChain(certData)
+		return parsePEMCertChainToStrings(certData)
 	}
 	
 	return nil
 }
 
-// parsePEMCertChain parses multiple PEM certificates from byte data.
+// parsePEMCertChainToStrings parses multiple PEM certificates from byte data.
 // Returns array of PEM strings (matching JS parsePemCertChain function).
-func parsePEMCertChain(data []byte) []string {
+func parsePEMCertChainToStrings(data []byte) []string {
 	var certs []string
 	rest := data
 	
