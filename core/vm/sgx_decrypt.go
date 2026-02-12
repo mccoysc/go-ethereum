@@ -85,15 +85,19 @@ func (c *SGXDecrypt) RunWithContext(ctx *SGXContext, input []byte) ([]byte, erro
 		reencrypt = false
 	}
 	
-	// 3. Get key metadata and check ownership
+	// 3. Get key metadata and check ownership/permission
 	metadata, err := ctx.KeyStore.GetMetadata(keyID)
 	if err != nil {
 		return nil, err
 	}
 	
-	// SECURITY: Only owner can decrypt
+	// SECURITY: Check if caller is owner or has decrypt permission
 	if metadata.Owner != ctx.Caller {
-		return nil, errors.New("permission denied: only key owner can decrypt")
+		// Check if caller has decrypt permission
+		hasPermission := ctx.PermissionManager.CheckPermission(keyID, ctx.Caller, PermissionDecrypt, ctx.Timestamp)
+		if !hasPermission {
+			return nil, errors.New("permission denied: only key owner can decrypt")
+		}
 	}
 	
 	// 4. Check key metadata (ensure it's an AES key)

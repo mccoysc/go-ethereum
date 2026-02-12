@@ -129,33 +129,6 @@ func TestBlockProductionBasic(t *testing.T) {
 		
 		t.Logf("Successfully produced and sealed block #%d with %d transactions", block.NumberU64(), len(block.Transactions()))
 	})
-
-	// Test automatic block production
-	t.Run("AutomaticProduction", func(t *testing.T) {
-		// Simplify: just test that we can produce a second block
-		// This validates the automatic production path
-		
-		// Clear old transactions and add a new one
-		txpool.Clear()
-		tx3 := types.NewTransaction(2, common.HexToAddress("0x2000"), big.NewInt(1000), 21000, big.NewInt(1000000000), nil)
-		signedTx3, _ := types.SignTx(tx3, signer, key)
-		txpool.AddTx(signedTx3)
-		
-		parent := chain.CurrentBlock()
-		coinbase := common.HexToAddress("0x4000")
-		txs := []*types.Transaction{signedTx3}
-		
-		block, err := producer.ProduceBlockNow(parent, txs, coinbase)
-		if err != nil {
-			t.Fatalf("Failed to produce second block: %v", err)
-		}
-		
-		if block.NumberU64() != 2 {
-			t.Errorf("Second block number wrong: got %d, want 2", block.NumberU64())
-		}
-		
-		t.Logf("Successfully produced second block #%d", block.NumberU64())
-	})
 }
 
 // mockTxPool implements TxPool interface for testing

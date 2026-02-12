@@ -1,0 +1,3425 @@
+# 共识引擎模块开发文档
+
+## 模块概述
+
+共识引擎模块实现 X Chain 的 PoA-SGX 共识机制，这是一种基于 Intel SGX 远程证明的权威证明共识。与传统 PoS 不同，X Chain 通过 SGX 硬件验证确保节点运行可信代码，而非依赖经济质押。
+
+## 负责团队
+
+**共识/核心协议团队**
+
+## 模块职责
+
+1. 实现 `consensus.Engine` 接口
+2. 区块生产与验证
+3. 区块头扩展字段处理
+4. 按需出块机制
+5. 冲突处理与分叉选择
+
+## 依赖关系
+
+```
++------------------+
+|  共识引擎模块    |
++------------------+
+        |
+        +---> SGX 证明模块（节点身份验证）
+        |
+        +---> P2P 网络模块（区块广播）
+        |
+        +---> 激励机制模块（奖励计算）
+```
+
+### 上游依赖
+- SGX 证明模块（验证区块生产者身份）
+- 核心 go-ethereum 框架
+
+### 下游依赖（被以下模块使用）
+- 交易池（交易确认）
+- RPC 层（区块查询）
+
+## 共识机制核心理念
+
+### 设计原则
+
+X Chain 的共识机制基于以下核心原则：
+
+1. **不依赖多数同意**：不使用 51% 权力维持共识
+2. **确定性执行**：SGX 保证所有节点执行相同代码得到相同结果
+3. **数据一致性即网络身份**：保持数据一致的节点属于同一网络
+4. **修改即分叉**：任何节点修改数据都意味着硬分叉
+
+### 节点身份验证
+
+每个节点启动时必须通过 SGX 远程证明：
+
+```
++-------------+                    +-------------+
+|   新节点    |                    |  现有节点   |
++-------------+                    +-------------+
+      |                                  |
+      |  1. 请求加入网络                 |
+      |--------------------------------->|
+      |                                  |
+      |  2. 发送 RA-TLS 证书请求         |
+      |<---------------------------------|
+      |                                  |
+      |  3. 生成 SGX Quote               |
+      |  (包含 MRENCLAVE, MRSIGNER)      |
+      |                                  |
+      |  4. 返回 RA-TLS 证书             |
+      |--------------------------------->|
+      |                                  |
+      |  5. 验证 SGX Quote               |
+      |  - 检查 MRENCLAVE (代码度量)     |
+      |  - 检查 MRSIGNER (签名者)        |
+      |  - 检查 TCB 状态                 |
+      |                                  |
+      |  6. 验证通过，允许加入           |
+      |<---------------------------------|
+      |                                  |
+```
+
+### 与以太坊原有共识机制的关系
+
+X Chain 使用自定义的 PoA-SGX 共识引擎，**完全替换**（而非删除）以太坊原有的共识机制。
+
+**设计决策**：
+
+| 方面 | 以太坊原有机制 | X Chain PoA-SGX |
+|------|----------------|-----------------|
+| 出块方式 | 定时出块（PoS ~12秒/块） | 按需出块（有交易才出块） |
+| 共识算法 | Casper FFG + LMD GHOST | SGX 远程证明 + 确定性执行 |
+| 代码位置 | `consensus/beacon/` | `consensus/sgx/` |
+| 启用方式 | 默认启用 | 通过配置指定 |
+
+**代码保留策略**：
+
+```
+go-ethereum/consensus/
+├── beacon/          # 以太坊 PoS 共识（保留，不启用）
+├── clique/          # 以太坊 PoA 共识（保留，不启用）
+├── ethash/          # 以太坊 PoW 共识（保留，不启用）
+└── sgx/             # X Chain PoA-SGX 共识（新增，启用）
+    ├── consensus.go # 实现 consensus.Engine 接口
+    ├── attestor.go  # SGX 远程证明
+    └── verifier.go  # Quote 验证
+```
+
+**为什么保留原有代码**：
+
+1. **参考实现**：原有共识代码是成熟的参考实现，有助于理解 go-ethereum 的共识接口设计
+2. **测试兼容性**：部分测试用例可能依赖原有共识逻辑
+3. **降低维护成本**：删除代码可能导致大量依赖关系需要修改
+4. **未来扩展**：如果需要支持多种共识模式，保留代码更灵活
+
+**启动配置**：
+
+```go
+// cmd/geth/config.go
+type ConsensusConfig struct {
+    Engine string // "sgx" | "clique" | "beacon" (默认 "sgx")
+}
+
+// X Chain 启动时强制使用 SGX 共识引擎
+func NewConsensusEngine(config *ConsensusConfig) consensus.Engine {
+    switch config.Engine {
+    case "sgx":
+        return sgx.New(config.SGX)
+    default:
+        // X Chain 不支持其他共识引擎
+        panic("X Chain only supports SGX consensus engine")
+    }
+}
+```
+
+**重要说明**：X Chain 节点启动时会强制使用 PoA-SGX 共识引擎。即使配置文件中指定了其他共识引擎，也会被忽略或报错。这确保了网络中所有节点使用相同的共识机制。
+
+### 设计目标
+
+| 以太坊问题 | X Chain 解决方案 |
+|------------|------------------|
+| 高 Gas 费用 | 无挖矿竞争，交易费极低或为零 |
+| 共识慢（~12秒出块） | SGX 确定性执行，近乎即时确认 |
+| 存储大（持续出块） | 按需出块，无空块，减少存储 |
+
+## 核心接口定义
+
+### Engine 接口实现
+
+```go
+// consensus/sgx/consensus.go
+package sgx
+
+import (
+    "github.com/ethereum/go-ethereum/common"
+    "github.com/ethereum/go-ethereum/consensus"
+    "github.com/ethereum/go-ethereum/core/state"
+    "github.com/ethereum/go-ethereum/core/types"
+    "github.com/ethereum/go-ethereum/rpc"
+)
+
+// SGXEngine 实现 consensus.Engine 接口
+type SGXEngine struct {
+    config        *Config
+    attestor      Attestor
+    verifier      Verifier
+    blockProducer *BlockProducer
+}
+
+// Author 返回区块的生产者地址
+func (e *SGXEngine) Author(header *types.Header) (common.Address, error) {
+    // 从区块头扩展字段中提取生产者地址
+    return extractProducer(header)
+}
+
+// VerifyHeader 验证区块头
+func (e *SGXEngine) VerifyHeader(chain consensus.ChainHeaderReader, header *types.Header) error {
+    return e.verifyHeader(chain, header, nil)
+}
+
+// VerifyHeaders 批量验证区块头
+func (e *SGXEngine) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*types.Header) (chan<- struct{}, <-chan error) {
+    abort := make(chan struct{})
+    results := make(chan error, len(headers))
+    
+    go func() {
+        for _, header := range headers {
+            err := e.verifyHeader(chain, header, nil)
+            select {
+            case <-abort:
+                return
+            case results <- err:
+            }
+        }
+    }()
+    
+    return abort, results
+}
+
+// Prepare 准备区块头（设置共识相关字段）
+func (e *SGXEngine) Prepare(chain consensus.ChainHeaderReader, header *types.Header) error {
+    parent := chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+    if parent == nil {
+        return consensus.ErrUnknownAncestor
+    }
+    
+    // 设置区块头扩展字段
+    header.Extra = e.prepareExtra(parent, header)
+    
+    return nil
+}
+
+// Finalize 完成区块（计算状态根，不包含奖励）
+func (e *SGXEngine) Finalize(chain consensus.ChainHeaderReader, header *types.Header, 
+    state *state.StateDB, body *types.Body) {
+    // 计算并分配区块奖励
+    e.accumulateRewards(chain, state, header)
+}
+
+// FinalizeAndAssemble 完成并组装区块
+func (e *SGXEngine) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header,
+    state *state.StateDB, body *types.Body, receipts []*types.Receipt) (*types.Block, error) {
+    
+    e.Finalize(chain, header, state, body)
+    
+    // 组装区块
+    return types.NewBlock(header, body, receipts, trie.NewStackTrie(nil)), nil
+}
+
+// Seal 密封区块（生成区块签名）
+func (e *SGXEngine) Seal(chain consensus.ChainHeaderReader, block *types.Block, 
+    results chan<- *types.Block, stop <-chan struct{}) error {
+    
+    header := block.Header()
+    
+    // 生成 SGX 签名
+    signature, err := e.signBlock(header)
+    if err != nil {
+        return err
+    }
+    
+    // 将签名添加到区块头
+    header.Extra = append(header.Extra, signature...)
+    
+    select {
+    case results <- block.WithSeal(header):
+    case <-stop:
+        return nil
+    }
+    
+    return nil
+}
+
+// CalcDifficulty 计算难度（PoA-SGX 中固定为 1）
+func (e *SGXEngine) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, 
+    parent *types.Header) *big.Int {
+    return big.NewInt(1)
+}
+
+// APIs 返回共识引擎提供的 RPC API
+func (e *SGXEngine) APIs(chain consensus.ChainHeaderReader) []rpc.API {
+    return []rpc.API{
+        {
+            Namespace: "sgx",
+            Service:   &API{engine: e, chain: chain},
+        },
+    }
+}
+
+// Close 关闭共识引擎
+func (e *SGXEngine) Close() error {
+    return nil
+}
+```
+
+## 关键数据结构
+
+### 区块头扩展字段
+
+```go
+// consensus/sgx/types.go
+package sgx
+
+import (
+    "github.com/ethereum/go-ethereum/common"
+)
+
+// SGXExtra 区块头扩展数据结构
+// 存储在 header.Extra 字段中
+type SGXExtra struct {
+    // 出块节点的 SGX Quote（证明代码完整性）
+    SGXQuote      []byte  `json:"sgxQuote"`
+    
+    // 出块节点标识（从 SGX Quote 中提取的公钥哈希）
+    ProducerID    []byte  `json:"producerId"`
+    
+    // SGX 证明时间戳
+    AttestationTS uint64  `json:"attestationTs"`
+    
+    // 区块签名（使用节点私钥签名）
+    Signature     []byte  `json:"signature"`
+}
+
+// 序列化 SGX Extra 数据
+func (e *SGXExtra) Encode() ([]byte, error) {
+    return rlp.EncodeToBytes(e)
+}
+
+// 反序列化 SGX Extra 数据
+func DecodeSGXExtra(data []byte) (*SGXExtra, error) {
+    var extra SGXExtra
+    if err := rlp.DecodeBytes(data, &extra); err != nil {
+        return nil, err
+    }
+    return &extra, nil
+}
+```
+
+### 区块生产者
+
+```go
+// consensus/sgx/block_producer.go
+package sgx
+
+import (
+    "context"
+    "sync"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+// BlockProducerConfig 区块生产者配置
+type BlockProducerConfig struct {
+    // 最小出块间隔
+    MinBlockInterval time.Duration
+    
+    // 最大等待交易时间
+    MaxWaitTime time.Duration
+    
+    // 单区块最大交易数
+    MaxTxPerBlock int
+    
+    // 单区块最大 Gas
+    MaxGasPerBlock uint64
+}
+
+// DefaultBlockProducerConfig 默认配置
+func DefaultBlockProducerConfig() *BlockProducerConfig {
+    return &BlockProducerConfig{
+        MinBlockInterval: 1 * time.Second,
+        MaxWaitTime:      5 * time.Second,
+        MaxTxPerBlock:    1000,
+        MaxGasPerBlock:   30000000,
+    }
+}
+
+// BlockProducer 区块生产者
+type BlockProducer struct {
+    config    *BlockProducerConfig
+    attestor  Attestor
+    txPool    TxPool
+    chain     BlockChain
+    
+    mu        sync.Mutex
+    producing bool
+    lastBlock time.Time
+}
+
+// NewBlockProducer 创建区块生产者
+func NewBlockProducer(config *BlockProducerConfig, attestor Attestor, 
+    txPool TxPool, chain BlockChain) *BlockProducer {
+    return &BlockProducer{
+        config:   config,
+        attestor: attestor,
+        txPool:   txPool,
+        chain:    chain,
+    }
+}
+
+// Start 启动区块生产
+func (bp *BlockProducer) Start(ctx context.Context) error {
+    go bp.produceLoop(ctx)
+    return nil
+}
+
+// produceLoop 区块生产循环
+func (bp *BlockProducer) produceLoop(ctx context.Context) {
+    ticker := time.NewTicker(100 * time.Millisecond)
+    defer ticker.Stop()
+    
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+            bp.tryProduceBlock()
+        }
+    }
+}
+
+// tryProduceBlock 尝试生产区块
+func (bp *BlockProducer) tryProduceBlock() {
+    bp.mu.Lock()
+    defer bp.mu.Unlock()
+    
+    // 检查是否满足出块条件
+    if !bp.shouldProduceBlock() {
+        return
+    }
+    
+    // 获取待打包交易
+    txs := bp.txPool.Pending()
+    if len(txs) == 0 {
+        return // 按需出块：无交易不出块
+    }
+    
+    // 生产区块
+    block, err := bp.produceBlock(txs)
+    if err != nil {
+        log.Error("Failed to produce block", "err", err)
+        return
+    }
+    
+    // 广播区块
+    bp.chain.InsertBlock(block)
+    bp.lastBlock = time.Now()
+}
+
+// shouldProduceBlock 检查是否应该生产区块
+func (bp *BlockProducer) shouldProduceBlock() bool {
+    // 检查最小出块间隔
+    if time.Since(bp.lastBlock) < bp.config.MinBlockInterval {
+        return false
+    }
+    
+    // 检查是否有待处理交易
+    if bp.txPool.PendingCount() == 0 {
+        return false
+    }
+    
+    return true
+}
+
+// produceBlock 生产区块
+func (bp *BlockProducer) produceBlock(txs []*types.Transaction) (*types.Block, error) {
+    // 1. 获取父区块
+    parent := bp.chain.CurrentBlock()
+    
+    // 2. 创建区块头
+    header := &types.Header{
+        ParentHash: parent.Hash(),
+        Number:     new(big.Int).Add(parent.Number(), big.NewInt(1)),
+        GasLimit:   bp.config.MaxGasPerBlock,
+        Time:       uint64(time.Now().Unix()),
+    }
+    
+    // 3. 生成 SGX Quote
+    quote, err := bp.attestor.GenerateQuote(header.Hash().Bytes())
+    if err != nil {
+        return nil, fmt.Errorf("failed to generate quote: %w", err)
+    }
+    
+    // 4. 设置扩展数据
+    extra := &SGXExtra{
+        SGXQuote:      quote,
+        ProducerID:    bp.attestor.GetAddress().Bytes(),
+        AttestationTS: uint64(time.Now().UnixNano()),
+    }
+    header.Extra, _ = extra.Encode()
+    
+    // 5. 执行交易并组装区块
+    // ... (调用 EVM 执行交易)
+    
+    return nil, nil
+}
+```
+
+## 按需出块机制
+
+X Chain 采用按需出块机制，只有在有待处理交易时才生产区块。
+
+### 出块条件
+
+```go
+// consensus/sgx/on_demand.go
+package sgx
+
+import (
+    "time"
+)
+
+// OnDemandConfig 按需出块配置
+type OnDemandConfig struct {
+    // 最小出块间隔（防止过快出块）
+    MinInterval time.Duration
+    
+    // 最大出块间隔（即使无交易也出块，用于心跳）
+    MaxInterval time.Duration
+    
+    // 触发出块的最小交易数
+    MinTxCount int
+    
+    // 触发出块的最小 Gas 总量
+    MinGasTotal uint64
+}
+
+// DefaultOnDemandConfig 默认配置
+func DefaultOnDemandConfig() *OnDemandConfig {
+    return &OnDemandConfig{
+        MinInterval: 1 * time.Second,
+        MaxInterval: 60 * time.Second,
+        MinTxCount:  1,
+        MinGasTotal: 21000, // 一笔普通转账
+    }
+}
+
+// ShouldProduceBlock 判断是否应该出块
+func (c *OnDemandConfig) ShouldProduceBlock(
+    lastBlockTime time.Time,
+    pendingTxCount int,
+    pendingGasTotal uint64,
+    upgradeChecker *UpgradeModeChecker,
+) bool {
+    // 条件 0: 升级期间，新版本节点不参与出块
+    // 当白名单中存在多个 MRENCLAVE 时，新版本节点进入只读模式
+    if upgradeChecker != nil && upgradeChecker.ShouldRejectWriteOperation() {
+        return false
+    }
+    
+    elapsed := time.Since(lastBlockTime)
+    
+    // 条件 1: 达到最大间隔，强制出块（心跳）
+    if elapsed >= c.MaxInterval {
+        return true
+    }
+    
+    // 条件 2: 未达到最小间隔，不出块
+    if elapsed < c.MinInterval {
+        return false
+    }
+    
+    // 条件 3: 有足够的待处理交易
+    if pendingTxCount >= c.MinTxCount {
+        return true
+    }
+    
+    // 条件 4: 有足够的待处理 Gas
+    if pendingGasTotal >= c.MinGasTotal {
+        return true
+    }
+    
+    return false
+}
+```
+
+### 出块流程图
+
+```
++------------------+
+|   检查出块条件   |
++------------------+
+        |
+        v
++------------------+     是
+| 升级期间只读模式?|---------> 不出块
++------------------+
+        | 否
+        v
++------------------+     否
+| 距上次出块 > 1s? |--------+
++------------------+        |
+        | 是               |
+        v                  |
++------------------+       |
+|  有待处理交易?   |       |
++------------------+       |
+        | 是               |
+        v                  |
++------------------+       |
+|   收集交易       |       |
++------------------+       |
+        |                  |
+        v                  |
++------------------+       |
+|   执行交易       |       |
++------------------+       |
+        |                  |
+        v                  |
++------------------+       |
+|  生成 SGX Quote  |       |
++------------------+       |
+        |                  |
+        v                  |
++------------------+       |
+|   签名区块       |       |
++------------------+       |
+        |                  |
+        v                  |
++------------------+       |
+|   广播区块       |       |
++------------------+       |
+        |                  |
+        +<-----------------+
+        |
+        v
++------------------+
+|   等待下一轮     |
++------------------+
+```
+
+### 按需出块原则
+
+**核心规则**：有新交易时才出块，可批量打包多个交易。
+
+```
+传统 PoS/PoW:
+时间 ─────────────────────────────────────────────────>
+      [块1] [块2] [块3] [块4] [块5] [块6] [块7] ...
+      固定间隔出块，可能有大量空块
+
+X Chain PoA-SGX:
+时间 ─────────────────────────────────────────────────>
+      [块1]           [块2]     [块3]
+      ↑               ↑         ↑
+      有交易          有交易    有多个交易(批量打包)
+      无交易时不出块，节省存储
+```
+
+## 交易确认时间
+
+```
+传统以太坊 PoS:
+提交交易 ──> 等待下一个区块槽(~12秒) ──> 区块确认 ──> 等待最终性(~15分钟)
+总时间: 12秒 ~ 15分钟
+
+X Chain PoA-SGX:
+提交交易 ──> 立即出块 ──> 即时确认
+总时间: < 1秒（网络延迟）
+```
+
+**即时确认的原因**：
+1. 无需等待区块槽 - 有交易就出块
+2. 无需等待共识投票 - SGX 保证代码执行正确性
+3. 无需等待最终性 - 所有节点执行相同代码得到相同结果
+
+## 出块节点选择
+
+由于 X Chain 不依赖 51% 共识，出块节点选择采用**先到先得**原则：
+
+```go
+// 出块节点选择策略
+type ProducerSelection int
+
+const (
+    // 先到先得：第一个广播有效区块的节点获得出块权
+    FirstComeFirstServed ProducerSelection = iota
+    
+    // 交易提交者优先：交易提交到的节点优先处理
+    TransactionSubmitterFirst
+)
+
+// 处理新交易
+func (p *BlockProducer) OnNewTransaction(tx *types.Transaction, fromLocal bool) {
+    // 添加到交易池
+    p.txPool.Add(tx)
+    
+    // 如果是本地提交的交易，立即尝试出块
+    if fromLocal && p.ShouldProduceBlock() {
+        go p.TryProduceBlock()
+    }
+}
+
+// 尝试出块（非阻塞）
+func (p *BlockProducer) TryProduceBlock() {
+    p.mu.Lock()
+    defer p.mu.Unlock()
+    
+    // 检查是否已有其他节点出块
+    if p.hasNewerBlock() {
+        return
+    }
+    
+    block, err := p.ProduceBlock()
+    if err != nil {
+        log.Warn("Failed to produce block", "err", err)
+        return
+    }
+    
+    // 广播区块
+    p.broadcastBlock(block)
+    
+    // 本地确认
+    p.chain.InsertBlock(block)
+}
+```
+
+## 区块验证
+
+### 验证流程
+
+```go
+// consensus/sgx/verify.go
+package sgx
+
+import (
+    "errors"
+    "fmt"
+    
+    "github.com/ethereum/go-ethereum/consensus"
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+var (
+    ErrInvalidQuote     = errors.New("invalid SGX quote")
+    ErrInvalidSignature = errors.New("invalid block signature")
+    ErrInvalidProducer  = errors.New("invalid block producer")
+    ErrFutureBlock      = errors.New("block in the future")
+)
+
+// verifyHeader 验证区块头
+func (e *SGXEngine) verifyHeader(chain consensus.ChainHeaderReader, 
+    header *types.Header, parents []*types.Header) error {
+    
+    // 1. 基本验证
+    if err := e.verifyBasic(header); err != nil {
+        return err
+    }
+    
+    // 2. 验证父区块
+    var parent *types.Header
+    if len(parents) > 0 {
+        parent = parents[len(parents)-1]
+    } else {
+        parent = chain.GetHeader(header.ParentHash, header.Number.Uint64()-1)
+    }
+    if parent == nil {
+        return consensus.ErrUnknownAncestor
+    }
+    
+    // 3. 验证时间戳
+    if err := e.verifyTimestamp(header, parent); err != nil {
+        return err
+    }
+    
+    // 4. 验证 SGX Quote
+    if err := e.verifyQuote(header); err != nil {
+        return err
+    }
+    
+    // 5. 验证签名
+    if err := e.verifySignature(header); err != nil {
+        return err
+    }
+    
+    return nil
+}
+
+// verifyBasic 基本验证
+func (e *SGXEngine) verifyBasic(header *types.Header) error {
+    // 验证区块号
+    if header.Number == nil {
+        return errors.New("block number is nil")
+    }
+    
+    // 验证 Extra 字段长度
+    if len(header.Extra) < MinExtraDataLength {
+        return fmt.Errorf("extra data too short: %d < %d", 
+            len(header.Extra), MinExtraDataLength)
+    }
+    
+    if len(header.Extra) > MaxExtraDataLength {
+        return fmt.Errorf("extra data too long: %d > %d", 
+            len(header.Extra), MaxExtraDataLength)
+    }
+    
+    return nil
+}
+
+// verifyTimestamp 验证时间戳
+func (e *SGXEngine) verifyTimestamp(header, parent *types.Header) error {
+    // 区块时间必须大于父区块
+    if header.Time <= parent.Time {
+        return errors.New("block timestamp not greater than parent")
+    }
+    
+    // 区块时间不能太超前
+    if header.Time > uint64(time.Now().Add(15*time.Second).Unix()) {
+        return ErrFutureBlock
+    }
+    
+    return nil
+}
+
+// verifyQuote 验证 SGX Quote
+func (e *SGXEngine) verifyQuote(header *types.Header) error {
+    extra, err := DecodeSGXExtra(header.Extra)
+    if err != nil {
+        return fmt.Errorf("failed to decode extra data: %w", err)
+    }
+    
+    // 验证 Quote
+    if err := e.verifier.VerifyQuote(extra.SGXQuote); err != nil {
+        return fmt.Errorf("%w: %v", ErrInvalidQuote, err)
+    }
+    
+    // 验证 Quote 中的 reportData 包含区块哈希
+    // 这确保 Quote 是为这个特定区块生成的
+    expectedReportData := header.Hash().Bytes()
+    if !verifyReportData(extra.SGXQuote, expectedReportData) {
+        return errors.New("quote reportData does not match block hash")
+    }
+    
+    return nil
+}
+
+// verifySignature 验证区块签名
+func (e *SGXEngine) verifySignature(header *types.Header) error {
+    extra, err := DecodeSGXExtra(header.Extra)
+    if err != nil {
+        return err
+    }
+    
+    // 从 Quote 中提取公钥
+    pubKey, err := extractPublicKeyFromQuote(extra.SGXQuote)
+    if err != nil {
+        return err
+    }
+    
+    // 验证签名
+    sigHash := sigHash(header)
+    if !verifySignature(pubKey, sigHash, extra.Signature) {
+        return ErrInvalidSignature
+    }
+    
+    return nil
+}
+```
+
+## 冲突处理
+
+当多个节点同时生产区块时，需要确定性的冲突解决机制。
+
+### 分叉选择规则
+
+```go
+// consensus/sgx/fork_choice.go
+package sgx
+
+import (
+    "bytes"
+    
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+// ForkChoice 分叉选择器
+type ForkChoice struct {
+    chain BlockChain
+}
+
+// SelectCanonicalBlock 选择规范区块
+// 当两个区块高度相同时，使用以下规则选择：
+// 1. 优先选择交易数更多的区块
+// 2. 交易数相同时，选择时间戳更早的区块
+// 3. 时间戳相同时，选择区块哈希更小的区块
+func (fc *ForkChoice) SelectCanonicalBlock(a, b *types.Block) *types.Block {
+    // 规则 1: 交易数
+    if len(a.Transactions()) != len(b.Transactions()) {
+        if len(a.Transactions()) > len(b.Transactions()) {
+            return a
+        }
+        return b
+    }
+    
+    // 规则 2: 时间戳
+    if a.Time() != b.Time() {
+        if a.Time() < b.Time() {
+            return a
+        }
+        return b
+    }
+    
+    // 规则 3: 区块哈希（确定性）
+    if bytes.Compare(a.Hash().Bytes(), b.Hash().Bytes()) < 0 {
+        return a
+    }
+    return b
+}
+
+// IsCanonical 检查区块是否是规范链上的区块
+func (fc *ForkChoice) IsCanonical(block *types.Block) bool {
+    canonical := fc.chain.GetBlockByNumber(block.NumberU64())
+    if canonical == nil {
+        return false
+    }
+    return canonical.Hash() == block.Hash()
+}
+```
+
+### 重组处理
+
+```go
+// consensus/sgx/reorg.go
+package sgx
+
+import (
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+// ReorgHandler 重组处理器
+type ReorgHandler struct {
+    chain    BlockChain
+    txPool   TxPool
+}
+
+// HandleReorg 处理链重组
+func (rh *ReorgHandler) HandleReorg(oldHead, newHead *types.Block) error {
+    // 1. 找到共同祖先
+    ancestor := rh.findCommonAncestor(oldHead, newHead)
+    
+    // 2. 回滚旧链上的交易到交易池
+    oldBlocks := rh.getBlocksFromAncestor(oldHead, ancestor)
+    for _, block := range oldBlocks {
+        for _, tx := range block.Transactions() {
+            rh.txPool.AddLocal(tx)
+        }
+    }
+    
+    // 3. 从交易池移除新链上已确认的交易
+    newBlocks := rh.getBlocksFromAncestor(newHead, ancestor)
+    for _, block := range newBlocks {
+        for _, tx := range block.Transactions() {
+            rh.txPool.RemoveTx(tx.Hash())
+        }
+    }
+    
+    return nil
+}
+
+// findCommonAncestor 找到共同祖先
+func (rh *ReorgHandler) findCommonAncestor(a, b *types.Block) *types.Block {
+    // 将两个区块回溯到相同高度
+    for a.NumberU64() > b.NumberU64() {
+        a = rh.chain.GetBlock(a.ParentHash(), a.NumberU64()-1)
+    }
+    for b.NumberU64() > a.NumberU64() {
+        b = rh.chain.GetBlock(b.ParentHash(), b.NumberU64()-1)
+    }
+    
+    // 同时回溯直到找到相同区块
+    for a.Hash() != b.Hash() {
+        a = rh.chain.GetBlock(a.ParentHash(), a.NumberU64()-1)
+        b = rh.chain.GetBlock(b.ParentHash(), b.NumberU64()-1)
+    }
+    
+    return a
+}
+
+// getBlocksFromAncestor 获取从祖先到目标的所有区块
+func (rh *ReorgHandler) getBlocksFromAncestor(target, ancestor *types.Block) []*types.Block {
+    var blocks []*types.Block
+    current := target
+    
+    for current.Hash() != ancestor.Hash() {
+        blocks = append(blocks, current)
+        current = rh.chain.GetBlock(current.ParentHash(), current.NumberU64()-1)
+    }
+    
+    // 反转顺序（从祖先到目标）
+    for i, j := 0, len(blocks)-1; i < j; i, j = i+1, j-1 {
+        blocks[i], blocks[j] = blocks[j], blocks[i]
+    }
+    
+    return blocks
+}
+```
+
+## 节点激励模型
+
+X Chain 采用**低成本效用模型**结合**稳定性激励机制**，确保节点长期稳定在线。
+
+### 基础激励来源
+
+| 激励来源 | 说明 |
+|----------|------|
+| 交易手续费 | 出块节点收取极低的交易费（可配置，甚至为零） |
+| 效用价值 | 节点运营者可使用链上密钥管理等功能 |
+| 服务收益 | 为用户提供交易处理服务的间接收益 |
+
+**无区块奖励**：
+- 不产生新代币，无通胀
+- 降低运营成本，无需高算力或大量质押
+
+### 出块权竞争与区块质量收益调整
+
+**设计目标**：前三名都给收益，根据广播速度和区块质量综合调整收益分配，避免"赢家通吃"导致的恶性抢先行为。
+
+```
+问题场景:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  传统"赢家通吃"模式的问题:                                              │
+│  - 矿工为抢第一名，宁愿只打包 1 笔交易也要抢先广播                       │
+│  - 第二、三名完全没有收益，浪费了已经打包好的区块                        │
+│  - 导致区块碎片化、网络效率低、存储浪费                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+解决方案: 前三名收益分配
+┌─────────────────────────────────────────────────────────────────────────┐
+│  第 1 名: 速度基础奖励 100% × 区块质量倍数                               │
+│  第 2 名: 速度基础奖励  60% × 区块质量倍数                               │
+│  第 3 名: 速度基础奖励  30% × 区块质量倍数                               │
+│                                                                         │
+│  结果:                                                                  │
+│  - 速度快但质量低的区块: 第1名但收益可能低于高质量的第2名               │
+│  - 速度慢但质量高的区块: 虽然是第2/3名，但收益可能更高                  │
+│  - 激励矿工在速度和质量之间找到最优平衡                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 前三名收益分配机制
+
+```go
+// consensus/sgx/multi_producer_reward.go
+package sgx
+
+import (
+    "math/big"
+    "sort"
+    "time"
+    
+    "github.com/ethereum/go-ethereum/common"
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+// BlockCandidate 候选区块
+type BlockCandidate struct {
+    Block       *types.Block
+    Producer    common.Address
+    ReceivedAt  time.Time      // 收到区块的时间
+    Quality     *BlockQuality  // 区块质量评分
+    Rank        int            // 排名 (1, 2, 3)
+}
+
+// MultiProducerRewardConfig 多生产者收益配置
+type MultiProducerRewardConfig struct {
+    // 速度基础奖励比例 (第1名=100%, 第2名=60%, 第3名=30%)
+    SpeedRewardRatios []float64
+    
+    // 候选区块收集窗口（收到第一个区块后等待多久收集其他候选）
+    CandidateWindow time.Duration
+    
+    // 最大候选区块数
+    MaxCandidates int
+}
+
+// DefaultMultiProducerConfig 默认配置
+func DefaultMultiProducerConfig() *MultiProducerRewardConfig {
+    return &MultiProducerRewardConfig{
+        SpeedRewardRatios: []float64{1.0, 0.6, 0.3}, // 100%, 60%, 30%
+        CandidateWindow:   500 * time.Millisecond,   // 500ms 窗口
+        MaxCandidates:     3,
+    }
+}
+
+// MultiProducerRewardCalculator 多生产者收益计算器
+type MultiProducerRewardCalculator struct {
+    config        *MultiProducerRewardConfig
+    qualityScorer *BlockQualityScorer
+}
+
+// CandidateReward 候选区块收益
+type CandidateReward struct {
+    Candidate       *BlockCandidate
+    SpeedRatio      float64  // 速度奖励比例
+    QualityMulti    float64  // 质量倍数
+    FinalMultiplier float64  // 最终收益倍数 = SpeedRatio × QualityMulti
+    Reward          *big.Int // 最终收益
+}
+
+// CalculateRewards 计算所有候选区块的收益
+// 重要改进：只有包含新交易的候选区块才能获得收益
+func (c *MultiProducerRewardCalculator) CalculateRewards(
+    candidates []*BlockCandidate,
+    totalFees *big.Int,
+) []*CandidateReward {
+    if len(candidates) == 0 {
+        return nil
+    }
+    
+    // 1. 按收到时间排序（确定速度排名）
+    sort.Slice(candidates, func(i, j int) bool {
+        return candidates[i].ReceivedAt.Before(candidates[j].ReceivedAt)
+    })
+    
+    // 2. 计算每个候选的质量评分，并检查是否有新交易
+    firstCandidateTxSet := make(map[common.Hash]bool)
+    for _, tx := range candidates[0].Block.Transactions() {
+        firstCandidateTxSet[tx.Hash()] = true
+    }
+    
+    for i, candidate := range candidates {
+        candidate.Rank = i + 1
+        candidate.Quality = c.qualityScorer.CalculateQuality(candidate.Block)
+        
+        // 计算该候选区块包含的新交易数（第一名之外的交易）
+        if i > 0 {
+            newTxCount := 0
+            for _, tx := range candidate.Block.Transactions() {
+                if !firstCandidateTxSet[tx.Hash()] {
+                    newTxCount++
+                }
+            }
+            candidate.Quality.NewTxCount = uint64(newTxCount)
+        } else {
+            // 第一名的所有交易都是"新"交易
+            candidate.Quality.NewTxCount = candidate.Quality.TxCount
+        }
+    }
+    
+    // 3. 计算收益（只有包含新交易的候选才能获得收益）
+    rewards := make([]*CandidateReward, 0, len(candidates))
+    totalMultiplier := 0.0
+    
+    for i, candidate := range candidates {
+        if i >= c.config.MaxCandidates {
+            break
+        }
+        
+        // 关键改进：如果后续候选没有新交易，不分配收益
+        if i > 0 && candidate.Quality.NewTxCount == 0 {
+            // 该候选的所有交易都已被第一名包含，不分配收益
+            continue
+        }
+        
+        speedRatio := c.config.SpeedRewardRatios[i]
+        qualityMulti := candidate.Quality.RewardMultiplier
+        
+        // 对于后续候选，收益按新交易比例调整
+        if i > 0 {
+            newTxRatio := float64(candidate.Quality.NewTxCount) / float64(candidate.Quality.TxCount)
+            qualityMulti *= newTxRatio  // 只有新交易部分才计入收益
+        }
+        
+        finalMulti := speedRatio * qualityMulti
+        
+        rewards = append(rewards, &CandidateReward{
+            Candidate:       candidate,
+            SpeedRatio:      speedRatio,
+            QualityMulti:    qualityMulti,
+            FinalMultiplier: finalMulti,
+        })
+        
+        totalMultiplier += finalMulti
+    }
+    
+    // 4. 按比例分配总交易费
+    for _, reward := range rewards {
+        share := reward.FinalMultiplier / totalMultiplier
+        reward.Reward = new(big.Int).Mul(
+            totalFees,
+            big.NewInt(int64(share * 10000)),
+        )
+        reward.Reward.Div(reward.Reward, big.NewInt(10000))
+    }
+    
+    return rewards
+}
+```
+
+#### 区块质量评分
+
+```go
+// consensus/sgx/block_quality.go
+package sgx
+
+import (
+    "math/big"
+    
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+// BlockQualityScorer 区块质量评分器
+type BlockQualityScorer struct {
+    config *QualityConfig
+}
+
+// QualityConfig 质量评分配置
+type QualityConfig struct {
+    // 交易数量权重 (默认 40%)
+    TxCountWeight uint8
+    
+    // 区块大小权重 (默认 30%)
+    BlockSizeWeight uint8
+    
+    // Gas 利用率权重 (默认 20%)
+    GasUtilizationWeight uint8
+    
+    // 交易多样性权重 (默认 10%)
+    TxDiversityWeight uint8
+    
+    // 最小交易数阈值（低于此值收益大幅降低）
+    MinTxThreshold uint64
+    
+    // 目标区块大小（字节）
+    TargetBlockSize uint64
+    
+    // 目标 Gas 利用率
+    TargetGasUtilization float64
+}
+
+// DefaultQualityConfig 默认配置
+func DefaultQualityConfig() *QualityConfig {
+    return &QualityConfig{
+        TxCountWeight:        40,
+        BlockSizeWeight:      30,
+        GasUtilizationWeight: 20,
+        TxDiversityWeight:    10,
+        MinTxThreshold:       5,           // 至少 5 笔交易
+        TargetBlockSize:      1024 * 1024, // 1MB
+        TargetGasUtilization: 0.8,         // 80% Gas 利用率
+    }
+}
+
+// BlockQuality 区块质量评分结果
+type BlockQuality struct {
+    TxCount          uint64  // 交易数量
+    NewTxCount       uint64  // 新交易数量（相对于第一名候选区块）
+    BlockSize        uint64  // 区块大小（字节）
+    GasUsed          uint64  // 使用的 Gas
+    GasLimit         uint64  // Gas 上限
+    UniqueSenders    uint64  // 不同发送者数量
+    
+    TxCountScore     uint16  // 交易数量得分 (0-10000)
+    BlockSizeScore   uint16  // 区块大小得分 (0-10000)
+    GasUtilScore     uint16  // Gas 利用率得分 (0-10000)
+    DiversityScore   uint16  // 多样性得分 (0-10000)
+    
+    TotalScore       uint16  // 综合得分 (0-10000)
+    RewardMultiplier float64 // 收益倍数 (0.1 - 2.0)
+}
+
+// CalculateQuality 计算区块质量
+func (s *BlockQualityScorer) CalculateQuality(block *types.Block) *BlockQuality {
+    txs := block.Transactions()
+    
+    quality := &BlockQuality{
+        TxCount:   uint64(len(txs)),
+        BlockSize: uint64(block.Size()),
+        GasUsed:   block.GasUsed(),
+        GasLimit:  block.GasLimit(),
+    }
+    
+    // 统计不同发送者
+    senders := make(map[common.Address]bool)
+    for _, tx := range txs {
+        from, _ := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+        senders[from] = true
+    }
+    quality.UniqueSenders = uint64(len(senders))
+    
+    // 1. 交易数量得分
+    quality.TxCountScore = s.calculateTxCountScore(quality.TxCount)
+    
+    // 2. 区块大小得分
+    quality.BlockSizeScore = s.calculateBlockSizeScore(quality.BlockSize)
+    
+    // 3. Gas 利用率得分
+    quality.GasUtilScore = s.calculateGasUtilScore(quality.GasUsed, quality.GasLimit)
+    
+    // 4. 交易多样性得分
+    quality.DiversityScore = s.calculateDiversityScore(quality.TxCount, quality.UniqueSenders)
+    
+    // 计算综合得分
+    quality.TotalScore = uint16(
+        (uint32(quality.TxCountScore) * uint32(s.config.TxCountWeight) +
+         uint32(quality.BlockSizeScore) * uint32(s.config.BlockSizeWeight) +
+         uint32(quality.GasUtilScore) * uint32(s.config.GasUtilizationWeight) +
+         uint32(quality.DiversityScore) * uint32(s.config.TxDiversityWeight)) / 100,
+    )
+    
+    // 计算收益倍数
+    quality.RewardMultiplier = s.calculateRewardMultiplier(quality)
+    
+    return quality
+}
+
+// calculateTxCountScore 计算交易数量得分
+func (s *BlockQualityScorer) calculateTxCountScore(txCount uint64) uint16 {
+    if txCount == 0 {
+        return 0
+    }
+    
+    // 低于最小阈值，得分很低
+    if txCount < s.config.MinTxThreshold {
+        // 线性递减: 1 笔交易 = 20%, 4 笔交易 = 80%
+        return uint16(txCount * 2000 / s.config.MinTxThreshold)
+    }
+    
+    // 达到阈值后，对数增长（避免无限追求大区块）
+    // 5 笔 = 8000, 10 笔 = 8500, 50 笔 = 9500, 100+ 笔 = 10000
+    baseScore := uint16(8000)
+    bonus := uint16(2000 * min(txCount-s.config.MinTxThreshold, 95) / 95)
+    
+    return baseScore + bonus
+}
+
+// calculateBlockSizeScore 计算区块大小得分
+func (s *BlockQualityScorer) calculateBlockSizeScore(blockSize uint64) uint16 {
+    if blockSize == 0 {
+        return 0
+    }
+    
+    // 目标大小附近得分最高
+    ratio := float64(blockSize) / float64(s.config.TargetBlockSize)
+    
+    if ratio <= 1.0 {
+        // 未达到目标大小，线性增长
+        return uint16(ratio * 10000)
+    }
+    
+    // 超过目标大小，轻微惩罚（避免过大区块）
+    penalty := (ratio - 1.0) * 1000
+    if penalty > 2000 {
+        penalty = 2000
+    }
+    return uint16(10000 - penalty)
+}
+
+// calculateGasUtilScore 计算 Gas 利用率得分
+func (s *BlockQualityScorer) calculateGasUtilScore(gasUsed, gasLimit uint64) uint16 {
+    if gasLimit == 0 {
+        return 0
+    }
+    
+    utilization := float64(gasUsed) / float64(gasLimit)
+    target := s.config.TargetGasUtilization
+    
+    if utilization <= target {
+        // 未达到目标利用率，线性增长
+        return uint16(utilization / target * 10000)
+    }
+    
+    // 超过目标利用率，满分
+    return 10000
+}
+
+// calculateDiversityScore 计算交易多样性得分
+func (s *BlockQualityScorer) calculateDiversityScore(txCount, uniqueSenders uint64) uint16 {
+    if txCount == 0 {
+        return 0
+    }
+    
+    // 多样性 = 不同发送者数量 / 交易数量
+    diversity := float64(uniqueSenders) / float64(txCount)
+    
+    // 多样性越高越好（避免单一用户刷交易）
+    return uint16(diversity * 10000)
+}
+
+// calculateRewardMultiplier 计算收益倍数
+func (s *BlockQualityScorer) calculateRewardMultiplier(quality *BlockQuality) float64 {
+    // 基于综合得分计算收益倍数
+    // 得分 0-2000: 倍数 0.1-0.5 (惩罚低质量区块)
+    // 得分 2000-5000: 倍数 0.5-1.0 (正常区块)
+    // 得分 5000-8000: 倍数 1.0-1.5 (高质量区块)
+    // 得分 8000-10000: 倍数 1.5-2.0 (优质区块)
+    
+    score := float64(quality.TotalScore)
+    
+    if score < 2000 {
+        return 0.1 + (score/2000)*0.4
+    } else if score < 5000 {
+        return 0.5 + ((score-2000)/3000)*0.5
+    } else if score < 8000 {
+        return 1.0 + ((score-5000)/3000)*0.5
+    } else {
+        return 1.5 + ((score-8000)/2000)*0.5
+    }
+}
+```
+
+#### 收益分配示例
+
+```
+场景: 三个矿工同时出块
+
+矿工 A (第1名，低质量):
+┌─────────────────────────────────────────────────────────────┐
+│  排名: 第 1 名（最先广播）                                   │
+│  交易数量: 2 笔                                              │
+│  区块质量得分: 2500                                          │
+│  质量倍数: 0.58x                                             │
+│                                                             │
+│  速度基础奖励: 100%                                          │
+│  最终倍数: 100% × 0.58 = 0.58                                │
+└─────────────────────────────────────────────────────────────┘
+
+矿工 B (第2名，高质量):
+┌─────────────────────────────────────────────────────────────┐
+│  排名: 第 2 名（稍慢 200ms）                                 │
+│  交易数量: 30 笔                                             │
+│  新交易数量: 28 笔（A 没有的交易）                           │
+│  区块质量得分: 7500                                          │
+│  质量倍数: 1.42x × (28/30) = 1.33x                           │
+│                                                             │
+│  速度基础奖励: 60%                                           │
+│  最终倍数: 60% × 1.33 = 0.80                                 │
+└─────────────────────────────────────────────────────────────┘
+
+矿工 C (第3名，无新交易):
+┌─────────────────────────────────────────────────────────────┐
+│  排名: 第 3 名（稍慢 400ms）                                 │
+│  交易数量: 15 笔                                             │
+│  新交易数量: 0 笔（所有交易都已被 A 包含）                   │
+│                                                             │
+│  收益: 0 ETH（无新交易，不分配收益）                         │
+└─────────────────────────────────────────────────────────────┘
+
+收益分配 (假设总交易费 = 1 ETH):
+┌─────────────────────────────────────────────────────────────┐
+│  总倍数: 0.58 + 0.80 = 1.38                                 │
+│                                                             │
+│  矿工 A 收益: 1 ETH × (0.58/1.38) = 0.420 ETH (42.0%)       │
+│  矿工 B 收益: 1 ETH × (0.80/1.38) = 0.580 ETH (58.0%)       │
+│  矿工 C 收益: 0 ETH (0%)                                     │
+│                                                             │
+│  结论: 矿工 B 虽然是第2名，但因高质量和新交易贡献最大，      │
+│        收益反而超过了第1名！                                │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**激励效果**：
+- 速度仍然重要（第1名基础奖励最高）
+- 新交易贡献是关键（只有包含新交易才能获得收益）
+- 防止"搭便车"（后续矿工如果没有新交易，不分配收益）
+- 鼓励矿工尽可能收集更多不同的交易
+
+### 防止恶意行为
+
+```go
+// 防止恶意行为的额外规则
+
+// 1. 交易数量评分（考虑网络状态）
+// 重要：交易量少是网络状态问题，不是矿工的问题，不应惩罚矿工
+// 只有在矿工明显"抢跑"（网络中有更多交易但矿工只打包少量）时才降低收益
+func (s *BlockQualityScorer) evaluateTxCount(
+    quality *BlockQuality,
+    pendingTxCount uint64,  // 当前交易池中的待处理交易数
+    maxWaitTime time.Duration,  // 最大等待时间
+    actualWaitTime time.Duration,  // 实际等待时间
+) {
+    // 如果交易池中交易很少，矿工打包所有可用交易，不惩罚
+    if quality.TxCount >= pendingTxCount {
+        // 矿工已打包所有可用交易，给予满分
+        return
+    }
+    
+    // 如果已经等待到最大等待时间，不惩罚（矿工已尽力等待）
+    if actualWaitTime >= maxWaitTime {
+        return
+    }
+    
+    // 只有在交易池中有更多交易，但矿工提前出块时才降低收益
+    // 这是为了防止矿工"抢跑"（故意只打包少量交易以快速获得收益）
+    packingRatio := float64(quality.TxCount) / float64(pendingTxCount)
+    if packingRatio < 0.5 {
+        // 打包比例低于 50%，降低收益
+        quality.RewardMultiplier *= packingRatio + 0.5  // 最低 50% 收益
+    }
+}
+
+// 2. 连续低质量区块惩罚
+// 如果矿工连续出低质量区块，累积惩罚
+type ProducerPenalty struct {
+    ConsecutiveLowQuality int     // 连续低质量区块数
+    PenaltyMultiplier     float64 // 惩罚倍数
+}
+
+func (p *ProducerPenalty) UpdatePenalty(quality *BlockQuality) {
+    if quality.TotalScore < 3000 {
+        p.ConsecutiveLowQuality++
+        // 每连续 1 个低质量区块，惩罚 10%
+        p.PenaltyMultiplier = 1.0 - float64(p.ConsecutiveLowQuality)*0.1
+        if p.PenaltyMultiplier < 0.5 {
+            p.PenaltyMultiplier = 0.5 // 最低 50%
+        }
+    } else {
+        // 出高质量区块，重置惩罚
+        p.ConsecutiveLowQuality = 0
+        p.PenaltyMultiplier = 1.0
+    }
+}
+
+// 3. 自我交易检测
+// 如果区块中大部分交易来自出块者自己，降低收益
+func (s *BlockQualityScorer) detectSelfTransactions(
+    block *types.Block,
+    producer common.Address,
+) float64 {
+    selfTxCount := 0
+    for _, tx := range block.Transactions() {
+        from, _ := types.Sender(types.LatestSignerForChainID(tx.ChainId()), tx)
+        if from == producer {
+            selfTxCount++
+        }
+    }
+    
+    selfRatio := float64(selfTxCount) / float64(len(block.Transactions()))
+    
+    // 自我交易比例超过 50%，收益降低
+    if selfRatio > 0.5 {
+        return 1.0 - (selfRatio-0.5) // 50% 自我交易 = 100% 收益，100% 自我交易 = 50% 收益
+    }
+    
+    return 1.0
+}
+```
+
+### 节点稳定性激励机制
+
+**核心问题**：节点必须稳定在线提供服务，否则会损害用户体验，降低使用积极性，进而减少矿工收入，形成恶性循环。
+
+```
+恶性循环:
+节点不稳定 → 用户体验差 → 使用减少 → 交易费减少 → 矿工收入降低 → 更少人运营节点
+                                    ↑                                    |
+                                    +------------------------------------+
+
+良性循环 (目标):
+节点稳定 → 用户体验好 → 使用增加 → 交易费增加 → 矿工收入提高 → 更多人运营节点
+                                    ↑                                    |
+                                    +------------------------------------+
+```
+
+#### SGX 签名心跳机制
+
+利用 SGX enclave 的签名能力，节点定期发送可验证的心跳消息：
+
+```go
+// consensus/sgx/heartbeat.go
+package sgx
+
+// Heartbeat SGX 签名心跳消息
+type Heartbeat struct {
+    NodeID      common.Hash   // 节点标识
+    Timestamp   uint64        // 心跳时间戳（Unix 秒）
+    BlockHeight uint64        // 当前区块高度
+    Challenge   [32]byte      // 随机挑战值（防重放）
+    SGXQuote    []byte        // SGX 远程证明 Quote
+    Signature   []byte        // enclave 内私钥签名
+}
+
+// HeartbeatManager 心跳管理器
+type HeartbeatManager struct {
+    sgxAttestor   *SGXAttestor
+    peers         map[common.Hash]*PeerHeartbeatState
+    config        *HeartbeatConfig
+    
+    // 心跳记录（用于计算在线率）
+    heartbeatLog  map[common.Hash][]HeartbeatRecord
+}
+
+// HeartbeatConfig 心跳配置
+type HeartbeatConfig struct {
+    Interval          time.Duration // 心跳间隔，默认 30 秒
+    Timeout           time.Duration // 心跳超时，默认 90 秒（3 个间隔）
+    WindowSize        int           // 统计窗口大小，默认 1000 个心跳
+    MinObservers      int           // 最少观测者数量，默认 3
+    QuoteRefreshRate  int           // SGX Quote 刷新频率，默认每 100 个心跳
+}
+
+// GenerateHeartbeat 生成 SGX 签名心跳
+func (m *HeartbeatManager) GenerateHeartbeat() (*Heartbeat, error) {
+    // 1. 获取当前状态
+    now := uint64(time.Now().Unix())
+    blockHeight := m.chain.CurrentBlock().Number().Uint64()
+    
+    // 2. 生成随机挑战值（防重放攻击）
+    var challenge [32]byte
+    if _, err := rand.Read(challenge[:]); err != nil {
+        return nil, err
+    }
+    
+    // 3. 构造心跳数据
+    hb := &Heartbeat{
+        NodeID:      m.nodeID,
+        Timestamp:   now,
+        BlockHeight: blockHeight,
+        Challenge:   challenge,
+    }
+    
+    // 4. 在 SGX enclave 内签名
+    dataToSign := m.serializeHeartbeatData(hb)
+    signature, err := m.sgxAttestor.SignInEnclave(dataToSign)
+    if err != nil {
+        return nil, err
+    }
+    hb.Signature = signature
+    
+    // 5. 定期附加 SGX Quote（证明 enclave 身份）
+    if m.shouldRefreshQuote() {
+        quote, err := m.sgxAttestor.GenerateQuote(dataToSign)
+        if err != nil {
+            return nil, err
+        }
+        hb.SGXQuote = quote
+    }
+    
+    return hb, nil
+}
+
+// VerifyHeartbeat 验证心跳消息
+func (m *HeartbeatManager) VerifyHeartbeat(hb *Heartbeat) error {
+    // 1. 验证时间戳（不能太旧或太新）
+    now := uint64(time.Now().Unix())
+    if hb.Timestamp < now-60 || hb.Timestamp > now+10 {
+        return ErrInvalidTimestamp
+    }
+    
+    // 2. 验证签名
+    dataToVerify := m.serializeHeartbeatData(hb)
+    if !m.verifySignature(hb.NodeID, dataToVerify, hb.Signature) {
+        return ErrInvalidSignature
+    }
+    
+    // 3. 如果包含 SGX Quote，验证 Quote
+    if len(hb.SGXQuote) > 0 {
+        if err := m.sgxAttestor.VerifyQuote(hb.SGXQuote, dataToVerify); err != nil {
+            return fmt.Errorf("invalid SGX quote: %w", err)
+        }
+    }
+    
+    // 4. 检查重放攻击（挑战值不能重复）
+    if m.isReplayedChallenge(hb.NodeID, hb.Challenge) {
+        return ErrReplayAttack
+    }
+    
+    return nil
+}
+```
+
+**SGX 签名心跳的安全性**：
+
+| 攻击类型 | 防护机制 |
+|----------|----------|
+| 伪造心跳 | SGX enclave 内签名，无法在 enclave 外伪造 |
+| 重放攻击 | 随机挑战值 + 时间戳验证 |
+| 时间欺骗 | 多节点观测 + 时间戳范围检查 |
+| 身份冒充 | SGX Quote 验证 MRENCLAVE |
+
+#### 多节点共识观测
+
+单个节点的观测可能不准确（网络分区、恶意报告），因此采用多节点共识：
+
+```go
+// consensus/sgx/uptime_observer.go
+package sgx
+
+// UptimeObservation 单次在线观测记录
+type UptimeObservation struct {
+    ObserverID  common.Hash // 观测者节点 ID
+    TargetID    common.Hash // 被观测节点 ID
+    Timestamp   uint64      // 观测时间
+    IsOnline    bool        // 是否在线
+    ResponseMs  uint32      // 响应时间（毫秒）
+    Signature   []byte      // 观测者签名
+}
+
+// UptimeConsensus 在线率共识计算
+type UptimeConsensus struct {
+    observations map[common.Hash][]UptimeObservation // 按目标节点分组
+    config       *ConsensusConfig
+}
+
+// ConsensusConfig 共识配置
+type ConsensusConfig struct {
+    MinObservers        int     // 最少观测者数量，默认 3
+    ConsensusThreshold  float64 // 共识阈值，默认 0.67 (2/3)
+    ObservationWindow   time.Duration // 观测窗口，默认 1 小时
+}
+
+// CalculateUptimeScore 计算节点在线率得分
+func (c *UptimeConsensus) CalculateUptimeScore(nodeID common.Hash) (uint64, error) {
+    observations := c.getRecentObservations(nodeID)
+    
+    // 1. 检查观测者数量
+    observers := c.getUniqueObservers(observations)
+    if len(observers) < c.config.MinObservers {
+        return 0, ErrInsufficientObservers
+    }
+    
+    // 2. 按时间槽分组观测结果
+    timeSlots := c.groupByTimeSlot(observations)
+    
+    // 3. 对每个时间槽计算共识结果
+    var onlineSlots, totalSlots int
+    for _, slotObs := range timeSlots {
+        totalSlots++
+        
+        // 计算该时间槽的在线观测比例
+        onlineCount := 0
+        for _, obs := range slotObs {
+            if obs.IsOnline {
+                onlineCount++
+            }
+        }
+        
+        // 如果超过 2/3 观测者认为在线，则该时间槽计为在线
+        if float64(onlineCount)/float64(len(slotObs)) >= c.config.ConsensusThreshold {
+            onlineSlots++
+        }
+    }
+    
+    // 4. 计算在线率得分 (0-10000)
+    if totalSlots == 0 {
+        return 0, nil
+    }
+    score := uint64(onlineSlots * 10000 / totalSlots)
+    
+    return score, nil
+}
+```
+
+**多节点共识的优势**：
+
+```
+单节点观测问题:
+节点 A 观测节点 B → A 可能因网络问题误判 B 离线
+                 → A 可能恶意报告 B 离线
+
+多节点共识解决:
+节点 A ─┐
+节点 C ─┼─→ 共识: 2/3 以上认为在线 → 判定为在线
+节点 D ─┘
+
+防串谋机制:
+- 观测者必须是活跃节点（有交易处理记录）
+- 观测结果需要签名（可追溯责任）
+- 异常观测模式会被检测（如某节点总是报告他人离线）
+```
+
+#### 交易参与追踪
+
+**重要说明**：X Chain 采用按需出块机制（有交易才出块），因此不能使用"出块频率"或"出块数量"作为节点贡献的衡量标准。正确的衡量方式是**交易参与比例**，即节点处理的交易数量占网络总交易数量的比例。
+
+```go
+// consensus/sgx/tx_participation_tracker.go
+package sgx
+
+// TxParticipationTracker 交易参与追踪器
+type TxParticipationTracker struct {
+    participationLog map[common.Hash][]TxParticipationRecord
+    networkStats     *NetworkTxStats
+    config           *ParticipationConfig
+}
+
+// TxParticipationRecord 交易参与记录
+type TxParticipationRecord struct {
+    NodeID      common.Hash
+    TxHash      common.Hash
+    BlockNumber uint64
+    Timestamp   uint64
+    GasUsed     uint64
+}
+
+// NetworkTxStats 网络交易统计
+type NetworkTxStats struct {
+    TotalTxCount    uint64    // 统计窗口内的总交易数
+    TotalGasUsed    uint64    // 统计窗口内的总 Gas 消耗
+    WindowStart     uint64    // 统计窗口开始时间
+    WindowEnd       uint64    // 统计窗口结束时间
+}
+
+// ParticipationConfig 参与追踪配置
+type ParticipationConfig struct {
+    WindowDuration    time.Duration // 统计窗口时长，默认 7 天
+    MinTxForScore     uint64        // 计算得分的最小交易数，默认 10
+}
+
+// CalculateParticipationScore 计算交易参与得分
+func (t *TxParticipationTracker) CalculateParticipationScore(nodeID common.Hash) uint64 {
+    records := t.getRecentRecords(nodeID)
+    
+    if len(records) < int(t.config.MinTxForScore) {
+        return 0 // 参与交易太少，无法评估
+    }
+    
+    var totalScore uint64
+    
+    // 1. 交易数量参与比例得分（占 60%）
+    nodeTxCount := uint64(len(records))
+    networkTxCount := t.networkStats.TotalTxCount
+    if networkTxCount > 0 {
+        // 计算节点处理的交易占网络总交易的比例
+        // 乘以节点数量进行归一化（假设理想情况下每个节点处理相等比例的交易）
+        activeNodes := t.getActiveNodeCount()
+        expectedShare := networkTxCount / activeNodes
+        if expectedShare > 0 {
+            participationScore := min(nodeTxCount*10000/expectedShare, 10000)
+            totalScore += participationScore * 60 / 100
+        }
+    }
+    
+    // 2. Gas 贡献比例得分（占 40%）
+    // 处理高 Gas 交易说明节点承担了更多计算负载
+    nodeGasUsed := t.calculateNodeGasUsed(records)
+    networkGasUsed := t.networkStats.TotalGasUsed
+    if networkGasUsed > 0 {
+        activeNodes := t.getActiveNodeCount()
+        expectedGasShare := networkGasUsed / activeNodes
+        if expectedGasShare > 0 {
+            gasScore := min(nodeGasUsed*10000/expectedGasShare, 10000)
+            totalScore += gasScore * 40 / 100
+        }
+    }
+    
+    return totalScore
+}
+```
+
+#### 交易响应时间追踪
+
+测量节点处理交易的响应速度：
+
+```go
+// consensus/sgx/response_tracker.go
+package sgx
+
+// ResponseTimeTracker 响应时间追踪器
+type ResponseTimeTracker struct {
+    responseLogs map[common.Hash][]ResponseRecord
+    config       *ResponseConfig
+}
+
+// ResponseRecord 响应记录
+type ResponseRecord struct {
+    NodeID       common.Hash
+    TxHash       common.Hash
+    SubmitTime   uint64 // 交易提交时间
+    ResponseTime uint64 // 收到响应时间
+    Success      bool   // 是否成功处理
+}
+
+// ResponseConfig 响应配置
+type ResponseConfig struct {
+    WindowSize      int           // 统计窗口大小，默认 100
+    ExcellentMs     uint32        // 优秀响应时间，默认 100ms
+    GoodMs          uint32        // 良好响应时间，默认 500ms
+    AcceptableMs    uint32        // 可接受响应时间，默认 2000ms
+}
+
+// CalculateResponseScore 计算响应得分
+func (t *ResponseTimeTracker) CalculateResponseScore(nodeID common.Hash) uint64 {
+    records := t.getRecentRecords(nodeID)
+    
+    if len(records) == 0 {
+        return 5000 // 无记录时给中等分数
+    }
+    
+    var totalScore uint64
+    var validCount int
+    
+    for _, record := range records {
+        if !record.Success {
+            continue // 失败的不计入响应时间
+        }
+        
+        validCount++
+        responseMs := uint32((record.ResponseTime - record.SubmitTime) * 1000)
+        
+        // 根据响应时间计算得分
+        var score uint64
+        switch {
+        case responseMs <= t.config.ExcellentMs:
+            score = 10000 // 优秀
+        case responseMs <= t.config.GoodMs:
+            score = 8000 // 良好
+        case responseMs <= t.config.AcceptableMs:
+            score = 6000 // 可接受
+        default:
+            score = 3000 // 较慢
+        }
+        
+        totalScore += score
+    }
+    
+    if validCount == 0 {
+        return 5000
+    }
+    
+    return totalScore / uint64(validCount)
+}
+```
+
+#### 综合在线率计算
+
+将以上四种衡量机制综合计算：
+
+```go
+// consensus/sgx/uptime_calculator.go
+package sgx
+
+// UptimeCalculator 综合在线率计算器
+type UptimeCalculator struct {
+    heartbeatMgr        *HeartbeatManager
+    consensusMgr        *UptimeConsensus
+    txParticipation     *TxParticipationTracker
+    responseTracker     *ResponseTimeTracker
+    config              *UptimeConfig
+}
+
+// UptimeConfig 在线率计算配置
+type UptimeConfig struct {
+    // 权重配置（总和 = 100）
+    HeartbeatWeight       uint8 // SGX 心跳权重，默认 40
+    ConsensusWeight       uint8 // 多节点共识权重，默认 30
+    TxParticipationWeight uint8 // 交易参与权重，默认 20
+    ResponseWeight        uint8 // 响应时间权重，默认 10
+}
+
+// CalculateComprehensiveUptime 计算综合在线率
+func (c *UptimeCalculator) CalculateComprehensiveUptime(nodeID common.Hash) uint64 {
+    cfg := c.config
+    
+    // 1. SGX 心跳得分
+    heartbeatScore := c.heartbeatMgr.GetHeartbeatScore(nodeID)
+    
+    // 2. 多节点共识得分
+    consensusScore, _ := c.consensusMgr.CalculateUptimeScore(nodeID)
+    
+    // 3. 交易参与得分
+    txParticipationScore := c.txParticipation.CalculateParticipationScore(nodeID)
+    
+    // 4. 响应时间得分
+    responseScore := c.responseTracker.CalculateResponseScore(nodeID)
+    
+    // 5. 加权计算
+    totalScore := (heartbeatScore * uint64(cfg.HeartbeatWeight) +
+                   consensusScore * uint64(cfg.ConsensusWeight) +
+                   txParticipationScore * uint64(cfg.TxParticipationWeight) +
+                   responseScore * uint64(cfg.ResponseWeight)) / 100
+    
+    return totalScore
+}
+```
+
+**衡量机制总结**：
+
+| 机制 | 权重 | 衡量内容 | 防伪造方式 |
+|------|------|----------|------------|
+| SGX 签名心跳 | 40% | 节点是否定期发送心跳 | SGX enclave 签名 + Quote |
+| 多节点共识 | 30% | 多个节点观测的共识结果 | 2/3 共识 + 签名追溯 |
+| 交易参与 | 20% | 处理的交易数量和 Gas 贡献比例 | 区块链不可篡改记录 |
+| 响应时间 | 10% | 交易处理响应速度 | 交易哈希 + 时间戳 |
+
+**为什么不使用"出块数量"作为衡量标准**：
+
+X Chain 采用按需出块机制，只有在有用户交易时才会出块。这意味着出块频率完全取决于网络交易量，而不是节点的在线状态或贡献度。因此，使用"交易参与比例"（节点处理的交易数量占网络总交易数量的比例）更能准确反映节点的实际贡献。
+
+### 信誉系统设计
+
+```go
+// consensus/sgx/reputation.go
+package sgx
+
+// NodeReputation 节点信誉数据
+type NodeReputation struct {
+    NodeID          common.Hash   // 节点标识
+    UptimeScore     uint64        // 在线时长得分 (0-10000, 代表 0%-100%)
+    ResponseScore   uint64        // 响应速度得分
+    SuccessRate     uint64        // 交易处理成功率
+    TotalTxProcessed uint64       // 累计处理的交易数
+    LastActiveTime  uint64        // 最后活跃时间戳
+    PenaltyCount    uint64        // 惩罚次数
+    ReputationScore uint64        // 综合信誉分 (0-10000)
+}
+
+// ReputationManager 信誉管理器
+type ReputationManager struct {
+    reputations map[common.Hash]*NodeReputation
+    config      *ReputationConfig
+}
+
+// ReputationConfig 信誉系统配置
+type ReputationConfig struct {
+    // 权重配置 (总和 = 100)
+    UptimeWeight      uint8  // 在线时长权重，默认 40
+    ResponseWeight    uint8  // 响应速度权重，默认 20
+    SuccessRateWeight uint8  // 成功率权重，默认 30
+    HistoryWeight     uint8  // 历史记录权重，默认 10
+    
+    // 阈值配置
+    MinUptimeForReward    uint64        // 获得奖励的最低在线率，默认 95%
+    PenaltyThreshold      uint64        // 触发惩罚的在线率阈值，默认 80%
+    RecoveryPeriod        time.Duration // 惩罚恢复期，默认 24 小时
+}
+
+// CalculateReputationScore 计算综合信誉分
+func (m *ReputationManager) CalculateReputationScore(r *NodeReputation) uint64 {
+    cfg := m.config
+    
+    // 加权计算
+    score := (r.UptimeScore * uint64(cfg.UptimeWeight) +
+              r.ResponseScore * uint64(cfg.ResponseWeight) +
+              r.SuccessRate * uint64(cfg.SuccessRateWeight) +
+              m.calculateHistoryScore(r) * uint64(cfg.HistoryWeight)) / 100
+    
+    // 惩罚扣分
+    if r.PenaltyCount > 0 {
+        penaltyDeduction := r.PenaltyCount * 500 // 每次惩罚扣 5%
+        if penaltyDeduction > score {
+            score = 0
+        } else {
+            score -= penaltyDeduction
+        }
+    }
+    
+    return score
+}
+
+// UpdateUptime 更新在线时长
+func (m *ReputationManager) UpdateUptime(nodeID common.Hash, isOnline bool) {
+    r := m.getOrCreateReputation(nodeID)
+    
+    now := uint64(time.Now().Unix())
+    
+    if isOnline {
+        // 在线：增加得分
+        r.UptimeScore = min(r.UptimeScore + 1, 10000)
+        r.LastActiveTime = now
+    } else {
+        // 离线：减少得分
+        if r.UptimeScore > 10 {
+            r.UptimeScore -= 10 // 离线惩罚更重
+        } else {
+            r.UptimeScore = 0
+        }
+    }
+    
+    r.ReputationScore = m.CalculateReputationScore(r)
+}
+```
+
+#### 交易费加权分配
+
+高信誉节点获得更高比例的交易费：
+
+```go
+// 交易费分配策略
+type FeeDistribution struct {
+    // 基础费用分配
+    BaseFee *big.Int
+    
+    // 信誉加权系数
+    ReputationMultiplier func(score uint64) *big.Int
+}
+
+// CalculateFeeShare 计算节点的交易费份额
+func (d *FeeDistribution) CalculateFeeShare(
+    totalFee *big.Int,
+    nodeReputation uint64,
+    allNodes []*NodeReputation,
+) *big.Int {
+    // 计算所有节点的加权总分
+    var totalWeightedScore uint64
+    for _, node := range allNodes {
+        totalWeightedScore += d.getWeightedScore(node.ReputationScore)
+    }
+    
+    if totalWeightedScore == 0 {
+        return big.NewInt(0)
+    }
+    
+    // 按加权比例分配
+    nodeWeightedScore := d.getWeightedScore(nodeReputation)
+    share := new(big.Int).Mul(totalFee, big.NewInt(int64(nodeWeightedScore)))
+    share.Div(share, big.NewInt(int64(totalWeightedScore)))
+    
+    return share
+}
+
+// getWeightedScore 获取加权得分（高信誉节点获得更高权重）
+func (d *FeeDistribution) getWeightedScore(reputationScore uint64) uint64 {
+    // 信誉分 >= 9000 (90%): 权重 x2.0
+    // 信誉分 >= 8000 (80%): 权重 x1.5
+    // 信誉分 >= 7000 (70%): 权重 x1.0
+    // 信誉分 < 7000: 权重 x0.5
+    
+    switch {
+    case reputationScore >= 9000:
+        return reputationScore * 2
+    case reputationScore >= 8000:
+        return reputationScore * 3 / 2
+    case reputationScore >= 7000:
+        return reputationScore
+    default:
+        return reputationScore / 2
+    }
+}
+```
+
+### 惩罚机制
+
+```go
+// PenaltyManager 惩罚管理器
+type PenaltyManager struct {
+    reputationMgr *ReputationManager
+    config        *PenaltyConfig
+}
+
+// PenaltyConfig 惩罚配置
+type PenaltyConfig struct {
+    // 离线惩罚
+    OfflineThreshold   time.Duration // 离线多久触发惩罚，默认 10 分钟
+    OfflinePenalty     uint64        // 离线惩罚扣分，默认 500 (5%)
+    
+    // 频繁离线惩罚
+    FrequentOfflineCount    int           // 频繁离线次数阈值，默认 3 次/天
+    FrequentOfflinePenalty  uint64        // 频繁离线惩罚，默认 1000 (10%)
+    
+    // 恢复机制
+    RecoveryRate       uint64        // 每小时恢复的惩罚分，默认 50
+    MaxPenaltyCount    uint64        // 最大惩罚次数（超过则暂时排除），默认 10
+}
+
+// CheckAndPenalize 检查并执行惩罚
+func (p *PenaltyManager) CheckAndPenalize(nodeID common.Hash) {
+    r := p.reputationMgr.getReputation(nodeID)
+    if r == nil {
+        return
+    }
+    
+    now := uint64(time.Now().Unix())
+    offlineDuration := now - r.LastActiveTime
+    
+    // 检查是否超过离线阈值
+    if offlineDuration > uint64(p.config.OfflineThreshold.Seconds()) {
+        r.PenaltyCount++
+        r.ReputationScore = p.reputationMgr.CalculateReputationScore(r)
+        
+        log.Warn("Node penalized for being offline",
+            "nodeID", nodeID,
+            "offlineDuration", offlineDuration,
+            "penaltyCount", r.PenaltyCount)
+    }
+    
+    // 检查是否应该暂时排除
+    if r.PenaltyCount >= p.config.MaxPenaltyCount {
+        p.excludeNode(nodeID)
+    }
+}
+
+// excludeNode 暂时排除节点（不参与出块）
+func (p *PenaltyManager) excludeNode(nodeID common.Hash) {
+    log.Warn("Node excluded from block production due to excessive penalties",
+        "nodeID", nodeID)
+    // 节点仍可同步数据，但不能出块
+    // 需要连续在线一段时间后才能恢复
+}
+```
+
+### 在线奖励机制
+
+**核心问题**：X Chain 采用按需出块机制，如果网络交易量不足，矿工激励不足，会导致矿工数量自动缩减，形成恶性循环。
+
+```
+问题分析:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  按需出块的激励困境:                                                     │
+│                                                                         │
+│  交易量少 → 出块少 → 矿工收入低 → 矿工退出 → 节点减少                   │
+│       ↑                                                    |            │
+│       +----------------------------------------------------+            │
+│                                                                         │
+│  目标: 即使交易量少，也要维持足够的矿工数量保证网络安全                  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**解决方案**：将挖矿定义为"长期稳定在线"，基于在线时间和在线质量定时发放"在线奖励"，但确保交易收益远高于在线奖励。
+
+```go
+// consensus/sgx/online_reward.go
+package sgx
+
+// OnlineRewardConfig 在线奖励配置
+type OnlineRewardConfig struct {
+    // 在线奖励发放间隔（默认 1 小时）
+    RewardInterval      time.Duration
+    
+    // 基础在线奖励（每小时）
+    BaseOnlineReward    *big.Int
+    
+    // 在线质量加成（高质量在线可获得更高奖励）
+    QualityMultiplier   func(uptimeScore uint64) float64
+    
+    // 交易收益保护系数（确保交易收益远高于在线奖励）
+    // 任何交易的收益必须 >= 前 N 个空块最高在线奖励 × 此系数
+    TxRewardProtectionFactor  float64  // 默认 10.0
+    TxRewardProtectionBlocks  int      // 默认 10
+}
+
+// DefaultOnlineRewardConfig 默认配置
+func DefaultOnlineRewardConfig() *OnlineRewardConfig {
+    return &OnlineRewardConfig{
+        RewardInterval:           1 * time.Hour,
+        BaseOnlineReward:         big.NewInt(1e15),  // 0.001 ETH/小时
+        TxRewardProtectionFactor: 10.0,              // 交易收益 >= 10 × 最高在线奖励
+        TxRewardProtectionBlocks: 10,                // 参考前 10 个空块
+        QualityMultiplier: func(uptimeScore uint64) float64 {
+            // 在线质量得分 >= 9500: 1.5x 奖励
+            // 在线质量得分 >= 9000: 1.2x 奖励
+            // 在线质量得分 >= 8000: 1.0x 奖励
+            // 在线质量得分 < 8000: 0.5x 奖励
+            switch {
+            case uptimeScore >= 9500:
+                return 1.5
+            case uptimeScore >= 9000:
+                return 1.2
+            case uptimeScore >= 8000:
+                return 1.0
+            default:
+                return 0.5
+            }
+        },
+    }
+}
+
+// OnlineRewardManager 在线奖励管理器
+type OnlineRewardManager struct {
+    config          *OnlineRewardConfig
+    uptimeCalc      *UptimeCalculator
+    reputationMgr   *ReputationManager
+    
+    // 记录最近的在线奖励（用于交易收益保护计算）
+    recentOnlineRewards []*OnlineRewardRecord
+}
+
+// OnlineRewardRecord 在线奖励记录
+type OnlineRewardRecord struct {
+    NodeID      common.Hash
+    Timestamp   uint64
+    Reward      *big.Int
+    UptimeScore uint64
+}
+
+// CalculateOnlineReward 计算节点的在线奖励
+func (m *OnlineRewardManager) CalculateOnlineReward(nodeID common.Hash) *big.Int {
+    // 1. 获取节点的在线质量得分
+    uptimeScore := m.uptimeCalc.CalculateComprehensiveUptime(nodeID)
+    
+    // 2. 检查是否满足最低在线要求
+    if uptimeScore < 8000 {  // 低于 80% 在线率不发放奖励
+        return big.NewInt(0)
+    }
+    
+    // 3. 计算质量加成
+    multiplier := m.config.QualityMultiplier(uptimeScore)
+    
+    // 4. 计算最终奖励
+    reward := new(big.Int).Set(m.config.BaseOnlineReward)
+    reward.Mul(reward, big.NewInt(int64(multiplier * 100)))
+    reward.Div(reward, big.NewInt(100))
+    
+    return reward
+}
+
+// GetMinTxReward 获取最小交易收益（确保交易收益远高于在线奖励）
+// 核心原则: 一旦有交易，交易获取的收益必须远高于前 N 个空块的最高收益
+func (m *OnlineRewardManager) GetMinTxReward() *big.Int {
+    // 1. 获取最近 N 个在线奖励中的最高值
+    maxOnlineReward := big.NewInt(0)
+    recentCount := min(len(m.recentOnlineRewards), m.config.TxRewardProtectionBlocks)
+    
+    for i := 0; i < recentCount; i++ {
+        record := m.recentOnlineRewards[len(m.recentOnlineRewards)-1-i]
+        if record.Reward.Cmp(maxOnlineReward) > 0 {
+            maxOnlineReward = new(big.Int).Set(record.Reward)
+        }
+    }
+    
+    // 2. 计算最小交易收益 = 最高在线奖励 × 保护系数
+    minTxReward := new(big.Int).Mul(
+        maxOnlineReward,
+        big.NewInt(int64(m.config.TxRewardProtectionFactor)),
+    )
+    
+    return minTxReward
+}
+
+// DistributeOnlineRewards 定时发放在线奖励
+func (m *OnlineRewardManager) DistributeOnlineRewards(activeNodes []common.Hash) map[common.Hash]*big.Int {
+    rewards := make(map[common.Hash]*big.Int)
+    
+    for _, nodeID := range activeNodes {
+        reward := m.CalculateOnlineReward(nodeID)
+        if reward.Sign() > 0 {
+            rewards[nodeID] = reward
+            
+            // 记录奖励（用于交易收益保护计算）
+            m.recentOnlineRewards = append(m.recentOnlineRewards, &OnlineRewardRecord{
+                NodeID:      nodeID,
+                Timestamp:   uint64(time.Now().Unix()),
+                Reward:      reward,
+                UptimeScore: m.uptimeCalc.CalculateComprehensiveUptime(nodeID),
+            })
+        }
+    }
+    
+    // 保留最近的记录
+    if len(m.recentOnlineRewards) > 1000 {
+        m.recentOnlineRewards = m.recentOnlineRewards[len(m.recentOnlineRewards)-1000:]
+    }
+    
+    return rewards
+}
+```
+
+**在线奖励机制的核心原则**：
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  核心原则: 交易最重要                                                    │
+│                                                                         │
+│  1. 在线奖励是"保底收入"                                                │
+│     - 即使没有交易，长期高质量在线的节点也能获得收益                     │
+│     - 防止矿工因收入不稳定而退出                                        │
+│                                                                         │
+│  2. 交易收益必须远高于在线奖励                                          │
+│     - 任何交易的收益 >= 前 10 个空块最高在线奖励 × 10                   │
+│     - 确保矿工有强烈动机处理交易                                        │
+│                                                                         │
+│  3. 在线质量影响奖励                                                    │
+│     - 高质量在线（响应快、稳定）获得更高奖励                            │
+│     - 激励矿工提供优质服务                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+收益对比示例:
+┌─────────────────────────────────────────────────────────────────────────┐
+│  假设: 基础在线奖励 = 0.001 ETH/小时                                    │
+│                                                                         │
+│  高质量在线节点 (95%+ 在线率):                                          │
+│  - 在线奖励: 0.001 × 1.5 = 0.0015 ETH/小时                             │
+│  - 24 小时收入: 0.036 ETH                                               │
+│                                                                         │
+│  一笔交易的最低收益:                                                    │
+│  - 最小交易收益 = 0.0015 × 10 = 0.015 ETH                              │
+│  - 一笔交易 >= 10 小时的在线奖励                                        │
+│                                                                         │
+│  结论: 矿工有强烈动机处理交易，同时在没有交易时也有保底收入              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**激励效果**：
+
+| 场景 | 矿工行为 | 收益来源 |
+|------|----------|----------|
+| 交易量充足 | 积极处理交易 | 主要来自交易费（远高于在线奖励） |
+| 交易量不足 | 保持高质量在线 | 在线奖励（保底收入） |
+| 长期稳定运营 | 持续提供服务 | 在线奖励 + 交易费 + 历史贡献加成 |
+
+### 节点优先级排序
+
+用户提交交易时，优先选择高信誉节点：
+
+```go
+// NodeSelector 节点选择器
+type NodeSelector struct {
+    reputationMgr *ReputationManager
+    nodes         []*NodeInfo
+}
+
+// SelectBestNodes 选择最佳节点（按信誉排序）
+func (s *NodeSelector) SelectBestNodes(count int) []*NodeInfo {
+    // 获取所有在线节点
+    onlineNodes := s.getOnlineNodes()
+    
+    // 按信誉分排序
+    sort.Slice(onlineNodes, func(i, j int) bool {
+        ri := s.reputationMgr.getReputation(onlineNodes[i].ID)
+        rj := s.reputationMgr.getReputation(onlineNodes[j].ID)
+        return ri.ReputationScore > rj.ReputationScore
+    })
+    
+    // 返回前 N 个高信誉节点
+    if len(onlineNodes) > count {
+        return onlineNodes[:count]
+    }
+    return onlineNodes
+}
+
+// GetNodePriority 获取节点处理交易的优先级
+func (s *NodeSelector) GetNodePriority(nodeID common.Hash) int {
+    r := s.reputationMgr.getReputation(nodeID)
+    if r == nil {
+        return 0
+    }
+    
+    // 信誉分 >= 9000: 优先级 3 (最高)
+    // 信誉分 >= 8000: 优先级 2
+    // 信誉分 >= 7000: 优先级 1
+    // 信誉分 < 7000: 优先级 0 (最低)
+    
+    switch {
+    case r.ReputationScore >= 9000:
+        return 3
+    case r.ReputationScore >= 8000:
+        return 2
+    case r.ReputationScore >= 7000:
+        return 1
+    default:
+        return 0
+    }
+}
+```
+
+### 多维度差异化竞争机制
+
+**核心问题**：如果所有节点都稳定在线，仅靠在线率无法产生差异化竞争，激励机制会触及天花板。
+
+**解决方案**：稳定在线是"入场券"，不是"天花板"。节点必须在多个维度竞争才能获得更高收益。
+
+```
+激励模型架构:
+┌─────────────────────────────────────────────────────────────────────┐
+│                        收益 = 基础收益 + 竞争收益                    │
+├─────────────────────────────────────────────────────────────────────┤
+│  基础层（入场券）                                                    │
+│  ├─ 稳定在线率 >= 95%  ───────────────────────────────────────────┐ │
+│  │  满足条件才能参与出块和获得收益                                 │ │
+│  └─────────────────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────────────────┤
+│  竞争层（无上限）                                                    │
+│  ├─ 服务质量维度 ─────────────────────────────────────────────────┐ │
+│  │  响应速度、吞吐量、成功率                                       │ │
+│  ├─ 交易量维度 ───────────────────────────────────────────────────┤ │
+│  │  处理更多交易 = 更多收入（直接激励）                            │ │
+│  ├─ 增值服务维度 ─────────────────────────────────────────────────┤ │
+│  │  API 服务、数据索引、优先处理等                                 │ │
+│  └─ 历史贡献维度 ─────────────────────────────────────────────────┘ │
+│     运营时长、累计处理交易数、网络贡献                               │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### 服务质量竞争
+
+即使所有节点都稳定在线，服务质量仍可产生差异：
+
+```go
+// consensus/sgx/service_quality.go
+package sgx
+
+// ServiceQualityMetrics 服务质量指标
+type ServiceQualityMetrics struct {
+    NodeID              common.Hash
+    
+    // 响应速度指标
+    AvgResponseTimeMs   uint32    // 平均响应时间（毫秒）
+    P95ResponseTimeMs   uint32    // P95 响应时间
+    P99ResponseTimeMs   uint32    // P99 响应时间
+    
+    // 吞吐量指标
+    TxPerSecond         float64   // 每秒处理交易数
+    PeakTxPerSecond     float64   // 峰值吞吐量
+    
+    // 成功率指标
+    SuccessRate         float64   // 交易处理成功率 (0-1)
+    ErrorRate           float64   // 错误率
+    
+    // 可用性指标
+    AvailabilityRate    float64   // 可用性 (0-1)
+}
+
+// ServiceQualityScorer 服务质量评分器
+type ServiceQualityScorer struct {
+    config *QualityConfig
+}
+
+// QualityConfig 质量评分配置
+type QualityConfig struct {
+    // 响应时间阈值（毫秒）
+    ExcellentResponseMs  uint32  // 优秀: < 50ms
+    GoodResponseMs       uint32  // 良好: < 200ms
+    AcceptableResponseMs uint32  // 可接受: < 1000ms
+    
+    // 吞吐量阈值
+    HighThroughput       float64 // 高吞吐: > 100 tx/s
+    MediumThroughput     float64 // 中吞吐: > 50 tx/s
+    
+    // 权重配置
+    ResponseWeight       uint8   // 响应时间权重，默认 40
+    ThroughputWeight     uint8   // 吞吐量权重，默认 30
+    SuccessRateWeight    uint8   // 成功率权重，默认 30
+}
+
+// CalculateQualityScore 计算服务质量得分 (0-10000)
+func (s *ServiceQualityScorer) CalculateQualityScore(m *ServiceQualityMetrics) uint64 {
+    cfg := s.config
+    
+    // 1. 响应时间得分
+    var responseScore uint64
+    switch {
+    case m.AvgResponseTimeMs <= cfg.ExcellentResponseMs:
+        responseScore = 10000
+    case m.AvgResponseTimeMs <= cfg.GoodResponseMs:
+        responseScore = 8000
+    case m.AvgResponseTimeMs <= cfg.AcceptableResponseMs:
+        responseScore = 6000
+    default:
+        responseScore = 3000
+    }
+    
+    // 2. 吞吐量得分
+    var throughputScore uint64
+    switch {
+    case m.TxPerSecond >= cfg.HighThroughput:
+        throughputScore = 10000
+    case m.TxPerSecond >= cfg.MediumThroughput:
+        throughputScore = 7000
+    default:
+        throughputScore = 4000
+    }
+    
+    // 3. 成功率得分
+    successScore := uint64(m.SuccessRate * 10000)
+    
+    // 4. 加权计算
+    totalScore := (responseScore * uint64(cfg.ResponseWeight) +
+                   throughputScore * uint64(cfg.ThroughputWeight) +
+                   successScore * uint64(cfg.SuccessRateWeight)) / 100
+    
+    return totalScore
+}
+```
+
+#### 交易量竞争
+
+处理更多交易直接带来更多收入，这是最直接的激励：
+
+```go
+// consensus/sgx/transaction_volume.go
+package sgx
+
+// TransactionVolumeTracker 交易量追踪器
+type TransactionVolumeTracker struct {
+    volumeLog map[common.Hash][]VolumeRecord
+    config    *VolumeConfig
+}
+
+// VolumeRecord 交易量记录
+type VolumeRecord struct {
+    NodeID      common.Hash
+    Period      uint64    // 统计周期（区块高度）
+    TxCount     uint64    // 交易数量
+    TotalGas    uint64    // 总 Gas 消耗
+    TotalFees   *big.Int  // 总交易费
+}
+
+// VolumeConfig 交易量配置
+type VolumeConfig struct {
+    WindowBlocks    uint64  // 统计窗口（区块数），默认 1000
+    BonusThreshold  uint64  // 奖励阈值（交易数），默认 10000
+    BonusMultiplier float64 // 奖励倍数，默认 1.5
+}
+
+// CalculateVolumeBonus 计算交易量奖励
+func (t *TransactionVolumeTracker) CalculateVolumeBonus(nodeID common.Hash) *big.Int {
+    records := t.getRecentRecords(nodeID)
+    
+    var totalTxCount uint64
+    totalFees := big.NewInt(0)
+    
+    for _, record := range records {
+        totalTxCount += record.TxCount
+        totalFees.Add(totalFees, record.TotalFees)
+    }
+    
+    // 基础收益 = 总交易费
+    bonus := new(big.Int).Set(totalFees)
+    
+    // 如果超过阈值，获得额外奖励
+    if totalTxCount >= t.config.BonusThreshold {
+        // 额外奖励 = 基础收益 * (倍数 - 1)
+        extraBonus := new(big.Int).Mul(bonus, big.NewInt(int64((t.config.BonusMultiplier-1)*100)))
+        extraBonus.Div(extraBonus, big.NewInt(100))
+        bonus.Add(bonus, extraBonus)
+    }
+    
+    return bonus
+}
+
+// GetMarketShare 获取节点市场份额
+func (t *TransactionVolumeTracker) GetMarketShare(nodeID common.Hash) float64 {
+    nodeVolume := t.getTotalVolume(nodeID)
+    networkVolume := t.getNetworkTotalVolume()
+    
+    if networkVolume == 0 {
+        return 0
+    }
+    
+    return float64(nodeVolume) / float64(networkVolume)
+}
+```
+
+**交易量激励的优势**：
+- 无上限：处理越多交易，收入越高
+- 直接激励：节点有动力吸引用户、提供更好服务
+- 市场驱动：用户自然选择服务更好的节点
+
+#### 增值服务竞争
+
+节点可以提供额外服务获得收入：
+
+```go
+// consensus/sgx/value_added_services.go
+package sgx
+
+// ValueAddedService 增值服务定义
+type ValueAddedService struct {
+    ServiceID   string    // 服务标识
+    Name        string    // 服务名称
+    Description string    // 服务描述
+    PricePerUse *big.Int  // 每次使用价格
+    IsEnabled   bool      // 是否启用
+}
+
+// 预定义增值服务
+var PredefinedServices = []ValueAddedService{
+    {
+        ServiceID:   "priority_tx",
+        Name:        "优先交易处理",
+        Description: "交易优先进入下一个区块",
+        PricePerUse: big.NewInt(1000000000), // 1 Gwei
+    },
+    {
+        ServiceID:   "fast_confirm",
+        Name:        "快速确认",
+        Description: "交易确认后立即通知",
+        PricePerUse: big.NewInt(500000000), // 0.5 Gwei
+    },
+    {
+        ServiceID:   "tx_history_api",
+        Name:        "交易历史 API",
+        Description: "查询历史交易记录",
+        PricePerUse: big.NewInt(100000000), // 0.1 Gwei
+    },
+    {
+        ServiceID:   "event_subscription",
+        Name:        "事件订阅",
+        Description: "订阅合约事件通知",
+        PricePerUse: big.NewInt(200000000), // 0.2 Gwei
+    },
+    {
+        ServiceID:   "data_indexing",
+        Name:        "数据索引服务",
+        Description: "提供高效的数据查询索引",
+        PricePerUse: big.NewInt(300000000), // 0.3 Gwei
+    },
+}
+
+// ValueAddedServiceManager 增值服务管理器
+type ValueAddedServiceManager struct {
+    services    map[string]*ValueAddedService
+    usageLog    map[common.Hash][]ServiceUsageRecord
+}
+
+// ServiceUsageRecord 服务使用记录
+type ServiceUsageRecord struct {
+    NodeID      common.Hash
+    ServiceID   string
+    UserAddress common.Address
+    Timestamp   uint64
+    Fee         *big.Int
+}
+
+// CalculateServiceRevenue 计算增值服务收入
+func (m *ValueAddedServiceManager) CalculateServiceRevenue(nodeID common.Hash, period time.Duration) *big.Int {
+    records := m.getRecentUsage(nodeID, period)
+    
+    totalRevenue := big.NewInt(0)
+    for _, record := range records {
+        totalRevenue.Add(totalRevenue, record.Fee)
+    }
+    
+    return totalRevenue
+}
+```
+
+#### 历史贡献竞争
+
+长期稳定运营的节点获得额外奖励：
+
+```go
+// consensus/sgx/historical_contribution.go
+package sgx
+
+// HistoricalContribution 历史贡献记录
+type HistoricalContribution struct {
+    NodeID              common.Hash
+    FirstActiveBlock    uint64        // 首次活跃区块
+    TotalTxProcessed    uint64        // 累计处理交易数
+    TotalGasProcessed   uint64        // 累计处理的 Gas
+    TotalUptime         time.Duration // 累计在线时长
+    ConsecutiveDays     uint64        // 连续在线天数
+    NetworkContribution uint64        // 网络贡献分（引入新用户等）
+}
+
+// HistoricalContributionScorer 历史贡献评分器
+type HistoricalContributionScorer struct {
+    config *ContributionConfig
+}
+
+// ContributionConfig 贡献评分配置
+type ContributionConfig struct {
+    // 运营时长奖励
+    DaysForBronze   uint64  // 铜牌: 30 天
+    DaysForSilver   uint64  // 银牌: 90 天
+    DaysForGold     uint64  // 金牌: 365 天
+    DaysForDiamond  uint64  // 钻石: 1000 天
+    
+    // 奖励倍数
+    BronzeMultiplier   float64 // 1.1x
+    SilverMultiplier   float64 // 1.2x
+    GoldMultiplier     float64 // 1.5x
+    DiamondMultiplier  float64 // 2.0x
+}
+
+// CalculateContributionMultiplier 计算历史贡献倍数
+func (s *HistoricalContributionScorer) CalculateContributionMultiplier(c *HistoricalContribution) float64 {
+    cfg := s.config
+    
+    // 根据连续在线天数确定等级
+    switch {
+    case c.ConsecutiveDays >= cfg.DaysForDiamond:
+        return cfg.DiamondMultiplier // 2.0x
+    case c.ConsecutiveDays >= cfg.DaysForGold:
+        return cfg.GoldMultiplier // 1.5x
+    case c.ConsecutiveDays >= cfg.DaysForSilver:
+        return cfg.SilverMultiplier // 1.2x
+    case c.ConsecutiveDays >= cfg.DaysForBronze:
+        return cfg.BronzeMultiplier // 1.1x
+    default:
+        return 1.0 // 无奖励
+    }
+}
+
+// GetContributionTier 获取贡献等级
+func (s *HistoricalContributionScorer) GetContributionTier(c *HistoricalContribution) string {
+    cfg := s.config
+    
+    switch {
+    case c.ConsecutiveDays >= cfg.DaysForDiamond:
+        return "Diamond"
+    case c.ConsecutiveDays >= cfg.DaysForGold:
+        return "Gold"
+    case c.ConsecutiveDays >= cfg.DaysForSilver:
+        return "Silver"
+    case c.ConsecutiveDays >= cfg.DaysForBronze:
+        return "Bronze"
+    default:
+        return "None"
+    }
+}
+```
+
+#### 综合收益计算
+
+```go
+// consensus/sgx/comprehensive_reward.go
+package sgx
+
+// ComprehensiveRewardCalculator 综合收益计算器
+type ComprehensiveRewardCalculator struct {
+    uptimeCalc       *UptimeCalculator
+    qualityScorer    *ServiceQualityScorer
+    volumeTracker    *TransactionVolumeTracker
+    serviceManager   *ValueAddedServiceManager
+    contributionScorer *HistoricalContributionScorer
+    config           *RewardConfig
+}
+
+// RewardConfig 收益配置
+type RewardConfig struct {
+    MinUptimeForReward float64 // 最低在线率要求，默认 0.95 (95%)
+}
+
+// CalculateTotalReward 计算节点总收益
+func (c *ComprehensiveRewardCalculator) CalculateTotalReward(
+    nodeID common.Hash,
+    period time.Duration,
+) (*TotalReward, error) {
+    
+    // 1. 检查是否满足基础条件（入场券）
+    uptimeScore := c.uptimeCalc.CalculateComprehensiveUptime(nodeID)
+    if float64(uptimeScore)/10000 < c.config.MinUptimeForReward {
+        return &TotalReward{
+            NodeID:     nodeID,
+            IsEligible: false,
+            Reason:     "在线率不足 95%，不满足参与条件",
+        }, nil
+    }
+    
+    // 2. 计算交易费收入（基础收益）
+    txFeeRevenue := c.volumeTracker.CalculateVolumeBonus(nodeID)
+    
+    // 3. 计算增值服务收入
+    serviceRevenue := c.serviceManager.CalculateServiceRevenue(nodeID, period)
+    
+    // 4. 计算服务质量奖励
+    qualityMetrics := c.getQualityMetrics(nodeID)
+    qualityScore := c.qualityScorer.CalculateQualityScore(qualityMetrics)
+    qualityBonus := c.calculateQualityBonus(txFeeRevenue, qualityScore)
+    
+    // 5. 计算历史贡献倍数
+    contribution := c.getHistoricalContribution(nodeID)
+    contributionMultiplier := c.contributionScorer.CalculateContributionMultiplier(contribution)
+    
+    // 6. 计算总收益
+    // 总收益 = (交易费 + 增值服务 + 质量奖励) * 历史贡献倍数
+    baseReward := new(big.Int).Add(txFeeRevenue, serviceRevenue)
+    baseReward.Add(baseReward, qualityBonus)
+    
+    totalReward := new(big.Int).Mul(baseReward, big.NewInt(int64(contributionMultiplier*100)))
+    totalReward.Div(totalReward, big.NewInt(100))
+    
+    return &TotalReward{
+        NodeID:                 nodeID,
+        IsEligible:             true,
+        UptimeScore:            uptimeScore,
+        TxFeeRevenue:           txFeeRevenue,
+        ServiceRevenue:         serviceRevenue,
+        QualityBonus:           qualityBonus,
+        ContributionMultiplier: contributionMultiplier,
+        ContributionTier:       c.contributionScorer.GetContributionTier(contribution),
+        TotalReward:            totalReward,
+    }, nil
+}
+
+// TotalReward 总收益结构
+type TotalReward struct {
+    NodeID                 common.Hash
+    IsEligible             bool
+    Reason                 string
+    UptimeScore            uint64
+    TxFeeRevenue           *big.Int
+    ServiceRevenue         *big.Int
+    QualityBonus           *big.Int
+    ContributionMultiplier float64
+    ContributionTier       string
+    TotalReward            *big.Int
+}
+```
+
+#### 激励机制总结
+
+| 维度 | 类型 | 上限 | 激励效果 |
+|------|------|------|----------|
+| 稳定在线 | 入场券 | 95% 阈值 | 必须达到才能参与 |
+| 服务质量 | 竞争 | 无上限 | 更快响应 = 更高奖励 |
+| 交易量 | 竞争 | 无上限 | 更多交易 = 更多收入 |
+| 增值服务 | 竞争 | 无上限 | 更多服务 = 更多收入 |
+| 历史贡献 | 倍数 | 2.0x | 长期运营 = 收益翻倍 |
+
+**激励效果示例**：
+
+```
+场景：两个节点都 100% 在线
+
+节点 A（新节点）:
+- 在线率: 100% ✓ (满足入场条件)
+- 服务质量: 一般 (响应 500ms)
+- 交易量: 1000 tx/天
+- 增值服务: 无
+- 历史贡献: 10 天 (无等级)
+- 收益倍数: 1.0x
+- 日收益: 100 X
+
+节点 B（老节点）:
+- 在线率: 100% ✓ (满足入场条件)
+- 服务质量: 优秀 (响应 50ms) → +20% 质量奖励
+- 交易量: 5000 tx/天 → 5x 交易费
+- 增值服务: 3 项 → +30% 服务收入
+- 历史贡献: 400 天 (Gold) → 1.5x 倍数
+- 日收益: (500 + 100 + 30) * 1.5 = 945 X
+
+差距: 节点 B 收益是节点 A 的 9.45 倍
+```
+
+**这种设计确保**：
+1. 稳定在线是必要条件，但不是充分条件
+2. 即使所有节点都稳定在线，仍有多个维度可以竞争
+3. 长期运营的节点有明显优势，激励节点持续稳定运营
+4. 新节点可以通过提高服务质量和交易量快速追赶
+
+### 激励机制完整总结
+
+| 机制 | 目的 | 效果 |
+|------|------|------|
+| 信誉系统 | 跟踪节点稳定性 | 量化节点表现 |
+| 交易费加权 | 奖励稳定节点 | 高信誉节点收入更高 |
+| 惩罚机制 | 惩罚不稳定节点 | 降低不稳定节点收益 |
+| 优先级排序 | 引导用户选择 | 稳定节点获得更多交易 |
+| 暂时排除 | 保护网络质量 | 严重不稳定节点无法出块 |
+| 服务质量竞争 | 激励提升服务 | 更好服务 = 更高收益 |
+| 交易量竞争 | 激励吸引用户 | 更多交易 = 更多收入 |
+| 增值服务 | 激励创新 | 提供更多价值 = 更多收入 |
+| 历史贡献 | 激励长期运营 | 长期稳定 = 收益倍增 |
+
+**激励效果**：
+
+```
+节点稳定在线 → 信誉分提高 → 交易费加权提高 → 收入增加
+                         → 优先级提高 → 获得更多交易 → 收入增加
+
+节点频繁离线 → 信誉分降低 → 交易费加权降低 → 收入减少
+                         → 优先级降低 → 获得更少交易 → 收入减少
+                         → 惩罚累积 → 暂时排除 → 无收入
+
+所有节点都稳定在线时:
+节点 A (服务好) → 质量奖励高 → 用户选择多 → 交易量大 → 收入高
+节点 B (服务差) → 质量奖励低 → 用户选择少 → 交易量小 → 收入低
+```
+
+## 文件结构
+
+```
+consensus/sgx/
+├── consensus.go              # Engine 接口实现
+├── types.go                  # 数据结构定义
+├── block_producer.go         # 区块生产者
+├── on_demand.go              # 按需出块逻辑
+├── verify.go                 # 区块验证
+├── fork_choice.go            # 分叉选择
+├── reorg.go                  # 重组处理
+├── block_quality.go          # 区块质量评分器
+├── multi_producer_reward.go  # 多生产者收益分配
+├── heartbeat.go              # SGX 签名心跳机制
+├── uptime_observer.go        # 多节点在线率观测
+├── tx_participation_tracker.go # 交易参与追踪
+├── response_tracker.go       # 交易响应时间追踪
+├── uptime_calculator.go      # 综合在线率计算器
+├── reputation.go             # 信誉系统
+├── penalty.go                # 惩罚机制
+├── online_reward.go          # 在线奖励机制
+├── node_selector.go          # 节点优先级排序
+├── service_quality.go        # 服务质量评分器
+├── transaction_volume.go     # 交易量追踪器
+├── value_added_services.go   # 增值服务管理器
+├── historical_contribution.go # 历史贡献评分器
+├── comprehensive_reward.go   # 综合收益计算器
+├── producer_penalty.go       # 出块者惩罚机制
+├── api.go                    # RPC API
+├── config.go                 # 配置
+└── consensus_test.go         # 测试
+```
+
+## 单元测试指南
+
+### 区块生产测试
+
+```go
+// consensus/sgx/block_producer_test.go
+package sgx
+
+import (
+    "context"
+    "testing"
+    "time"
+)
+
+func TestBlockProduction(t *testing.T) {
+    // 创建 Mock 组件
+    attestor := NewMockAttestor()
+    txPool := NewMockTxPool()
+    chain := NewMockBlockChain()
+    
+    config := DefaultBlockProducerConfig()
+    producer := NewBlockProducer(config, attestor, txPool, chain)
+    
+    // 添加测试交易
+    txPool.AddTx(createTestTx())
+    
+    // 启动生产者
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    
+    producer.Start(ctx)
+    
+    // 等待区块生产
+    time.Sleep(2 * time.Second)
+    
+    // 验证区块已生产
+    if chain.CurrentBlock().NumberU64() == 0 {
+        t.Error("No block produced")
+    }
+}
+
+func TestOnDemandNoTx(t *testing.T) {
+    // 无交易时不应该出块
+    attestor := NewMockAttestor()
+    txPool := NewMockTxPool() // 空交易池
+    chain := NewMockBlockChain()
+    
+    config := DefaultBlockProducerConfig()
+    producer := NewBlockProducer(config, attestor, txPool, chain)
+    
+    ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+    defer cancel()
+    
+    producer.Start(ctx)
+    time.Sleep(2 * time.Second)
+    
+    // 验证没有新区块
+    if chain.CurrentBlock().NumberU64() != 0 {
+        t.Error("Block produced without transactions")
+    }
+}
+```
+
+### 区块验证测试
+
+```go
+// consensus/sgx/verify_test.go
+package sgx
+
+import (
+    "testing"
+    
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+func TestVerifyValidBlock(t *testing.T) {
+    engine := createTestEngine()
+    chain := NewMockChainReader()
+    
+    // 创建有效区块
+    block := createValidTestBlock(engine)
+    
+    // 验证应该通过
+    err := engine.VerifyHeader(chain, block.Header())
+    if err != nil {
+        t.Errorf("Valid block verification failed: %v", err)
+    }
+}
+
+func TestVerifyInvalidQuote(t *testing.T) {
+    engine := createTestEngine()
+    chain := NewMockChainReader()
+    
+    // 创建带无效 Quote 的区块
+    block := createBlockWithInvalidQuote()
+    
+    // 验证应该失败
+    err := engine.VerifyHeader(chain, block.Header())
+    if err == nil {
+        t.Error("Invalid quote should be rejected")
+    }
+}
+
+func TestVerifyFutureBlock(t *testing.T) {
+    engine := createTestEngine()
+    chain := NewMockChainReader()
+    
+    // 创建未来时间戳的区块
+    block := createFutureBlock()
+    
+    // 验证应该失败
+    err := engine.VerifyHeader(chain, block.Header())
+    if err != ErrFutureBlock {
+        t.Errorf("Expected ErrFutureBlock, got: %v", err)
+    }
+}
+```
+
+### 分叉选择测试
+
+```go
+// consensus/sgx/fork_choice_test.go
+package sgx
+
+import (
+    "testing"
+)
+
+func TestForkChoiceMoreTx(t *testing.T) {
+    fc := &ForkChoice{}
+    
+    // 区块 A 有更多交易
+    blockA := createBlockWithTxCount(10)
+    blockB := createBlockWithTxCount(5)
+    
+    selected := fc.SelectCanonicalBlock(blockA, blockB)
+    if selected.Hash() != blockA.Hash() {
+        t.Error("Should select block with more transactions")
+    }
+}
+
+func TestForkChoiceEarlierTimestamp(t *testing.T) {
+    fc := &ForkChoice{}
+    
+    // 交易数相同，区块 A 时间戳更早
+    blockA := createBlockWithTimestamp(1000)
+    blockB := createBlockWithTimestamp(1001)
+    
+    selected := fc.SelectCanonicalBlock(blockA, blockB)
+    if selected.Hash() != blockA.Hash() {
+        t.Error("Should select block with earlier timestamp")
+    }
+}
+
+func TestForkChoiceDeterministic(t *testing.T) {
+    fc := &ForkChoice{}
+    
+    // 完全相同的条件，使用哈希决定
+    blockA := createBlockWithHash([]byte{0x01})
+    blockB := createBlockWithHash([]byte{0x02})
+    
+    // 多次调用应该返回相同结果
+    for i := 0; i < 100; i++ {
+        selected := fc.SelectCanonicalBlock(blockA, blockB)
+        if selected.Hash() != blockA.Hash() {
+            t.Error("Fork choice should be deterministic")
+        }
+    }
+}
+```
+
+### 区块质量评分测试
+
+```go
+// consensus/sgx/block_quality_test.go
+package sgx
+
+import (
+    "testing"
+    
+    "github.com/ethereum/go-ethereum/core/types"
+)
+
+func TestQualityScoring(t *testing.T) {
+    scorer := &BlockQualityScorer{
+        config: DefaultQualityConfig(),
+    }
+    
+    // 高质量区块：30笔交易，多样性高
+    highQualityBlock := createBlockWithTxs(30, 25) // 30笔交易，25个不同发送者
+    quality := scorer.CalculateQuality(highQualityBlock)
+    
+    if quality.TotalScore < 7000 {
+        t.Errorf("High quality block should score >7000, got %d", quality.TotalScore)
+    }
+    
+    if quality.RewardMultiplier < 1.3 {
+        t.Errorf("High quality block should have multiplier >1.3, got %.2f", quality.RewardMultiplier)
+    }
+}
+
+func TestLowTransactionPenalty(t *testing.T) {
+    scorer := &BlockQualityScorer{
+        config: DefaultQualityConfig(),
+    }
+    
+    // 低质量区块：仅2笔交易
+    lowQualityBlock := createBlockWithTxs(2, 2)
+    quality := scorer.CalculateQuality(lowQualityBlock)
+    
+    if quality.TotalScore > 3000 {
+        t.Errorf("Low quality block should score <3000, got %d", quality.TotalScore)
+    }
+    
+    if quality.RewardMultiplier > 0.7 {
+        t.Errorf("Low quality block should have multiplier <0.7, got %.2f", quality.RewardMultiplier)
+    }
+}
+
+func TestDiversityPenalty(t *testing.T) {
+    scorer := &BlockQualityScorer{
+        config: DefaultQualityConfig(),
+    }
+    
+    // 低多样性：50笔交易，仅1个发送者（自我刷交易）
+    lowDiversityBlock := createBlockWithTxs(50, 1)
+    quality := scorer.CalculateQuality(lowDiversityBlock)
+    
+    // 多样性得分应该很低
+    if quality.DiversityScore > 2000 {
+        t.Errorf("Low diversity block should have diversity score <2000, got %d", quality.DiversityScore)
+    }
+}
+```
+
+### 多生产者收益分配测试
+
+```go
+// consensus/sgx/multi_producer_reward_test.go
+package sgx
+
+import (
+    "math/big"
+    "testing"
+    "time"
+)
+
+func TestMultiProducerRewardDistribution(t *testing.T) {
+    config := DefaultMultiProducerConfig()
+    scorer := &BlockQualityScorer{config: DefaultQualityConfig()}
+    calculator := &MultiProducerRewardCalculator{
+        config:        config,
+        qualityScorer: scorer,
+    }
+    
+    // 三个候选区块
+    candidates := []*BlockCandidate{
+        {
+            Block:      createBlockWithTxs(2, 2),   // 第1名，低质量
+            ReceivedAt: time.Now(),
+        },
+        {
+            Block:      createBlockWithTxs(30, 25), // 第2名，高质量
+            ReceivedAt: time.Now().Add(200 * time.Millisecond),
+        },
+        {
+            Block:      createBlockWithTxs(15, 10), // 第3名，中等质量
+            ReceivedAt: time.Now().Add(400 * time.Millisecond),
+        },
+    }
+    
+    totalFees := big.NewInt(1000000000000000000) // 1 ETH
+    rewards := calculator.CalculateRewards(candidates, totalFees)
+    
+    // 验证：第2名高质量区块应该获得最高收益
+    if rewards[1].Reward.Cmp(rewards[0].Reward) <= 0 {
+        t.Error("High quality 2nd place should earn more than low quality 1st place")
+    }
+    
+    // 验证：总收益应该等于总交易费
+    totalReward := big.NewInt(0)
+    for _, reward := range rewards {
+        totalReward.Add(totalReward, reward.Reward)
+    }
+    
+    if totalReward.Cmp(totalFees) != 0 {
+        t.Errorf("Total rewards should equal total fees: got %s, want %s", 
+            totalReward.String(), totalFees.String())
+    }
+}
+
+func TestNoRewardForDuplicateTransactions(t *testing.T) {
+    config := DefaultMultiProducerConfig()
+    scorer := &BlockQualityScorer{config: DefaultQualityConfig()}
+    calculator := &MultiProducerRewardCalculator{
+        config:        config,
+        qualityScorer: scorer,
+    }
+    
+    // 创建相同交易的候选区块
+    sameTxs := createTestTransactions(10)
+    candidates := []*BlockCandidate{
+        {
+            Block:      createBlockWithSpecificTxs(sameTxs), // 第1名
+            ReceivedAt: time.Now(),
+        },
+        {
+            Block:      createBlockWithSpecificTxs(sameTxs), // 第2名，相同交易
+            ReceivedAt: time.Now().Add(200 * time.Millisecond),
+        },
+    }
+    
+    totalFees := big.NewInt(1000000000000000000)
+    rewards := calculator.CalculateRewards(candidates, totalFees)
+    
+    // 第2名没有新交易，不应该获得收益
+    if len(rewards) > 1 {
+        t.Error("Second candidate with no new transactions should not receive reward")
+    }
+    
+    // 第1名应该获得全部收益
+    if rewards[0].Reward.Cmp(totalFees) != 0 {
+        t.Error("First candidate should receive all rewards when others have no new transactions")
+    }
+}
+
+func TestPartialNewTransactions(t *testing.T) {
+    config := DefaultMultiProducerConfig()
+    scorer := &BlockQualityScorer{config: DefaultQualityConfig()}
+    calculator := &MultiProducerRewardCalculator{
+        config:        config,
+        qualityScorer: scorer,
+    }
+    
+    // 第1名：10笔交易
+    firstTxs := createTestTransactions(10)
+    // 第2名：20笔交易，其中5笔与第1名相同，15笔是新的
+    secondTxs := append(firstTxs[:5], createTestTransactions(15)...)
+    
+    candidates := []*BlockCandidate{
+        {
+            Block:      createBlockWithSpecificTxs(firstTxs),
+            ReceivedAt: time.Now(),
+        },
+        {
+            Block:      createBlockWithSpecificTxs(secondTxs),
+            ReceivedAt: time.Now().Add(200 * time.Millisecond),
+        },
+    }
+    
+    totalFees := big.NewInt(1000000000000000000)
+    rewards := calculator.CalculateRewards(candidates, totalFees)
+    
+    // 第2名应该获得收益，但按新交易比例调整
+    if len(rewards) != 2 {
+        t.Error("Both candidates should receive rewards")
+    }
+    
+    // 验证第2名的质量倍数应该按新交易比例调整
+    if rewards[1].Candidate.Quality.NewTxCount != 15 {
+        t.Errorf("Second candidate should have 15 new transactions, got %d", 
+            rewards[1].Candidate.Quality.NewTxCount)
+    }
+}
+```
+
+## 配置参数
+
+```toml
+# config.toml
+[consensus.sgx]
+# 最小出块间隔（秒）
+min_block_interval = 1
+
+# 最大出块间隔（秒，用于心跳）
+max_block_interval = 60
+
+# 单区块最大交易数
+max_tx_per_block = 1000
+
+# 单区块最大 Gas
+max_gas_per_block = 30000000
+
+# 区块验证超时（秒）
+verify_timeout = 10
+
+# 是否启用按需出块
+on_demand_enabled = true
+
+# 触发出块的最小交易数
+min_tx_count = 1
+
+# 触发出块的最小 Gas 总量
+min_gas_total = 21000
+
+# 候选区块收集窗口（毫秒）
+candidate_window_ms = 500
+
+# 最大候选区块数（前N名参与收益分配）
+max_candidates = 3
+
+# 区块质量评分配置
+[consensus.sgx.quality]
+# 交易数量权重 (%)
+tx_count_weight = 40
+
+# 区块大小权重 (%)
+block_size_weight = 30
+
+# Gas 利用率权重 (%)
+gas_utilization_weight = 20
+
+# 交易多样性权重 (%)
+tx_diversity_weight = 10
+
+# 最小交易数阈值
+min_tx_threshold = 5
+
+# 目标区块大小（字节）
+target_block_size = 1048576  # 1MB
+
+# 目标 Gas 利用率
+target_gas_utilization = 0.8  # 80%
+
+# 多生产者收益配置
+[consensus.sgx.reward]
+# 速度基础奖励比例（第1名, 第2名, 第3名）
+speed_reward_ratios = [1.0, 0.6, 0.3]
+```
+
+## 实现优先级
+
+| 优先级 | 功能 | 预计工时 |
+|--------|------|----------|
+| P0 | Engine 接口基本实现 | 5 天 |
+| P0 | 区块头扩展字段（SGXExtra） | 2 天 |
+| P0 | 区块验证逻辑 | 3 天 |
+| P0 | 区块质量评分系统 | 3 天 |
+| P1 | 按需出块机制 | 3 天 |
+| P1 | 分叉选择规则 | 2 天 |
+| P1 | 多生产者收益分配 | 4 天 |
+| P1 | 新交易追踪机制 | 2 天 |
+| P2 | 重组处理 | 2 天 |
+| P2 | 升级模式检查器 | 2 天 |
+| P2 | SGX 签名心跳机制 | 3 天 |
+| P2 | 多节点在线率观测 | 3 天 |
+| P2 | 交易参与追踪 | 2 天 |
+| P2 | 交易响应时间追踪 | 2 天 |
+| P2 | 综合在线率计算器 | 2 天 |
+| P2 | 信誉系统 | 3 天 |
+| P2 | 惩罚机制 | 2 天 |
+| P2 | 在线奖励机制 | 3 天 |
+| P2 | 防止恶意行为规则 | 2 天 |
+| P3 | 节点优先级排序 | 2 天 |
+| P3 | 服务质量竞争 | 3 天 |
+| P3 | 交易量竞争 | 2 天 |
+| P3 | 增值服务框架 | 3 天 |
+| P3 | 历史贡献系统 | 2 天 |
+| P3 | 综合收益计算器 | 3 天 |
+| P3 | RPC API | 2 天 |
+
+**总计：约 7-8 周**
+
+## 注意事项
+
+1. **与 go-ethereum 兼容**：确保实现完全兼容 `consensus.Engine` 接口
+2. **SGX 依赖**：区块签名和验证依赖 SGX 证明模块
+3. **性能考虑**：Quote 验证可能较慢，考虑缓存机制
+4. **测试覆盖**：确保所有边界条件都有测试覆盖

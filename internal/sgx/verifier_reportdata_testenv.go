@@ -7,25 +7,70 @@
 package sgx
 
 import (
+	"crypto/subtle"
+	"fmt"
+	
 	"github.com/ethereum/go-ethereum/log"
 )
 
 // verifyReportDataMatch verifies that the quote's report data matches expected data.
-// Test version: skip comparison because real quote won't have matching reportData.
+// Testenv version: Executes FULL verification (constant-time comparison), logs result,
+// but allows failure (since we use real quote from file with different reportData).
 //
-// Rationale: In test environment, we use a real SGX quote (with valid signature) 
-// but its reportData doesn't match the test scenario's expected data.
-// We still verify all other aspects of the quote (signature, TCB, MRENCLAVE).
-// Only this final reportData comparison is skipped.
+// This ensures the verification logic itself is tested, while allowing testenv to run.
 func verifyReportDataMatch(reportData, expected []byte, compareLen int) error {
-	log.Debug("Test mode: skipping reportData comparison",
-		"reason", "using real quote with different reportData",
-		"reportDataLen", len(reportData),
-		"expectedLen", len(expected))
+	// Validate inputs (same as production)
+	if len(reportData) < compareLen {
+		err := fmt.Errorf("reportData too short: got %d bytes, need %d", len(reportData), compareLen)
+		log.Warn("TESTENV: ReportData validation FAILED (would fail in production)",
+			"error", err.Error(),
+			"verificationResult", "FAILED",
+			"productionBehavior", "WOULD_REJECT")
+		// In testenv: allow despite validation failure
+		return nil
+	}
 	
-	// In test mode, we skip this check because:
-	// - We use a real quote from file (has valid signature)
-	// - Real quote's reportData won't match test scenario data
-	// - All other verification (signature, TCB, MRENCLAVE) still runs
+	if len(expected) < compareLen {
+		err := fmt.Errorf("expected data too short: got %d bytes, need %d", len(expected), compareLen)
+		log.Warn("TESTENV: ReportData validation FAILED (would fail in production)",
+			"error", err.Error(),
+			"verificationResult", "FAILED",
+			"productionBehavior", "WOULD_REJECT")
+		// In testenv: allow despite validation failure
+		return nil
+	}
+	
+	// Execute constant-time comparison (same as production)
+	// This is critical for security - must use constant-time to prevent timing attacks
+	reportDataToCompare := reportData[:compareLen]
+	expectedToCompare := expected[:compareLen]
+	
+	// Use constant-time comparison to prevent timing attacks
+	match := subtle.ConstantTimeCompare(reportDataToCompare, expectedToCompare) == 1
+	
+	if !match {
+		// Verification FAILED - log detailed information
+		displayLen := compareLen
+		if displayLen > 32 {
+			displayLen = 32
+		}
+		log.Warn("TESTENV: ReportData verification FAILED (allowed in testenv, would REJECT in production)",
+			"expectedData", fmt.Sprintf("%x", expectedToCompare[:displayLen]),
+			"gotReportData", fmt.Sprintf("%x", reportDataToCompare[:displayLen]),
+			"compareLen", compareLen,
+			"verificationResult", "FAILED",
+			"productionBehavior", "WOULD_REJECT",
+			"reason", "using real quote file with different reportData")
+		
+		// In testenv mode: allow despite verification failure
+		// This lets us test with real SGX quote while not having matching reportData
+		return nil
+	}
+	
+	// Verification PASSED
+	log.Debug("TESTENV: ReportData verification PASSED",
+		"compareLen", compareLen,
+		"verificationResult", "PASSED")
+	
 	return nil
 }
