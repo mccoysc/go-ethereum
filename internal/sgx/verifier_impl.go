@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 // DCAPVerifier implements the Verifier interface using Intel DCAP.
@@ -191,21 +192,33 @@ func (v *DCAPVerifier) RemoveAllowedMRSigner(mrsigner []byte) {
 
 // verifyQuoteSignature verifies the quote signature.
 // In a real implementation, this would call Intel DCAP libraries via CGO.
-// For now, we provide a mock implementation for testing.
+// Current implementation: logs that signature verification is required but not performed.
 func (v *DCAPVerifier) verifyQuoteSignature(quote []byte) error {
-	// Mock implementation: just check minimum length
+	// Basic validation: check minimum length
 	if len(quote) < 432 {
 		return errors.New("quote too short for signature verification")
 	}
 
-	// In a real implementation, this would:
-	// 1. Call libsgx_dcap_ql to verify the quote signature
-	// 2. Check the quote against Intel's attestation service
-	// 3. Verify the certificate chain
-
-	// For testing purposes, we accept any quote that can be parsed
-	_, err := ParseQuote(quote)
-	return err
+	// Verify the quote can be parsed (validates structure)
+	parsedQuote, err := ParseQuote(quote)
+	if err != nil {
+		return fmt.Errorf("quote parsing failed: %w", err)
+	}
+	
+	// Log what SHOULD be done in production
+	log.Warn("Quote signature verification SKIPPED (would verify in production with DCAP)",
+		"productionBehavior", "WOULD_VERIFY_WITH_INTEL_DCAP",
+		"requiredSteps", []string{
+			"1. Call libsgx_dcap_ql to verify quote signature",
+			"2. Check quote against Intel attestation service",  
+			"3. Verify certificate chain",
+		},
+		"currentBehavior", "STRUCTURE_VALIDATED_ONLY",
+		"mrenclave", fmt.Sprintf("%x", parsedQuote.MRENCLAVE[:16]),
+		"note", "Real quote from file - structure is valid but signature not cryptographically verified")
+	
+	// Structure validation passed
+	return nil
 }
 
 // ExtractMREnclave is a utility function to extract MRENCLAVE from a quote.

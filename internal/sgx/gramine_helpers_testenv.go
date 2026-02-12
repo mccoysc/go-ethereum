@@ -17,6 +17,8 @@ import (
 
 // generateQuoteViaGramine generates an SGX Quote using Gramine's /dev/attestation interface.
 // Test version: loads real quote from Gramine RA-TLS certificate.
+// NOTE: Does NOT modify the quote - returns it as-is from real SGX hardware.
+// This allows full verification logic to run and detect mismatches.
 func generateQuoteViaGramine(reportData []byte) ([]byte, error) {
 	if len(reportData) > 64 {
 		return nil, fmt.Errorf("reportData too long: max 64 bytes, got %d", len(reportData))
@@ -33,17 +35,22 @@ func generateQuoteViaGramine(reportData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to load real quote: %w", err)
 	}
 
-	// Note: The real quote has its own reportData embedded (from actual Gramine execution)
-	// In testenv, we accept this because:
-	// 1. The quote is real and verifiable (proper structure, signatures, etc.)
-	// 2. The verifyReportDataMatch function in testenv mode will skip comparison
-	// 3. This gives us maximum test coverage with real SGX data
+	// DO NOT modify the quote - keep it as-is from real SGX
+	// The verification will detect that reportData doesn't match (expected in testenv)
+	// But testenv mode will log this and continue (allowing testing without real SGX)
 	
-	log.Debug("Test mode: loaded real Gramine quote",
+	log.Debug("Test mode: loaded real Gramine quote (unmodified)",
 		"quoteSize", len(quote),
-		"requestedReportData", fmt.Sprintf("%x", reportData))
+		"requestedReportData", fmt.Sprintf("%x", reportData[:min(len(reportData), 32)]))
 
 	return quote, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // readMREnclave reads the MRENCLAVE value.
